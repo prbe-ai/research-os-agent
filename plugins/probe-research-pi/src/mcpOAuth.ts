@@ -35,7 +35,7 @@
  * valid loopback URL for the auth server's dynamic client registration to
  * accept — nothing needs to be listening on it, because the human copies the
  * address bar rather than a server catching the request. See
- * `mcpBridge.ts`'s `interactiveOAuthLogin()` for the paste-back prompt this
+ * `mcpBridge.ts`'s `interactiveOAuthConnect()` for the paste-back prompt this
  * provider's `redirectToAuthorization` sets up.
  *
  * This provider's `redirectToAuthorization` NEVER blocks and never opens a

@@ -206,7 +206,7 @@
       "capabilities": {
         "root_skills": false, "prompt_context": false,
         "wake": true,
-        "follows_updates": false,
+        "follows_updates": true,
         "scoped_installs": false
       },
       "statusline": null,

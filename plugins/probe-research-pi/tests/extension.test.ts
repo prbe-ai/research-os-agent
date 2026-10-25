@@ -88,7 +88,7 @@ vi.mock("node:child_process", () => ({
 // Imported AFTER the mock is registered (vitest hoists vi.mock, but the
 // dynamic import below keeps intent obvious without relying on hoisting
 // semantics for anything except the mock itself).
-const { registerExtension } = await import("../src/extension.js");
+const { registerExtension } = await import("./shimHarness.js");
 const { pidFile, shutdownSentinelFile, disabledFile, teamNoteDocumentPath, extensionLogFile } = await import("../src/core/paths.js");
 const { MCP_SERVED_VIA_ADAPTER_MESSAGE } = await import("../src/adapterHandoff.js");
 const { trackingStatusText } = await import("../src/core/trackingState.js");
@@ -298,7 +298,7 @@ describe("registerExtension — session_start", () => {
       );
     });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({
       sessionId: "pi-folder-session",
       sessionFile: undefined,
@@ -344,7 +344,7 @@ describe("registerExtension — session_start", () => {
       );
     });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: "pi-off-session", sessionFile: undefined, cwd: "/repo", hasUI: true });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -356,7 +356,7 @@ describe("registerExtension — session_start", () => {
     pair();
     installProbeCli();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({
       sessionId: "pi-footer-failure",
       sessionFile: "/tmp/pi-footer-failure.jsonl",
@@ -378,7 +378,7 @@ describe("registerExtension — session_start", () => {
 
   it("does not spawn when the device is unpaired, and says so on stderr", async () => {
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("unpaired");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
@@ -392,7 +392,7 @@ describe("registerExtension — session_start", () => {
   it("spawns the daemon with PROBE_TAP_SOURCE=pi when paired", async () => {
     pair();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("paired");
     const transcriptPath = `/tmp/${sessionId}.jsonl`;
     const ctx = fakeContext({ sessionId, sessionFile: transcriptPath });
@@ -412,7 +412,7 @@ describe("registerExtension — session_start", () => {
   it("does not spawn twice for a second session_start on the same session id", async () => {
     pair();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("dedup");
     const transcriptPath = `/tmp/${sessionId}.jsonl`;
     const ctx = fakeContext({ sessionId, sessionFile: transcriptPath });
@@ -434,7 +434,7 @@ describe("registerExtension — session_start", () => {
     // retried, so a new interactive session was never captured.
     pair();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("deferred");
     const transcriptPath = join(tmp, `${sessionId}.jsonl`);
     const ctx = fakeContext({ sessionId, sessionFile: transcriptPath, writeSessionFile: false });
@@ -460,7 +460,7 @@ describe("registerExtension — session_start", () => {
   it("skips sessions with no persisted session file (nothing to tail)", async () => {
     pair();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("inmemory");
     const ctx = fakeContext({ sessionId, sessionFile: undefined });
 
@@ -476,7 +476,7 @@ describe("registerExtension — session_start", () => {
     writeFileSync(disabledFile(process.env), "");
 
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("killswitch");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
@@ -532,7 +532,7 @@ describe("registerExtension — the footer's third state", () => {
       );
     });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({
       sessionId: "pi-uncaptured-session",
       sessionFile: undefined,
@@ -565,7 +565,7 @@ describe("registerExtension — the footer's third state", () => {
       );
     });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({
       sessionId: "pi-malformed-capture",
       sessionFile: undefined,
@@ -585,7 +585,7 @@ describe("registerExtension — the footer's third state", () => {
     pair();
     installProbeCli();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("post-spawn-refresh");
     const ctx = fakeContext({
       sessionId,
@@ -614,7 +614,7 @@ describe("registerExtension — tracking switch footer", () => {
   it("refreshes the persistent footer after an interactive switch lands", async () => {
     installProbeCli();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({
       sessionId: "pi-switch-session",
       sessionFile: undefined,
@@ -662,7 +662,7 @@ describe("registerExtension — tracking switch footer", () => {
   it("clears the old footer when a landed switch cannot be read back", async () => {
     installProbeCli();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({
       sessionId: "pi-switch-readback-failure",
       sessionFile: undefined,
@@ -709,7 +709,7 @@ describe("registerExtension — D6 MCP bridge stand-down", () => {
     writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-mcp-adapter", tmp] }));
 
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("standdown");
     const transcriptPath = `/tmp/${sessionId}.jsonl`;
     const ctx = fakeContext({ sessionId, sessionFile: transcriptPath });
@@ -744,7 +744,7 @@ describe("registerExtension — D6 MCP bridge stand-down", () => {
     writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-mcp-adapter"] }));
 
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("legacy-symlink");
     const transcriptPath = `/tmp/${sessionId}.jsonl`;
     const ctx = fakeContext({ sessionId, sessionFile: transcriptPath });
@@ -766,7 +766,7 @@ describe("registerExtension — session_shutdown", () => {
   it("does not touch the daemon on a 'reload' shutdown (same session resumes right after)", async () => {
     pair();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("reload-shutdown");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
@@ -784,7 +784,7 @@ describe("registerExtension — session_shutdown", () => {
   it("touches the shutdown sentinel on a real quit", async () => {
     pair();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("quit-shutdown");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
@@ -825,7 +825,7 @@ describe("registerExtension — session_shutdown", () => {
     async function startHosted(label: string, pid: number) {
       pair();
       const { api, handlers } = fakeExtensionAPI();
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       const sessionId = uniqueSessionId(label);
       const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
       await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
@@ -875,7 +875,7 @@ describe("registerExtension — session_shutdown", () => {
     it("with no marker, neither a quit nor a switch asks any interpreter anything", async () => {
       pair();
       const { api, handlers } = fakeExtensionAPI();
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       // A checkout no start in this process asked about: any version probe would be a new call.
       const fresh = join(tmp, "never-asked");
       mkdirSync(join(fresh, "tap"), { recursive: true });
@@ -921,7 +921,7 @@ describe("registerExtension — no Python 3.11 or newer", () => {
     const missing = paths.pythonMissingFile(process.env);
     try {
       const { api, handlers } = fakeExtensionAPI();
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       const sessionId = uniqueSessionId("old-python");
       const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
       // Its own folder, so no python earlier in this file's run answered for it.
@@ -949,7 +949,7 @@ describe("registerExtension — no Python 3.11 or newer", () => {
 
     // The next start finds an interpreter: the note goes.
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("new-python");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
     const fresh = join(tmp, "fresh-checkout");
@@ -969,7 +969,7 @@ describe("registerExtension — /probe-status command", () => {
   it("registers a status command that reports pairing state", async () => {
     pair();
     const { api, commands } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("status");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
@@ -1008,7 +1008,7 @@ describe("registerExtension — team note", () => {
     writeTeamNote("# Team note\nDo not repeat the June outage.\n");
     writeAgentsFile("# My rules\n");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-opted-out"), sessionFile: undefined });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -1024,7 +1024,7 @@ describe("registerExtension — team note", () => {
     writeTeamNote("damaged-block note");
     rmSync(paths.piAgentsFile(process.env));
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     await handlers.get("agent_settled")!({}, {});
     expect(noteSyncs()).toHaveLength(0);
 
@@ -1044,7 +1044,7 @@ describe("registerExtension — team note", () => {
   it("injects the cached team note into the system prompt via before_agent_start", async () => {
     const notePath = writeTeamNote("# Team note\nDo not repeat the June outage.\n");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-inject"), sessionFile: undefined });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -1071,7 +1071,7 @@ describe("registerExtension — team note", () => {
     writeTeamNote("# Team note\nDo not repeat the June outage.\n");
     writeWorkspaceLimit(null);
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-mid-session"), sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
@@ -1090,7 +1090,7 @@ describe("registerExtension — team note", () => {
     writeTeamNote("# Team note\nKeep the June outage in mind.\n");
     writeWorkspaceLimit("hide");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-hidden-start"), sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     await handlers.get("agent_settled")!({}, ctx);
@@ -1107,7 +1107,7 @@ describe("registerExtension — team note", () => {
     const notePath = writeTeamNote("# Team note\nthe PREVIOUS account's note\n");
     writeWorkspaceLimit("hide");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-account-switch"), sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     expect(noteSyncs()).toHaveLength(0);
@@ -1131,7 +1131,7 @@ describe("registerExtension — team note", () => {
   it("does not re-read the file on every before_agent_start -- cached once at session_start", async () => {
     writeTeamNote("original note");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-cache"), sessionFile: undefined });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -1151,7 +1151,7 @@ describe("registerExtension — team note", () => {
 
   it("injects nothing when no team note file exists (fail open)", async () => {
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("note-absent"), sessionFile: undefined });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -1168,7 +1168,7 @@ describe("registerExtension — team note", () => {
     const { api, handlers } = fakeExtensionAPI();
     const sendMessage = vi.fn();
     (api as unknown as { sendMessage: typeof sendMessage }).sendMessage = sendMessage;
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("settle-reads");
     const ctx = { ...fakeContext({ sessionId, sessionFile: undefined }), isIdle: () => true };
     const reads = join(paths.probeStateDir(process.env), "reads");
@@ -1200,7 +1200,7 @@ describe("registerExtension — team note", () => {
     const { api, handlers } = fakeExtensionAPI();
     const sendMessage = vi.fn();
     (api as unknown as { sendMessage: typeof sendMessage }).sendMessage = sendMessage;
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("idle-alert");
     const ctx = { ...fakeContext({ sessionId, sessionFile: undefined }), isIdle: () => true };
     const reads = join(paths.probeStateDir(process.env), "reads");
@@ -1230,9 +1230,9 @@ describe("registerExtension — team note", () => {
     expect(sendMessage.mock.calls[0][1]).toEqual({ deliverAs: "steer", triggerTurn: true });
   });
 
-  it("never registers a turn_end handler -- only agent_settled can trigger a sync", () => {
+  it("never registers a turn_end handler -- only agent_settled can trigger a sync", async () => {
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
 
     expect(handlers.has("agent_settled")).toBe(true);
     expect(handlers.has("turn_end")).toBe(false);
@@ -1249,7 +1249,7 @@ describe("registerExtension — team note", () => {
 
     try {
       const { api, handlers } = fakeExtensionAPI();
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       spawnMock.mockClear();
 
       await handlers.get("agent_settled")!({}, {});
@@ -1284,7 +1284,7 @@ describe("registerExtension — team note", () => {
 
     try {
       const { api, handlers } = fakeExtensionAPI();
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       spawnMock.mockClear();
 
       await expect(handlers.get("agent_settled")!({}, {})).resolves.not.toThrow();
@@ -1319,7 +1319,7 @@ describe("registerExtension — the daemon state", () => {
       );
     });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId, sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     return { before: handlers.get("before_agent_start") as unknown as BeforeAgentStart, ctx };
@@ -1353,7 +1353,7 @@ describe("registerExtension — the daemon state", () => {
     process.env.PROBE_CONFIG_PATH = config;
     const sessionId = uniqueSessionId("daemon-flip");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId, sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
@@ -1390,7 +1390,7 @@ describe("registerExtension — the daemon state", () => {
     installProbeCli();
     const sessionId = uniqueSessionId("daemon-typed");
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId, sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     const switchCalls = () =>
@@ -1452,7 +1452,7 @@ describe("registerExtension — the daemon profile", () => {
   it("asks the CLI again on every session_start reason, so a resumed session re-reads its profile", async () => {
     installProbeCli();
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("every-reason"), sessionFile: undefined });
     for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
       await handlers.get("session_start")!({ reason }, ctx);
@@ -1465,7 +1465,7 @@ describe("registerExtension — the daemon profile", () => {
     installProbeCli();
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers, activeTools } = fakeExtensionAPI(["read", "bash", "probe-research-pi__probe_browse", "probe_mcp_entity"]);
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId("no-mcp"), sessionFile: undefined });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -1486,7 +1486,7 @@ describe("registerExtension — the daemon profile", () => {
     installProbeCli();
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, PACKAGE_ROOT);
+    await registerExtension(api as never, PACKAGE_ROOT);
     const daemonCtx = fakeContext({ sessionId: uniqueSessionId("discover-daemon"), sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, daemonCtx);
 
@@ -1516,7 +1516,7 @@ describe("registerExtension — the daemon profile", () => {
     process.env.PROBE_CONFIG_PATH = config;
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, PACKAGE_ROOT);
+    await registerExtension(api as never, PACKAGE_ROOT);
     const ctx = fakeContext({ sessionId: uniqueSessionId("lean-prompt"), sessionFile: undefined, hasUI: true });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
@@ -1549,7 +1549,7 @@ describe("registerExtension — the daemon profile", () => {
     installProbeCli();
     cliReports({ state: "full", profile: "agent" });
     const { api, handlers, activeTools } = fakeExtensionAPI(["read", "probe_mcp_entity"]);
-    registerExtension(api as never, PACKAGE_ROOT);
+    await registerExtension(api as never, PACKAGE_ROOT);
     const ctx = fakeContext({ sessionId: uniqueSessionId("agent-skills"), sessionFile: undefined });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     const event = { systemPrompt: "BASE", systemPromptOptions: { skills: skills() } };
@@ -1562,7 +1562,7 @@ describe("registerExtension — the daemon profile", () => {
     installProbeCli();
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers, commands } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = { ...fakeContext({ sessionId: uniqueSessionId("mcp-login"), sessionFile: undefined, hasUI: true }), ui: { notify: vi.fn(), setStatus: vi.fn(), input: vi.fn() } };
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     await captureStderr(() => commands.get("probe-mcp-login")!.handler("", ctx));
@@ -1589,7 +1589,7 @@ describe("registerExtension — the guard", () => {
       );
     });
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId(`guard-${profile}`), sessionFile: undefined, cwd: tmp });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     return { toolCall: handlers.get("tool_call") as unknown as ToolCall, ctx, handlers };
@@ -1674,7 +1674,7 @@ describe("registerExtension — the daemon's held questions", () => {
     const sessionId = uniqueSessionId("held");
     const answer = holdQuestion(sessionId);
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const select = vi.fn(async () => "Run it");
     const ctx = { ...fakeContext({ sessionId, sessionFile: undefined, hasUI: true }), ui: { notify: vi.fn(), setStatus: vi.fn(), select } };
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -1687,7 +1687,7 @@ describe("registerExtension — the daemon's held questions", () => {
     const sessionId = uniqueSessionId("held-headless");
     const answer = holdQuestion(sessionId);
     const { api, handlers } = fakeExtensionAPI();
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId, sessionFile: undefined, hasUI: false });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
     await (handlers.get("before_agent_start") as unknown as BeforeAgentStart)({ systemPrompt: "BASE" }, ctx);
@@ -1712,7 +1712,7 @@ describe("registerExtension — Probe's tracking switched off (probeTracking: fa
     pair();
     writeOurEntry({ skills: [], probeTracking: false });
     const { api, handlers, activeTools } = fakeExtensionAPI(["read", "bash", "probe-research-pi__probe_browse"]);
-    registerExtension(api as never, tmp);
+    await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("tracking-off");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
@@ -1744,7 +1744,7 @@ describe("registerExtension — Probe's tracking switched off (probeTracking: fa
     });
     try {
       const { api, handlers } = fakeExtensionAPI();
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       const ctx = fakeContext({ sessionId: uniqueSessionId("tracking-off-daemon"), sessionFile: undefined });
       await handlers.get("session_start")!({ reason: "startup" }, ctx);
       expect(await handlers.get("resources_discover")!({ type: "resources_discover", cwd: "/repo", reason: "startup" }, ctx)).toBeUndefined();
@@ -1759,7 +1759,7 @@ describe("registerExtension — Probe's tracking switched off (probeTracking: fa
     execFileMock.mockImplementation((_command, _args, _options, callback) => callback(new Error("probe: not found"), "", ""));
     try {
       const { api, handlers, activeTools } = fakeExtensionAPI(["read", "probe-research-pi__probe_browse"]);
-      registerExtension(api as never, tmp);
+      await registerExtension(api as never, tmp);
       const ctx = fakeContext({ sessionId: uniqueSessionId("tracking-off-nocli"), sessionFile: undefined });
       await handlers.get("session_start")!({ reason: "startup" }, ctx);
       expect(activeTools()).toEqual(["read"]);

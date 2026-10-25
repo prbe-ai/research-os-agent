@@ -27,7 +27,13 @@ export interface StatusDeps {
   readFileSync: (path: string) => string;
   kill: (pid: number, signal: number | string) => void;
   env: PathEnv;
+  /** Where this version's files are (`ImplEnv.resourceRoot`): the tap beside it. */
   extensionDir: string;
+  /**
+   * Where pi loaded the package from (`ImplEnv.installRoot`): the identity
+   * pi's settings name, for D6's hand-off. Defaults to `extensionDir`.
+   */
+  installRoot?: string;
   /** The session's cwd — needed for D6's project-scope settings.json read. */
   cwd: string;
   /** The Probe service's pid when it records the session; defaults to `hosted.ts`'s check. */
@@ -59,7 +65,7 @@ export function buildStatusReport(sessionId: string | undefined, deps: StatusDep
   // pi-mcp-adapter already owns the server (adapterHandoff.ts), this
   // extension's direct bridge stands down — say so plainly here rather than
   // reporting an MCP connection that was never attempted as if it failed.
-  const handoff = detectAdapterHandoff({ env: deps.env, cwd: deps.cwd, packageRoot: deps.extensionDir });
+  const handoff = detectAdapterHandoff({ env: deps.env, cwd: deps.cwd, packageRoot: deps.installRoot ?? deps.extensionDir });
   if (handoff.standDown) {
     lines.push(`  mcp:           ${MCP_SERVED_VIA_ADAPTER_MESSAGE}`);
   } else {

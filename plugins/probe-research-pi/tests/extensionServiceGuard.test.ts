@@ -55,7 +55,7 @@ vi.mock("node:child_process", () => ({
     execFileMock(command, args, options, callback),
 }));
 
-const { registerExtension } = await import("../src/extension.js");
+const { registerExtension } = await import("./shimHarness.js");
 const { approvalsDir } = await import("../src/core/paths.js");
 
 type ToolCall = (
@@ -109,7 +109,7 @@ async function start(): Promise<{ toolCall: ToolCall; ctx: unknown }> {
     getActiveTools: () => ["read", "bash", "edit", "write"],
     setActiveTools: () => {},
   };
-  registerExtension(api as never, extensionDir);
+  await registerExtension(api as never, extensionDir);
   sessions += 1;
   const sessionId = `svc-guard-${sessions}-${Date.now()}`;
   const ctx = {

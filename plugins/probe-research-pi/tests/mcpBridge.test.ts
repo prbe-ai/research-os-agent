@@ -13,10 +13,11 @@ import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamable
 
 import {
   BridgeTimeoutError,
-  connectAndRegisterTools,
+  connectMcp,
   extractAuthorizationCode,
-  interactiveOAuthLogin,
+  interactiveOAuthConnect,
   isAuthError,
+  mcpToolDeclarations,
   mcpServerUrl,
   translateContent,
   withTimeout,
@@ -25,10 +26,40 @@ import {
   type McpClientLike,
   type McpConnector,
   type McpToolInfo,
+  type InteractiveLoginResult,
+  type McpTransport,
   type OAuthLoginStart,
 } from "../src/mcpBridge.js";
 import type { OAuthStorageDeps } from "../src/mcpOAuth.js";
 import { mcpOAuthStateFile } from "../src/core/paths.js";
+
+// ---------------------------------------------------------------------------
+// The one-step forms these tests drive: connect, then register the tools'
+// declarations on a pi. The extension itself never registers (src/shim.ts
+// does, from the same declarations), so they live here, not in src/.
+// ---------------------------------------------------------------------------
+
+type Registrar = { registerTool: (tool: never) => unknown };
+
+function registerAll(pi: Registrar, transport: McpTransport, deps: McpBridgeDeps): number {
+  const tools = mcpToolDeclarations(transport, deps);
+  for (const tool of tools) pi.registerTool(tool as never);
+  return tools.length;
+}
+
+async function connectAndRegisterTools(pi: Registrar, deps: McpBridgeDeps) {
+  const connected = await connectMcp(deps);
+  if ("skipped" in connected) return connected;
+  const { transport } = connected;
+  const reregister = (target: Registrar): number => registerAll(target, transport, deps);
+  return { registered: reregister(pi), close: () => transport.client.close(), reregister, transport };
+}
+
+async function interactiveOAuthLogin(pi: Registrar, deps: McpBridgeDeps, ui: InteractiveUI): Promise<InteractiveLoginResult> {
+  const { transport, ...result } = await interactiveOAuthConnect(deps, ui);
+  if (transport) registerAll(pi, transport, deps);
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // Fakes

@@ -199,7 +199,22 @@ export const Asked = {
   Dismissed: "dismissed",
   Done: "done",
 } as const;
-type AskedValue = (typeof Asked)[keyof typeof Asked];
+export type AskedValue = (typeof Asked)[keyof typeof Asked];
+
+/**
+ * What the asker remembers: is a dialog open, and what happened to each
+ * question. Plain data, kept apart from the class, so a later version of this
+ * package's code (`src/shim.ts`) asks on with the same memory and never asks a
+ * question twice in one process.
+ */
+export interface AskerState {
+  open: boolean;
+  asked: Map<string, AskedValue>;
+}
+
+export function newAskerState(): AskerState {
+  return { open: false, asked: new Map() };
+}
 
 export interface DialogUI {
   hasUI: boolean;
@@ -212,22 +227,21 @@ export interface DialogUI {
  * is asked again there, and only there.
  */
 export class QuestionAsker {
-  private open = false;
-  private readonly asked = new Map<string, AskedValue>();
+  constructor(private readonly state: AskerState = newAskerState()) {}
 
   /** How many answers this call wrote. Never throws. */
   async ask(sessionId: string, ui: DialogUI, deps: ApprovalsDeps, atPrompt: boolean, log: (message: string) => void = () => {}): Promise<number> {
-    if (!ui.hasUI || this.open) return 0;
-    this.open = true;
+    if (!ui.hasUI || this.state.open) return 0;
+    this.state.open = true;
     let written = 0;
     try {
       for (;;) {
         const next = heldQuestions(sessionId, deps).find((q) => {
-          const seen = this.asked.get(q.id);
+          const seen = this.state.asked.get(q.id);
           return seen === undefined || (atPrompt && seen === Asked.Dismissed);
         });
         if (!next) return written;
-        this.asked.set(next.id, Asked.Open);
+        this.state.asked.set(next.id, Asked.Open);
         let choice: string | undefined;
         try {
           choice = await ui.select(next.question, [next.yesLabel, next.noLabel]);
@@ -238,10 +252,10 @@ export class QuestionAsker {
         if (typeof choice !== "string" || !choice) {
           // Esc: nothing written. Asked again at the next prompt; no further
           // question now, the researcher just waved one away.
-          this.asked.set(next.id, Asked.Dismissed);
+          this.state.asked.set(next.id, Asked.Dismissed);
           return written;
         }
-        this.asked.set(next.id, Asked.Done);
+        this.state.asked.set(next.id, Asked.Done);
         if (writeAnswer(sessionId, next, choice, deps)) {
           written += 1;
           log(`question ${next.id}: answered ${choice === next.yesLabel ? Verdict.Yes : Verdict.No} in pi's dialog`);
@@ -254,7 +268,7 @@ export class QuestionAsker {
       log(`held questions: ${err instanceof Error ? err.message : String(err)}`);
       return written;
     } finally {
-      this.open = false;
+      this.state.open = false;
     }
   }
 }

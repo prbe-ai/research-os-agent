@@ -1,19 +1,19 @@
 /**
- * The bridge: connect to the Probe Research read MCP server and register
- * each of its tools as a native pi tool (`examples/extensions/dynamic-tools.ts`
- * is pi's own reference for registering tools outside the synchronous top
- * of `session_start`). Two entry points:
+ * The bridge: connect to the Probe Research read MCP server and offer each of
+ * its tools as a native pi tool. It registers nothing itself: it returns the
+ * connection (`McpTransport`) and the tools as DECLARATIONS built over it
+ * (`mcpToolDeclarations`), which the shim (`src/shim.ts`), the only code that
+ * registers with pi, registers. Two entry points:
  *
- *   `connectAndRegisterTools()` — the NON-interactive path, called from
- *   `session_start`. Tries the bearer fast path (`mcpAuth.ts`), then
- *   previously-saved OAuth tokens if any exist, and otherwise degrades
- *   immediately with no network call at all. Every network step is bounded
- *   (see `withTimeout`) so a slow or hung server can never stall the
- *   session — pi wraps extension handlers in a bare try/catch with NO
- *   timeout of its own (verified against `dist/core/extensions/runner.js`),
- *   so the bound has to come from here.
+ *   `connectMcp()` — the NON-interactive path, called from `session_start`.
+ *   Tries the bearer fast path (`mcpAuth.ts`), then previously-saved OAuth
+ *   tokens if any exist, and otherwise degrades immediately with no network
+ *   call at all. Every network step is bounded (see `withTimeout`) so a slow
+ *   or hung server can never stall the session — pi wraps extension handlers
+ *   in a bare try/catch with NO timeout of its own (verified against
+ *   `dist/core/extensions/runner.js`), so the bound has to come from here.
  *
- *   `interactiveOAuthLogin()` — the OAuth fallback, called only from the
+ *   `interactiveOAuthConnect()` — the OAuth fallback, called only from the
  *   `/probe-mcp-login` command, which is the one place in this extension
  *   allowed to block on a human: the human just typed the command and is
  *   watching. See `mcpOAuth.ts`'s module docstring for why this asks the
@@ -25,6 +25,12 @@
  * announce-once-on-stderr-and-notify shape the unpaired-tap case already
  * uses. Nothing in this module lets a Probe MCP problem take down capture,
  * the team note, or the rest of the pi session.
+ *
+ * A CONNECTION OUTLIVES THE CODE THAT OPENED IT (`src/shim.ts`): a newer
+ * version of this package can take over a running pi at the next turn, and
+ * it must not reconnect, nor keep calling the old version's code. So the
+ * connection is data -- the client, the tools it listed, how a call
+ * re-authenticates -- and each version builds its own tools over it.
  *
  * TESTABILITY: everything above the `McpConnector` line is orchestration
  * (auth resolution, retry-on-401, timeout/degrade behaviour, tool
@@ -40,7 +46,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { resolveMcpBearerToken } from "./core/mcpAuth.js";
 import { workspaceLimitHeaders } from "./core/workspaceLimit.js";
@@ -268,41 +273,87 @@ export const realMcpConnector: McpConnector = {
 // Registering tools
 // ---------------------------------------------------------------------------
 
-/** Register every listed tool. `reconnect` is called on a 401/403 from a tool call; return `null` from it to give up (no silent retry available). */
-function registerTools(
-  pi: ExtensionAPI,
-  tools: McpToolInfo[],
-  getClient: () => McpClientLike,
-  reconnect: () => Promise<McpClientLike | null>,
-  callToolTimeoutMs: number,
-  log: (message: string) => void,
-): number {
-  for (const tool of tools) {
-    const registeredName = prefixToolName(tool.name);
-    pi.registerTool({
-      name: registeredName,
-      label: tool.title ?? tool.name,
-      description: (tool.description ?? `Probe Research MCP tool: ${tool.name}`).slice(0, 4000),
-      parameters: jsonSchemaToTypeBox(tool.inputSchema),
-      async execute(_toolCallId, params) {
-        try {
-          return await callMcpTool(getClient(), tool.name, params, callToolTimeoutMs);
-        } catch (err) {
-          if (!isAuthError(err)) throw err;
-          log(`probe_mcp: "${tool.name}" got an auth error (${errMessage(err)}); re-resolving credentials and retrying once`);
-          const fresh = await reconnect();
-          if (!fresh) {
-            throw new Error(
-              `Probe MCP tool "${tool.name}" failed: not authorized, and credentials could not be re-resolved. ` +
-                `To fix it, ${WIZARD_HINT}, or run \`/probe-mcp-login\` for an interactive re-authentication.`,
-            );
-          }
-          return await callMcpTool(fresh, tool.name, params, callToolTimeoutMs);
-        }
-      },
-    });
+/** How a connection's tools re-authenticate after a 401/403 from a call. */
+export const McpReconnect = {
+  /** Re-resolve the bearer token and connect again, once (the non-interactive path). */
+  Bearer: "bearer",
+  /** Give up: a fresh OAuth sign-in has no silent way back (`/probe-mcp-login`). */
+  None: "none",
+} as const;
+export type McpReconnectValue = (typeof McpReconnect)[keyof typeof McpReconnect];
+
+/**
+ * One live Probe MCP connection, as data: the client, the tools it listed,
+ * the server it reached and how a call re-authenticates. Never a closure of
+ * this module's, so it can outlive the version of this package that opened it
+ * (see the module docstring). `client` is replaced in place when a call
+ * re-authenticates, so every tool built over it then uses the new one.
+ */
+export interface McpTransport {
+  client: McpClientLike;
+  tools: McpToolInfo[];
+  url: string;
+  reconnect: McpReconnectValue;
+}
+
+/** A pi tool for one MCP tool: what `pi.registerTool` takes. */
+export interface McpToolDeclaration {
+  name: string;
+  label: string;
+  description: string;
+  parameters: ReturnType<typeof jsonSchemaToTypeBox>;
+  execute(toolCallId: string, params: unknown): Promise<{ content: PiContent[]; details: { mcpTool: string } }>;
+}
+
+/** What a tool call needs from the bridge deps. */
+export type McpToolDeps = Pick<McpBridgeDeps, "env" | "connector" | "timeouts" | "log">;
+
+/** The bearer reconnect: a fresh client, put in place on the transport, or null to give up. */
+async function reconnectTransport(transport: McpTransport, deps: McpToolDeps): Promise<McpClientLike | null> {
+  if (transport.reconnect !== McpReconnect.Bearer) return null;
+  const freshBearer = resolveMcpBearerToken(deps.env);
+  if (!freshBearer) return null;
+  try {
+    transport.client = await deps.connector.connectWithBearer(
+      new URL(transport.url),
+      freshBearer.token,
+      deps.timeouts.connectMs,
+      workspaceLimitHeaders(deps.env),
+    );
+    return transport.client;
+  } catch {
+    return null;
   }
-  return tools.length;
+}
+
+/**
+ * The pi tools for every tool the connection listed, each calling the
+ * transport's CURRENT client; a 401/403 re-authenticates once (`reconnect`).
+ * Pure: builds declarations, registers nothing.
+ */
+export function mcpToolDeclarations(transport: McpTransport, deps: McpToolDeps): McpToolDeclaration[] {
+  return transport.tools.map((tool) => ({
+    name: prefixToolName(tool.name),
+    label: tool.title ?? tool.name,
+    description: (tool.description ?? `Probe Research MCP tool: ${tool.name}`).slice(0, 4000),
+    parameters: jsonSchemaToTypeBox(tool.inputSchema),
+    async execute(_toolCallId: string, params: unknown) {
+      try {
+        return await callMcpTool(transport.client, tool.name, params, deps.timeouts.callToolMs);
+      } catch (err) {
+        if (!isAuthError(err)) throw err;
+        deps.log(`probe_mcp: "${tool.name}" got an auth error (${errMessage(err)}); re-resolving credentials and retrying once`);
+        const fresh = await reconnectTransport(transport, deps);
+        if (!fresh) {
+          throw new Error(
+            `Probe MCP tool "${tool.name}" failed: not authorized, and credentials could not be re-resolved. ` +
+              `To fix it, ${WIZARD_HINT}, or run \`/probe-mcp-login\` for an interactive re-authentication.`,
+          );
+        }
+        return await callMcpTool(fresh, tool.name, params, deps.timeouts.callToolMs);
+      }
+    },
+  }));
 }
 
 async function callMcpTool(client: McpClientLike, mcpToolName: string, params: unknown, timeoutMs: number) {
@@ -352,28 +403,13 @@ function describeConnectFailure(err: unknown, credentialDescription: string): st
 // session_start: non-interactive connect
 // ---------------------------------------------------------------------------
 
-export type ConnectResult =
-  | {
-      registered: number;
-      close: () => Promise<void>;
-      /**
-       * Re-run `pi.registerTool()` for the already-fetched tool list against
-       * a (possibly new) `ExtensionAPI` instance, with NO network call. Exists
-       * for `/reload`: pi rebuilds the extension's tool registry from scratch
-       * on reload but keeps this module's top-level state (including the
-       * live MCP client) — without this, a session's Probe tools would
-       * silently vanish after `/reload` until the next real reconnect.
-       */
-      reregister: (pi: ExtensionAPI) => number;
-    }
-  | { skipped: string };
-
 /**
  * Non-interactive: bearer fast path, else previously-saved OAuth tokens if
  * any exist, else degrade immediately (no network call, and no unsolicited
- * login prompt for a device that has never used the OAuth fallback).
+ * login prompt for a device that has never used the OAuth fallback). Connects
+ * and lists the tools; registers nothing (`mcpToolDeclarations`).
  */
-export async function connectAndRegisterTools(pi: ExtensionAPI, deps: McpBridgeDeps): Promise<ConnectResult> {
+export async function connectMcp(deps: McpBridgeDeps): Promise<{ transport: McpTransport } | { skipped: string }> {
   const url = mcpServerUrl(deps.env);
   const bearer = resolveMcpBearerToken(deps.env);
 
@@ -404,36 +440,15 @@ export async function connectAndRegisterTools(pi: ExtensionAPI, deps: McpBridgeD
     }
   }
 
-  let currentClient = client;
   let tools: McpToolInfo[];
   try {
-    tools = (await withTimeout(currentClient.listTools(), deps.timeouts.listToolsMs, "MCP listTools")).tools;
+    tools = (await withTimeout(client.listTools(), deps.timeouts.listToolsMs, "MCP listTools")).tools;
   } catch (err) {
-    await currentClient.close().catch(() => {});
+    await client.close().catch(() => {});
     return { skipped: `connected to Probe MCP but failed to list its tools: ${errMessage(err)}` };
   }
-
-  const reconnect = async (): Promise<McpClientLike | null> => {
-    const freshBearer = resolveMcpBearerToken(deps.env);
-    if (!freshBearer) return null;
-    try {
-      currentClient = await deps.connector.connectWithBearer(
-        url,
-        freshBearer.token,
-        deps.timeouts.connectMs,
-        workspaceLimitHeaders(deps.env),
-      );
-      return currentClient;
-    } catch {
-      return null;
-    }
-  };
-
-  const reregister = (targetPi: ExtensionAPI): number =>
-    registerTools(targetPi, tools, () => currentClient, reconnect, deps.timeouts.callToolMs, deps.log);
-  const registered = reregister(pi);
-  deps.log(`probe_mcp: registered ${registered} tool(s) from ${url.toString()}`);
-  return { registered, close: () => currentClient.close(), reregister };
+  deps.log(`probe_mcp: listed ${tools.length} tool(s) from ${url.toString()}`);
+  return { transport: { client, tools, url: url.toString(), reconnect: McpReconnect.Bearer } };
 }
 
 // ---------------------------------------------------------------------------
@@ -468,12 +483,22 @@ export function extractAuthorizationCode(pasted: string): string | null {
  * `/probe-mcp-login`'s implementation. Tries the fast path first (so this
  * command doubles as "reconnect Probe MCP now" for anyone already paired);
  * only falls into the OAuth dance when no bearer token exists AND the
- * session has an interactive UI to complete it.
+ * session has an interactive UI to complete it. Registers nothing: a
+ * connection it makes comes back as `transport`.
  */
-export async function interactiveOAuthLogin(pi: ExtensionAPI, deps: McpBridgeDeps, ui: InteractiveUI): Promise<InteractiveLoginResult> {
-  const fastPath = await connectAndRegisterTools(pi, deps);
-  if ("registered" in fastPath) {
-    return { status: "connected", message: `Probe MCP is available — registered ${fastPath.registered} tool(s).`, registered: fastPath.registered };
+export async function interactiveOAuthConnect(
+  deps: McpBridgeDeps,
+  ui: InteractiveUI,
+): Promise<InteractiveLoginResult & { transport?: McpTransport }> {
+  const fastPath = await connectMcp(deps);
+  if ("transport" in fastPath) {
+    const registered = fastPath.transport.tools.length;
+    return {
+      status: "connected",
+      message: `Probe MCP is available — registered ${registered} tool(s).`,
+      registered,
+      transport: fastPath.transport,
+    };
   }
   const bearer = resolveMcpBearerToken(deps.env);
   if (bearer) {
@@ -535,8 +560,9 @@ export async function interactiveOAuthLogin(pi: ExtensionAPI, deps: McpBridgeDep
     return { status: "failed", message: `Signed in, but listing tools failed: ${errMessage(err)}` };
   }
 
-  const registered = registerTools(pi, tools, () => client, async () => null, deps.timeouts.callToolMs, deps.log);
+  const transport: McpTransport = { client, tools, url: url.toString(), reconnect: McpReconnect.None };
+  const registered = tools.length;
   return justAuthorized
-    ? { status: "authorized", message: `Signed in — registered ${registered} Probe MCP tool(s) for this session.`, registered }
-    : { status: "connected", message: `Probe MCP was already authorized — registered ${registered} tool(s).`, registered };
+    ? { status: "authorized", message: `Signed in — registered ${registered} Probe MCP tool(s) for this session.`, registered, transport }
+    : { status: "connected", message: `Probe MCP was already authorized — registered ${registered} tool(s).`, registered, transport };
 }

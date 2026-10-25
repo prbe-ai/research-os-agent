@@ -445,7 +445,8 @@ types), so
 this extension acts as one. On `session_start`, it connects to Probe
 Research's read-only MCP server (`https://mcp.research.prbe.ai/mcp` — the
 same server Claude Code and Codex already use), lists its tools, and
-registers each as a native pi tool via `pi.registerTool()`, translating each
+registers each as a native pi tool via `pi.registerTool()` (through the shim,
+see "Updates without `/reload`"), translating each
 tool's JSON Schema `inputSchema` into TypeBox with `Type.Unsafe()` (see
 `src/mcpSchema.ts` for why that — not a hand-written Object/String walker —
 is the correct translation: verified against pi's own dist that `parameters`
@@ -600,9 +601,10 @@ Then, still inside `session_start`:
    the same hygiene Claude Code's hook does, needed here too for a pi-only
    install with no Claude Code hook to do it for free.
 3. Refuse silently if the `.disabled` killswitch is present.
-4. Skip if this extension runtime already spawned a daemon for this session
-   id (fast, in-process — survives `/reload` because module state persists
-   across it) — and skip again if a *different* process already has a live
+4. Skip if this pi process already spawned a daemon for this session id
+   (fast, in-process: the shim's shared state, which survives a session
+   switch and a version switch but not `/reload`, where pi evaluates the
+   extension afresh) — and skip again if a *different* process already has a live
    watcher for it (a pidfile + liveness check, same convention Claude Code's
    hook uses: `/tmp/probe-research-tap-watcher-<session_id>.{pid,shutdown}`,
    the **same prefix Claude Code uses**, not a pi-specific one — see
@@ -626,11 +628,78 @@ session asks the service to record it again (`finishHostedSession`). Not on
 `reload` — a reload tears down and rebuilds the extension runtime
 for the *same* session, which fires `session_start` again immediately after;
 stopping the daemon (or dropping the MCP connection) there would spuriously
-FINALIZE a session that isn't actually ending, or leave that session's Probe
-tools gone until the next real reconnect. On `reload`, `session_start`
-instead re-registers the already-fetched tool list against the fresh
-registry with no new network call (pi rebuilds each extension's tool
-registry from scratch on reload — verified against `loader.js`).
+FINALIZE a session that isn't actually ending. A `session_start` that finds
+its session's Probe MCP connection already open (a version switch, or
+`session_start` firing again) offers its tool list again with no new network
+call. Under pi 1.0 a `/reload` evaluates the extension afresh (jiti with
+`moduleCache: false`, and the reload clears pi's extension cache), so the
+reloaded extension starts with empty state and connects again
+(`tests/shimPiLoader.test.ts` proves the fresh evaluation).
+
+## Updates without `/reload`: the shim
+
+pi binds an extension's handlers, commands and tools when it loads it, at
+start and at `/reload`. So that an open pi session takes a new Probe version at
+its next turn, this package is split in two:
+
+- **The shim** (`index.ts` + `src/shim.ts`): loaded once per pi process and
+  never changed under it. It is the only code that calls pi's registration API
+  (`on`, `registerCommand`, `registerTool`, `setActiveTools`): it registers the
+  eight events (`session_start`, `session_shutdown`, `resources_discover`,
+  `before_agent_start`, `tool_call`, `agent_settled`, `session_compact`,
+  `input`), both commands and every tool once, each forwarding by name to the
+  active implementation. `SHIM_API = 1`.
+- **The implementation** (`src/impl.ts`, the rest of `src/`): `prepare(env)`
+  builds a candidate with no side effect; its `declarations` name its event
+  handlers, commands and tools (the Probe MCP tools are declarations built over
+  the open connection); `activate()` / `deactivate()` start and stop its reads
+  poller; `status()` says whether the Probe service records the session. It
+  declares `REQUIRES_SHIM_API`, `STATE_SCHEMA`, `MIGRATES_FROM` and
+  `RESOURCES_FINGERPRINT` (`src/resources.ts`).
+
+The implementation gets two roots: `installRoot`, where pi loaded `index.ts`
+from (the pi clone) and so the package's identity in pi's settings (the
+`probeTracking: false` opt-out, pi-mcp-adapter's hand-off), and `resourceRoot`,
+where its own files are (skills, and the sibling `probe-research-tap` and
+plugin folders the tap runtime and the guard use).
+
+**Pins.** After `pi update`, the Probe CLI copies the clone's layout into
+`<probe state dir>/pi/pins/<version>-<fingerprint>/` (`plugins/probe-research-pi`,
+the sibling plugins, `node_modules`, `package.json`), marks it complete with a
+`.pinned` file, and replaces `<probe state dir>/pi/current` atomically with
+`{"pin": "<folder>", "version": "<version>"}`. The shim stats `current` on every
+event (re-reading it only when the file changed) and switches only at a turn
+boundary, `session_start` or `before_agent_start`, never mid tool call:
+
+1. import `pins/<pin>/plugins/probe-research-pi/src/impl.ts`;
+2. check `REQUIRES_SHIM_API` and that the running state schema is the
+   version's own or in its `MIGRATES_FROM`;
+3. `prepare` on a copy of the shared state;
+4. `deactivate` the running version, register the declaration difference
+   (new tools and commands, re-register changed ones, take removed tools out of
+   pi's active set), `activate` the new one, commit its state.
+
+A failure before step 4 changes nothing; a failure in it re-applies the old
+declarations and activates the old version again on its untouched state.
+Either way the pin is recorded as bad and not tried again by that process,
+and the extension log says why. A version that needs a newer shim keeps the
+running one and says once "Probe updated; run /reload in pi to apply". A
+version whose skills differ from what pi loaded still switches its code, but
+pi shows the new skills only after `/reload` (or in the next session).
+
+**Shared state.** What outlives a version (`{schema, session, transports}`)
+belongs to the shim: the session's caches, the pending-capture map, the
+spawned session ids, the held-question memory, the reads poller, and the open
+Probe MCP connections, as data only. A new version is handed a copy of the
+two records whose values are the same containers, so a replaced version's
+in-flight work still lands where the new one reads it.
+
+**The live record.** Each pi process keeps `<probe state dir>/pi/live/<pid>.json`
+current (`LiveRecord` in `src/shim.ts`: `shim_api`, `state_schema`, `pin`,
+`fallback_pin`, `bad_pins`, `recorded`, `skills_reload_needed`,
+`shim_reload_needed`, `version`, `started`, `updated`) and deletes it when pi
+quits. The CLI reads it to say "no restart needed" only when that is true, and
+never prunes a pin a live record names.
 
 ## Known limitation
 
@@ -687,8 +756,10 @@ npm test
 behaviour (paths, the capture daemon's spawn, the Probe service's session marker, the switch, the tracking state,
 pairing, the MCP token, the daemon's messages, reads and questions, the team
 note's read and sync, the `probe` command parse) and import nothing from pi.
-`src/` holds the pi glue: `extension.ts`, the MCP bridge, pi-mcp-adapter's
-hand-off, the daemon profile, the guard and the prompt text. Each copied
+`src/` holds the pi glue: the shim (`shim.ts`, with `index.ts`), the
+implementation (`impl.ts`, `extension.ts`), the MCP bridge, pi-mcp-adapter's
+hand-off, the daemon profile, the guard and the prompt text. See "Updates
+without `/reload`" above for which half may change under a running pi. Each copied
 constant in `src/core/` is pinned to its Python original by a test in
 `agent/tests/` (`test_pi_*_parity.py`, `test_companion_pi_parity.py`,
 `test_reads_hook.py`, `test_watcher_prefix_parity.py`).
@@ -706,13 +777,21 @@ real daemon. Pairing/killswitch tests use real temporary files via
 `~/.pi` state on the machine running the suite.
 
 `tests/mcpBridge.test.ts` never constructs a real `StreamableHTTPClientTransport`
-or reaches the network either — it exercises `connectAndRegisterTools()` and
-`interactiveOAuthLogin()` entirely against a fake `McpConnector`
+or reaches the network either — it exercises `connectMcp()`,
+`mcpToolDeclarations()` and `interactiveOAuthConnect()` entirely against a fake `McpConnector`
 (`src/mcpBridge.ts`'s own injectable seam). `tests/mcpAuth.test.ts` and
 `tests/extension.test.ts` isolate `PROBE_MCP_TOKEN`/`PROBE_CONFIG_PATH` for
 the same reason `PROBE_PI_TAP_TOKEN` is isolated: this dev machine has a real
 paired `probe` install, and an un-isolated env var would make these tests
 attempt a real connection to the real MCP server.
+
+`tests/shim.test.ts` drives the shim with fake implementations (forwarding,
+switching only at a turn boundary, rollback, bad pins, the state schema, the
+live record); `tests/shimRealImpl.test.ts` runs the real implementation under
+it, including a copy of this package loaded from a pin folder;
+`tests/shimPiLoader.test.ts` runs it inside real pi (its loader, runner and
+tool registry). Every wiring test in `tests/extension.test.ts` goes through
+the shim too (`tests/shimHarness.ts`).
 
 `tests/adapterHandoff.test.ts` covers D6's stand-down decision against real
 temporary `settings.json` files at both scopes — including malformed JSON, a

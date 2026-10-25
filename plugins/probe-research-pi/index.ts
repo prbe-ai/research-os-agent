@@ -8,9 +8,12 @@
  * README.md for why USER scope (`~/.pi/agent/extensions/`) is the only
  * install location that actually loads in non-interactive modes.
  *
- * All real logic lives in ./src — this file only computes `__dirname`
- * (needed for the sibling-checkout tap-root default; see src/core/tapRuntime.ts)
- * and calls into the wiring layer.
+ * FROZEN, with `src/shim.ts`: pi loads this once per process (again only at
+ * `/reload`), and the shim it starts runs the implementation of whichever
+ * Probe version is pinned newest, switching at a turn boundary with no
+ * `/reload`. This file only computes where pi loaded the package from (the
+ * package's identity, and the implementation beside it, used when no pin can
+ * be) and hands both to the shim.
  */
 
 import { dirname } from "node:path";
@@ -18,10 +21,11 @@ import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { registerExtension } from "./src/extension.js";
+import * as cloneImpl from "./src/impl.js";
+import { attachShim } from "./src/shim.js";
 
-const extensionDir = dirname(fileURLToPath(import.meta.url));
+const installRoot = dirname(fileURLToPath(import.meta.url));
 
-export default function probeResearchPi(pi: ExtensionAPI): void {
-  registerExtension(pi, extensionDir);
+export default async function probeResearchPi(pi: ExtensionAPI): Promise<void> {
+  await attachShim(pi, installRoot, cloneImpl);
 }
