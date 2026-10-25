@@ -18,7 +18,7 @@ This skill only changes the state of Probe - it doesn't actually track any work.
 |---|---|---|---|
 | `on` | yes | yes | Default. Record work as it happens, per the `track-work` skill, and search the team's history for context worth injecting. |
 | `read` | yes | no | Create no projects, experiments or runs; write no notes, artifacts or visible entity Markdown. Keep searching and keep reporting what you find. If the researcher asks for something that would be recorded, say once that `/probe on` would record it — never as a reminder, never as a closing caveat. |
-| `off` | no | no | Make no Probe calls, reads included. The Probe service stops capturing this session's transcript (see FYI for what still uploads). Say you could not look; never report that no prior work exists. |
+| `off` | no | no | Make no Probe calls, reads included. This session's transcript is not captured (see FYI for what still uploads). Say you could not look; never report that no prior work exists. |
 
 Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
 press leaves it for `read`. Whether the Probe daemon records is set in
@@ -30,20 +30,21 @@ FYI:
   interval spent in `read` or `off` happened unrecorded.
 - The state overrides your standing `CLAUDE.md` / `AGENTS.md` rules for this
   conversation.
-- In `off`, the Probe service stops capturing this session's transcript from
-  the switch on, and never sends that stretch later. Until the next tap update
-  it can still be uploaded by another session's `tap watch` process, an older
-  tap, a sandboxed session or a Probe CLI on Python 3.10, and a compaction
-  summary written after switching back on can repeat what was said while off.
+- In `off`, nothing captures this session's transcript from the switch on
+  (the Probe service, and from tap 0.10.19 every `tap watch`), and that
+  stretch is never sent later. A `tap watch` process still running an older
+  tap (started before the update) can upload it until that process ends, and
+  a compaction summary written after switching back on can repeat what was
+  said while off.
 
 ## SAY WHERE IT LANDED:
 
 > Probe is set to `read` for this session - nothing further will be recorded.
 
 > Probe is off for this session - no calls at all, so I will not be able to
-> check prior work or write, and the Probe service stops capturing this
-> session's transcript (this setup may still upload it until the next tap
-> update). `/probe [read/on]` to turn back on.
+> check prior work or write, and this session's transcript is not captured
+> from now on (a capture process still running an older tap can upload it
+> until it ends). `/probe [read/on]` to turn back on.
 
 In the `off` state, do not fabricate information - do not report "no info"
 during lookup - clearly state that you couldn't look due to the state.

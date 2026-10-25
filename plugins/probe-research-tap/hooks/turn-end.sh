@@ -91,8 +91,13 @@ except OSError:
 PREFIX="probe-research-tap"
 [ "$SOURCE" = codex ] && PREFIX="prbe-codex-tap"
 [ -n "${TAP_WATCHER_PREFIX:-}" ] && PREFIX="$TAP_WATCHER_PREFIX"
+# The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
+# it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
+# variable names there as a Windows path (session-start.sh sets it).
+WATCHER_DIR=/tmp
+case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
 if [[ "$HOOK_INPUT" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]{1,128})\" ]]; then
-    HOSTF="/tmp/${PREFIX}-watcher-${BASH_REMATCH[1]}.hosted"
+    HOSTF="${WATCHER_DIR}/${PREFIX}-watcher-${BASH_REMATCH[1]}.hosted"
     if [ -s "$HOSTF" ]; then
         PID=$(cat "$HOSTF" 2>/dev/null || echo "")
         case "$PID" in '' | *[!0-9]*) PID="" ;; esac

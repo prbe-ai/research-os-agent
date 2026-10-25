@@ -59,8 +59,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
+from tap import capture_gate, outbox, pi_discovery, sources
 from tap import config as cfg
-from tap import outbox, pi_discovery, sources
 from tap import transcript as _transcript
 from tap.storage import FileOffset, Storage
 from tap.transcript import byte_offset_after, read_new, validate_json
@@ -306,6 +306,10 @@ def find_gaps(storage: Storage, *, now: int, horizon_s: int | None = None) -> li
             continue
         session_id = session_id_for(path)
         if not session_id:
+            continue
+        if capture_gate.verdict(session_id).blocked:
+            # Probe is off for it (or an off stretch of it is still open):
+            # not adopted, and nothing is asked of the server about it.
             continue
         prev = storage.get_offset(str(path))
         if prev is None:

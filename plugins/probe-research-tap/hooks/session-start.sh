@@ -29,6 +29,11 @@ msys* | cygwin*)
     [ -n "$PROBE_TAP_WATCHER_DIR" ] && export PROBE_TAP_WATCHER_DIR
     ;;
 esac
+# The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
+# it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
+# variable names there as a Windows path (session-start.sh sets it).
+WATCHER_DIR=/tmp
+case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
 HOOK_INPUT="$(cat)"
 REGISTRY_ENV=""
 case "$SOURCE" in
@@ -94,7 +99,7 @@ fi
 # Owner records (tap/owner.py) and session-end's pid hand-overs go the same way:
 # a running daemon refreshes its owner record every tick, so only a finished
 # session's files are ever 2 days old.
-find /tmp/ -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
+find "$WATCHER_DIR/" -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
     -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \) \
     -mtime +2 -delete 2>/dev/null || true
 
@@ -140,14 +145,14 @@ keep_hosted() {
     return 1
 }
 # Kept ones are touched, so each is looked at again in 2 days, not every start.
-find /tmp/ -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.hosted" -mtime +2 2>/dev/null \
+find "$WATCHER_DIR/" -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.hosted" -mtime +2 2>/dev/null \
     | while IFS= read -r _hf; do
         if keep_hosted "$_hf"; then touch -c "$_hf" 2>/dev/null || true; else rm -f "$_hf" 2>/dev/null || true; fi
     done || true
 # A wrapper's version record is written once and never refreshed, and a live
 # session can be days old: of the 2-day-old ones, only those whose pid file is
 # gone are pruned.
-find /tmp/ -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.version" -mtime +2 2>/dev/null \
+find "$WATCHER_DIR/" -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.version" -mtime +2 2>/dev/null \
     | while IFS= read -r _vf; do
         [ -e "${_vf%.version}.pid" ] || rm -f "$_vf"
     done || true
@@ -328,11 +333,11 @@ fi
 PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
     "$PY" -m tap owner --session-id "$SESSION_ID" --from-pid "$$" </dev/null >/dev/null 2>&1 || true
 
-PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
+PID_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
 # The tap version the live wrapper was started from, written beside its pid
 # file by whatever spawned it (this hook below, `tap start`). Taps before 0.9.16
 # wrote none; their wrapper's command line names its versioned plugin folder.
-VERSION_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.version"
+VERSION_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.version"
 
 #: The first tap on protocol 2. A protocol-1 daemon's session cannot be taken
 #: over: the new daemon would refuse it every tick ("legacy transcript coverage
@@ -464,11 +469,11 @@ fi
 # stale (SessionEnd no longer deletes it — see session-end.sh). Clear it before
 # spawning, or the wrapper's first `[ -f "$SHUTDOWN" ] && exit 0` check would
 # immediately kill the fresh daemon on a resumed session.
-SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
+SHUTDOWN_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 rm -f "$SHUTDOWN_FILE"
 # The last SessionEnd's hand-over goes with it: no wrapper of this session runs
 # now, and session-end.sh would otherwise wait on whatever pid it names.
-rm -f "/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping" 2>/dev/null || true
+rm -f "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping" 2>/dev/null || true
 
 if [ -n "$TRANSCRIPT_PATH" ]; then
     TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")
@@ -496,7 +501,7 @@ if [ "${PROBE_TAP_HOSTED:-1}" != 0 ] && PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$
 fi
 
 if [ -z "$HOSTED" ]; then
-rm -f "/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
+rm -f "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
 
 # Which tap the wrapper below runs, for the next resume's check above. Written
 # before the spawn, so there is no moment when a live wrapper carries an older
@@ -527,7 +532,7 @@ fi
 WRAPPER_SCRIPT='
 SID="$1"; CWD="$2"; PY="$3"; ROOT="$4"; LOG="$5"; PIDF="$6"; PREFIX="$7"; shift 7
 echo $$ >"$PIDF"
-SHUTDOWN="/tmp/${PREFIX}-watcher-${SID}.shutdown"
+SHUTDOWN="${PIDF%.pid}.shutdown"
 RESTART_COUNT=0
 WINDOW_START=$(date +%s)
 CHILD_PID=""

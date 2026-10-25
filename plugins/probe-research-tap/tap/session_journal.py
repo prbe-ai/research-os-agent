@@ -41,6 +41,13 @@ predates it builds version 1.
 A transcript line over MAX_SOURCE_LINE is skipped (read past, never held) and
 stands as an `oversize_line` system event, so one giant paste no longer stalls
 its session's capture.
+
+PROBE OFF (`capture_gate`, tap 0.10.19). `stage` asks the gate first: a session
+whose switch reads `off`, or that has an off stretch still open, gets no new
+batch (one staged before the switch moved still goes); otherwise every line
+that STARTS inside one of its off stretches is read past as nothing (no event,
+no title, no oversize placeholder), so the server's cursor moves past it and
+no process can ever send it.
 """
 
 from __future__ import annotations
@@ -72,7 +79,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-from . import codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
+from . import capture_gate, codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .sanitize import PastedImage
 from .secrets import redact, redact_event
 from .transcript import nesting_exceeds
@@ -1847,6 +1854,12 @@ class Journal:
                 if require_no_pending:
                     raise ReconciliationRequired("another transcript delivery was reserved during reconciliation")
                 return pending
+            # Probe off: nothing new while the switch reads `off` (or an off
+            # stretch is still open); the lines of its stretches go as nothing.
+            gate = capture_gate.verdict(session_id)
+            if gate.blocked:
+                return None
+            skip = gate.gaps
             historic = bool(state.get("snapshot_path") and not state.get("historical_complete"))
             if historical_only and state.get("historical_complete"):
                 return None
@@ -1902,6 +1915,8 @@ class Journal:
             with path.open("rb") as handle:
                 handle.seek(end)
                 while True:
+                    # Written while Probe was off: read past, sent as nothing.
+                    skipped = bool(skip) and capture_gate.in_gap(skip, end)
                     raw = handle.readline(MAX_SOURCE_LINE + 1)
                     length = len(raw)
                     if length > MAX_SOURCE_LINE:
@@ -1917,7 +1932,7 @@ class Journal:
                                     "historical transcript has an incomplete trailing line"
                                 )
                             break  # still being written: read it whole next pass
-                        retained = [oversize_line_event(length)]
+                        retained = [] if skipped else [oversize_line_event(length)]
                     else:
                         if not raw:
                             break
@@ -1929,8 +1944,11 @@ class Journal:
                             break
                         line = None
                         try:
-                            line = json.loads(raw) if raw.strip() else None
-                            value = sanitize(line) if raw.strip() else None
+                            if skipped:
+                                value = None
+                            else:
+                                line = json.loads(raw) if raw.strip() else None
+                                value = sanitize(line) if raw.strip() else None
                             if value is not None and nesting_exceeds(value):
                                 value = None  # the redactor below would hit the recursion limit
                         except (ValueError, UnicodeDecodeError):

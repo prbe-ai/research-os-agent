@@ -107,7 +107,12 @@ own_pid() {
     OWN_PID="$pid"
 }
 
-PIDF="/tmp/${PREFIX}-watcher-${SID}.pid"
+# The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
+# it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
+# variable names there as a Windows path (session-start.sh sets it).
+WATCHER_DIR=/tmp
+case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
+PIDF="${WATCHER_DIR}/${PREFIX}-watcher-${SID}.pid"
 PID=""
 if [ -f "$PIDF" ]; then
     own_pid "$PIDF"
@@ -121,7 +126,7 @@ fi
 # path below (at most every ten minutes) asks it again and rewrites the marker.
 # Only a marker of this user's naming a real pid (`own_pid`): pid 1 is init,
 # never the service.
-HOSTF="/tmp/${PREFIX}-watcher-${SID}.hosted"
+HOSTF="${WATCHER_DIR}/${PREFIX}-watcher-${SID}.hosted"
 HOSTED_GONE=""
 if [ -f "$HOSTF" ] && [ ! -L "$HOSTF" ] && [ -O "$HOSTF" ] && [ -s "$HOSTF" ]; then
     own_pid "$HOSTF"

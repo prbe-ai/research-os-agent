@@ -44,6 +44,12 @@ SessionStart makes, on a connection only (it never starts a service):
                                recorder if it took it, else this watcher (its
                                last pass and FINALIZE); the daemon worker
                                finishes its queue, never handed over
+    Probe off before it ever ─> (tap 0.10.19) nothing of it was claimed or
+    claimed it                  staged here, so there is no claim to hand
+                               over: asked all the same, at the same times;
+                               accepted (the service holds it off and records
+                               its off stretch itself), this watcher exits
+                               EXIT_HANDED_OVER at once
 
 One recorder per session throughout: the claim is a kernel lock, held by this
 watcher or by the service's recorder, never both, and the watcher never exits
@@ -311,15 +317,18 @@ class HandBack:
         *,
         stopping: Callable[[], bool] = lambda: False,
         tick: Callable[[], None] = lambda: None,
+        unclaimed_off: bool = False,
     ) -> str:
         """Offer the session to the service, between two passes (and look
-        again whether a recorder it told to finish is gone). Never raises."""
+        again whether a recorder it told to finish is gone). `unclaimed_off`:
+        Probe is off for it and this watcher never claimed it (nothing to hand
+        over but the session itself). Never raises."""
         try:
             if self.relink_pending and self.clock() >= self.relink_at:
                 self._relink_once_gone(stopping)
             if self.confined or self.clock() < self.next_at:
                 return Outcome.KEPT
-            return self._attempt(journal, stopping, tick)
+            return self._attempt(journal, stopping, tick, unclaimed_off)
         except Exception:  # noqa: BLE001 -- capture goes on here
             log.exception("handing the session to the Probe service failed; this recorder keeps it")
             self.next_at = self.clock() + self.ask_every_s
@@ -327,10 +336,11 @@ class HandBack:
                 return self._take_back(journal, stopping=stopping)
             return Outcome.KEPT
 
-    def _attempt(self, journal, stopping: Callable[[], bool], tick: Callable[[], None]) -> str:
+    def _attempt(self, journal, stopping: Callable[[], bool], tick: Callable[[], None],
+                 unclaimed_off: bool = False) -> str:
         sid = self.session_id
         self.next_at = self.clock() + self.ask_every_s
-        if journal is None or not journal.holds_live(sid):
+        if not unclaimed_off and (journal is None or not journal.holds_live(sid)):
             return Outcome.KEPT  # not recording it: nothing to hand over
         answer = self.service.record(record_client._params(self.args))
         if answer.get("recording") is not True:
@@ -351,6 +361,9 @@ class HandBack:
                 self._say(answer)
             return Outcome.KEPT
         self.said = None
+        if unclaimed_off:
+            # No claim here, nothing of it staged here: the service holds it.
+            return self._handed_over(answer.get("pid"))
         log.info("the Probe service (pid %s) will record this session; handing it over", answer.get("pid"))
         journal.release_live(sid)
         deadline = self.clock() + self.wait_s

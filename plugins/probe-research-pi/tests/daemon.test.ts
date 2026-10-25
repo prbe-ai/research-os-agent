@@ -19,7 +19,7 @@ import {
   type DaemonDeps,
   type PruneDeps,
 } from "../src/core/daemon.js";
-import { hostedFile, pidFile, shutdownSentinelFile } from "../src/core/paths.js";
+import { hostedFile, OsPlatform, pidFile, shutdownSentinelFile, WATCHER_DIR_ENV, watcherDir } from "../src/core/paths.js";
 import { SERVICE_OWNER_PID_ENV } from "../src/core/service.js";
 import type { TapRuntime } from "../src/core/tapRuntime.js";
 
@@ -807,5 +807,21 @@ describe("pruneStaleShutdownSentinels", () => {
       now: () => Date.now(),
     };
     expect(() => pruneStaleShutdownSentinels(deps)).not.toThrow();
+  });
+});
+
+describe("watcherDir", () => {
+  it("is the folder the tap's watcher-dir variable names on every OS, else /tmp (the user's temp folder on Windows)", () => {
+    // The tap reads PROBE_TAP_WATCHER_DIR on every OS from 0.10.19 (`tap/config.py::_watcher_dir`):
+    // pi must look where the tap it spawns writes, or a test's files land in the shared /tmp.
+    expect(WATCHER_DIR_ENV).toBe("PROBE_TAP_WATCHER_DIR");
+    expect(watcherDir(OsPlatform.Linux, { [WATCHER_DIR_ENV]: "/srv/watchers" })).toBe("/srv/watchers");
+    expect(watcherDir(OsPlatform.Mac, { [WATCHER_DIR_ENV]: "/srv/watchers" })).toBe("/srv/watchers");
+    expect(watcherDir(OsPlatform.Windows, { [WATCHER_DIR_ENV]: "C:\\Users\\r\\AppData\\Local\\Temp" })).toBe(
+      "C:\\Users\\r\\AppData\\Local\\Temp",
+    );
+    expect(watcherDir(OsPlatform.Linux, {})).toBe("/tmp");
+    expect(watcherDir(OsPlatform.Linux, { [WATCHER_DIR_ENV]: "relative/not-a-folder" })).toBe("/tmp");
+    expect(watcherDir(OsPlatform.Windows, {})).toBe(tmpdir());
   });
 });

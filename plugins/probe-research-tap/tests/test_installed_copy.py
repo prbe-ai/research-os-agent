@@ -625,6 +625,10 @@ def test_a_codex_folder_still_being_written_takes_no_event_until_it_settles(box)
 RELEASED_WHOLE_FILES = {
     "0.10.18": ("hooks/tap-python.sh", "hooks/probe-hooks-trust.sh", "hooks/session-start.sh", "tap/__init__.py",
                 "tap/__main__.py", "tap/main.py", "tap/hosted.py"),
+    # Not tap/capture_gate.py: an open 0.10.19 session must still follow a
+    # rollback to a copy that has none (0.10.18).
+    "0.10.19": ("hooks/tap-python.sh", "hooks/probe-hooks-trust.sh", "hooks/session-start.sh", "tap/__init__.py",
+                "tap/__main__.py", "tap/main.py", "tap/hosted.py"),
 }
 
 

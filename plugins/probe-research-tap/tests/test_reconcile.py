@@ -116,6 +116,27 @@ def test_adopts_untracked_file_when_a_session_log_exists(storage, projects, plug
     assert gaps[0].gap_bytes == p.stat().st_size
 
 
+def test_a_session_whose_switch_reads_off_is_never_adopted(storage, projects, plugin, tmp_path, monkeypatch):
+    """Probe off (tap 0.10.19, `tap/capture_gate.py`): the gap sweep leaves out
+    a session that is off, or whose off stretch is still open, so nothing is
+    asked of the server about it; a closed off stretch alone does not (its
+    lines are read past as nothing when it is staged)."""
+    from tap import capture_gate
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    sessions = tmp_path / "state" / "probe" / "sessions"
+    sessions.mkdir(parents=True)
+    on, off, still_open, closed = (f"{n}{n}{n}{n}{n}{n}{n}{n}-4444-4444-8444-444444444444" for n in "1234")
+    for sid in (on, off, still_open, closed):
+        write_transcript(projects, sid, 3)
+        mark_session_logged(plugin, sid)
+    (sessions / f"{off}.state").write_text("off\n")
+    assert capture_gate.write_gaps(still_open, [[0, None]])
+    assert capture_gate.write_gaps(closed, [[0, 10]])
+    found = {gap.session_id for gap in reconcile.find_gaps(storage, now=int(time.time()))}
+    assert found == {on, closed}
+
+
 def test_ignores_untracked_file_with_no_session_log(storage, projects):
     """Pre-install history is not ours to ship — the guard against a 672MB sweep."""
     write_transcript(projects, "33333333-3333-4333-8333-333333333333", 10)

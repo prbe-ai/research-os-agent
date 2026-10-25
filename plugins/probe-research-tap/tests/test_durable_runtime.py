@@ -1014,3 +1014,60 @@ def test_a_recovered_reservation_whose_file_is_another_sessions_sends_nothing(se
         assert not state.get("snapshot_path"), "not pinned either"
     finally:
         journal.close()
+
+
+# -- Probe off (tap 0.10.19, `tap/capture_gate.py`): another session the pass drains ----------
+
+
+def _switched_off(monkeypatch, tmp_path, sid):
+    """`probe session state off` for `sid`: its `.state`, in a private state folder."""
+    sessions = tmp_path / "xdg-state" / "probe" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    (sessions / f"{sid}.state").write_text("off\n")
+
+
+def test_an_off_sessions_quiet_prefix_is_never_pinned_nor_asked_about(setup, monkeypatch, tmp_path):
+    """Another session whose agent is gone and whose transcript went quiet is
+    an orphan this pass would pin (a receipts call) and complete. Switched
+    off, it is not even asked about: nothing reaches the server about it."""
+    config, storage, wire = setup
+    sid, path = _other_source(config)
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
+    journal.close()
+    old = time.time() - tapmain.ORPHAN_QUIET_SECONDS - 1
+    os.utime(path, (old, old))
+    monkeypatch.setattr(tapmain.reconcile, "has_live_daemon", lambda _: False)
+    _owner_states(monkeypatch, {sid: Owner.GONE})
+    _switched_off(monkeypatch, tmp_path, sid)
+    asked: list[str] = []
+    receipts = wire.receipts
+    monkeypatch.setattr(wire, "receipts", lambda s, **page: asked.append(s) or receipts(s, **page), raising=False)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert sid not in asked
+    assert not any(key[0] == sid for key in wire.accepted)
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    assert journal.get(sid)["finalized"] is False and journal.get(sid)["source_byte_end"] == 0
+    journal.close()
+
+
+def test_an_off_session_whose_last_batch_still_goes_gets_no_title_after_it(setup, monkeypatch, tmp_path):
+    """A batch staged before the switch moved still goes; past it nothing does,
+    the idle pass's retry of the session's title included."""
+    config, storage, wire = setup
+    sid, path = _other_source(config)
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
+    assert journal.stage(sid, cwd=OTHER_CWD) is not None  # pending: staged while on
+    journal.update(sid, custom_title="Named while on")
+    journal.close()
+    monkeypatch.setattr(tapmain.reconcile, "has_live_daemon", lambda _: False)
+    _owner_states(monkeypatch, {sid: Owner.ALIVE})
+    _switched_off(monkeypatch, tmp_path, sid)
+    titles: list[str] = []
+    monkeypatch.setattr(wire, "title", lambda s, t: titles.append(s) or (503, {}), raising=False)
+    monkeypatch.setattr(tapmain_journal, "TITLE_RETRY_SECONDS", 0)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert any(key[0] == sid for key in wire.accepted)  # the pending batch went
+    assert titles.count(sid) == 1  # its own delivery's try, refused; no idle retry while off

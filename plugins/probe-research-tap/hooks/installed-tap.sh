@@ -54,8 +54,6 @@
 # in the C library, in linear time. tests/test_installed_copy.py pins all this.
 # Fail-open: nothing here exits or returns non-zero.
 
-#: Set while an event moves to the installed copy (to the folder it moved from).
-TAP_FOLLOWED_ENV=PROBE_TAP_FOLLOWED
 #: A ledger or plugin list bigger than this is not read (each is ~2 KB).
 TAP_LIST_MAX=262144
 #: The copy to move to, once `tap_installed_*` found one.

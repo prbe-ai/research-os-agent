@@ -499,10 +499,14 @@ _WATCHER_DIR_FILE = ".watcher_dir"
 
 
 def _watcher_dir(source: str | None = None) -> str:
-    """Where the tap's hooks keep a session's watcher files: `/tmp`. On Windows
-    the folder Git Bash's `/tmp` is: the one session-start.sh recorded in the
-    tap's state folder (`_WATCHER_DIR_FILE`), else `_WATCHER_DIR_ENV`, else the
-    user's temp folder. Mirrors `capture_state._watcher_dir`."""
+    """Where the tap's hooks keep a session's watcher files: `/tmp`, or the
+    folder `_WATCHER_DIR_ENV` names (every OS, as the tap from 0.10.19). On
+    Windows the folder Git Bash's `/tmp` is: the one session-start.sh recorded
+    in the tap's state folder (`_WATCHER_DIR_FILE`), else `_WATCHER_DIR_ENV`,
+    else the user's temp folder. Mirrors `capture_state._watcher_dir`."""
+    if os.name != "nt":
+        given = os.environ.get(_WATCHER_DIR_ENV, "")
+        return given if given and os.path.isabs(given) else "/tmp"
     if os.name == "nt":
         if source:
             try:

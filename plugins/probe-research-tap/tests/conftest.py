@@ -42,6 +42,17 @@ def _no_real_probe_service(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _probe_on_unless_a_test_says_otherwise(monkeypatch):
+    """These tests keep the developer's HOME, whose Probe config may make `off`
+    the machine's default (`defaults.session_state`): every session would then
+    be held off by the tap's own gate (`tap/capture_gate.py`). The environment
+    override sits above that default and below a session's own `.state`, so
+    a test of Probe off still writes its session's `.state` (or sets this)."""
+    monkeypatch.setenv("PROBE_SESSION_STATE", "full")
+    monkeypatch.delenv("PROBE_SESSION_TRACKING", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_transcript_roots(monkeypatch, tmp_path_factory):
     """Point every flavour's transcript discovery at an empty per-test directory."""
     root = tmp_path_factory.mktemp("transcripts")

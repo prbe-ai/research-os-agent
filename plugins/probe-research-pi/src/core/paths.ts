@@ -24,7 +24,7 @@
  */
 
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 export const PLUGIN_NAME = "probe-research-tap";
 export const SOURCE_ID = "pi";
@@ -232,10 +232,18 @@ export function mcpOAuthStateFile(env: PathEnv = process.env): string {
 /** The platforms this package treats apart (Node's `process.platform` names). */
 export const OsPlatform = { Windows: "win32", Mac: "darwin", Linux: "linux" } as const satisfies Record<string, NodeJS.Platform>;
 
-/** Where a session's watcher files live: `/tmp`, as the tap computes it
- *  (`tap/config.py::_watcher_dir`); on Windows the user's temp folder (the
- *  hooks' Git Bash `/tmp`), never `\\tmp` on the current drive. */
-export function watcherDir(platform: NodeJS.Platform = process.platform): string {
+/** The folder of a session's watcher files when it names an absolute one, on
+ *  every OS (`tap/config.py::WATCHER_DIR_ENV`, tap 0.10.19): the tap, its hooks,
+ *  `probe` and the status line all honour it; a test sets it to keep its files
+ *  out of the shared `/tmp`. */
+export const WATCHER_DIR_ENV = "PROBE_TAP_WATCHER_DIR";
+
+/** Where a session's watcher files live: `WATCHER_DIR_ENV`, else `/tmp`, as the
+ *  tap computes it (`tap/config.py::_watcher_dir`); on Windows the user's temp
+ *  folder (the hooks' Git Bash `/tmp`), never `\\tmp` on the current drive. */
+export function watcherDir(platform: NodeJS.Platform = process.platform, env: PathEnv = process.env): string {
+  const given = env[WATCHER_DIR_ENV];
+  if (given && (platform === OsPlatform.Windows ? win32 : posix).isAbsolute(given)) return given;
   return platform === OsPlatform.Windows ? tmpdir() : "/tmp";
 }
 

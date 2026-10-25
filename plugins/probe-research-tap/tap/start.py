@@ -51,7 +51,7 @@ WRAPPER = "\n".join(
     [
         'SID="$1"; CWD="$2"; PY="$3"; LOG="$4"; PIDF="$5"; PREFIX="$6"; shift 6',
         'echo $$ >"$PIDF"',
-        'SHUTDOWN="/tmp/${PREFIX}-watcher-${SID}.shutdown"',
+        'SHUTDOWN="${PIDF%.pid}.shutdown"',
         "RESTART_COUNT=0",
         "WINDOW_START=$(date +%s)",
         'CHILD_PID=""',

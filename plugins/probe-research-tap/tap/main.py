@@ -27,6 +27,15 @@ Exits cleanly on:
     EXIT_HANDED_OVER, no FINALIZE (the session goes on in the service), and
     the wrapper ends instead of respawning.
 
+Probe off (`tap/capture_gate.py`, tap 0.10.19): no pass stages, pins or asks
+the server anything about a session whose switch reads `off` (or whose off
+stretch is still open), its own or another's in the journal; this session's
+own switch is looked at each pass and each second between passes, and its off
+stretches are written to its gap file (unless a Probe service that gates hosts
+this loop: it records them itself). A session off from before anything of it
+was staged here is not even claimed until it reads on. One that ends while off
+is finalized with its off stretch read past as nothing.
+
 On the way out (every path except the killswitch, whose contract is "ship
 nothing", and the hand-over) the daemon reads one last transcript tail and
 enqueues a FINALIZE for the session. That finalize is what tells the engine the
@@ -52,8 +61,17 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from tap import (
+    capture_gate,
+    handback,
+    killswitch,
+    outbox,
+    reconcile,
+    record_client,
+    service_link,
+    sources,
+)
 from tap import config as cfg
-from tap import handback, killswitch, outbox, reconcile, record_client, service_link, sources
 from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
@@ -573,6 +591,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
     )
     looped = False
     handed_over = False
+    # Probe off: this session's own recorder of its off stretches, unless a
+    # host (the Probe service) records them itself (`capture_gate.host`).
+    recorder = None if capture_gate.host_records() else capture_gate.Recorder(c.session_id, c.transcript_path, log.info)
     # The transcript proved, in this process, that it is this session's
     # (`validate_identity`): nothing is staged, uploaded or finalized before,
     # whatever reservation the journal already holds for it.
@@ -592,6 +613,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
             looped = True
             if not stopping:
                 companion.poll()
+            if recorder is not None:
+                recorder.look()
             if cfg.killswitch_active() or cfg.cwd_disabled(c.cwd):
                 return 0
             enabled, _reason = killswitch.is_ingestion_enabled(
@@ -604,7 +627,16 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                 continue
             try:
                 sent_bytes = 0
-                if c.session_id not in deleted and (
+                own_blocked = capture_gate.verdict(c.session_id).blocked
+                # Ended while off, its off stretch recorded: finalized with
+                # that stretch read past as nothing (`capture_gate.settling`).
+                # Off before anything of it was staged here: nothing at all is
+                # asked of the server about it, not even its claim.
+                ending_off = (
+                    stopping and own_blocked and recorder is not None and journal is not None
+                    and recorder.recorded()
+                )
+                if not (own_blocked and journal is None) and c.session_id not in deleted and (
                     not identity_ok or journal.get(c.session_id) is None
                 ):
                     remote = None
@@ -656,7 +688,10 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                     raise _NothingToDrain
                 if journal.is_deleted(c.session_id):
                     deleted.add(c.session_id)
-                if stopping and c.session_id not in deleted and c.session_id not in rewritten:
+                if (
+                    stopping and c.session_id not in deleted and c.session_id not in rewritten
+                    and (not own_blocked or ending_off)
+                ):
                     journal.ensure(
                         c.session_id,
                         c.transcript_path,
@@ -691,10 +726,20 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                     _beat(c)
                     if sent_bytes >= reconcile.MAX_BACKFILL_BYTES_PER_SWEEP:
                         break
+                    settle_own = ending_off and state["session_id"] == c.session_id
                     try:
                         if journal.conflict_retry_in(state["session_id"]) > 0:
                             # Its batch still waits out a lasting 409
                             # (`_defer_conflict`); the others keep going.
+                            continue
+                        if (
+                            not settle_own
+                            and capture_gate.verdict(state["session_id"]).blocked
+                            and journal.pending(state["session_id"]) is None
+                        ):
+                            # Probe is off for it: nothing staged, pinned or
+                            # asked of the server (a batch staged before the
+                            # switch moved still goes, below).
                             continue
                         if state["session_id"] != c.session_id:
                             # Recovered: its source proves it is that session's
@@ -722,16 +767,22 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                             _beat(c)
                             _require_capture_eligible(source_cwd)
                             try:
-                                body = journal.stage(
-                                    state["session_id"],
-                                    cwd=str(source_cwd),
-                                    finalize=bool(state.get("finalize_requested")),
-                                    historical_only=not state.get("live_enabled", False),
-                                    # Read each pass: the Settings toggle
-                                    # takes effect on the next batch.
-                                    pasted_images=cfg.pasted_images_on(),
-                                )
+                                with (
+                                    capture_gate.settling(c.session_id, recorder.gaps)
+                                    if settle_own else contextlib.nullcontext()
+                                ):
+                                    body = journal.stage(
+                                        state["session_id"],
+                                        cwd=str(source_cwd),
+                                        finalize=bool(state.get("finalize_requested")),
+                                        historical_only=not state.get("live_enabled", False),
+                                        # Read each pass: the Settings toggle
+                                        # takes effect on the next batch.
+                                        pasted_images=cfg.pasted_images_on(),
+                                    )
                                 if body is None:
+                                    if capture_gate.verdict(state["session_id"]).blocked:
+                                        break  # off: not even its title
                                     try:
                                         # Nothing left to send: a title refused
                                         # after the last batch gets no other try.
@@ -777,6 +828,14 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                                 continue
                             sent_bytes += len(body)
                         journal.release_snapshot(state["session_id"])
+                        if (
+                            recorder is not None
+                            and state["session_id"] == c.session_id
+                            and journal.pending(c.session_id) is None
+                        ):
+                            # Its off stretches the server's cursor is past go
+                            # from its gap file (`capture_gate.Recorder.settled`).
+                            recorder.settled(int((journal.get(c.session_id) or {}).get("source_byte_end") or 0))
                     except SessionDeleted as exc:
                         _settle_deleted(journal, exc, deleted)
                     except SourceRewritten:
@@ -888,17 +947,20 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                     and _identity_ready(c.transcript_path, wire.source, c.session_id)
                 ):
                     break
+                # Probe off before this watcher ever claimed it: nothing to
+                # hand over but the session (`handback`, tap 0.10.19).
+                unclaimed_off = journal is None and recorder is not None and recorder.off
                 if (
                     offer is not None
-                    and journal is not None
-                    and identity_ok
+                    and ((journal is not None and identity_ok) or unclaimed_off)
                     and c.session_id not in deleted
                     and c.session_id not in rewritten
                     and offer.due()
                 ):
                     # Between two passes: this one's batch is delivered, or
                     # pending in the journal for whichever recorder is next.
-                    outcome = offer.attempt(journal, stopping=lambda: _shutdown_observed(c), tick=companion.poll)
+                    outcome = offer.attempt(journal, stopping=lambda: _shutdown_observed(c), tick=companion.poll,
+                                            unclaimed_off=unclaimed_off)
                     if outcome == handback.Outcome.HANDED_OVER:
                         handed_over = True
                         return handback.EXIT_HANDED_OVER
@@ -909,6 +971,10 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                 time.sleep(1)
                 slept += 1
                 _beat(c)
+                if recorder is not None:
+                    # Each second: an off stretch starts where the switch was
+                    # last seen on (`capture_gate.Recorder.look`).
+                    recorder.look()
                 if slept % COMPANION_POLL_SECONDS == 0:
                     companion.poll()
     finally:

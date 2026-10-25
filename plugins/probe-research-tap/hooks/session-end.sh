@@ -150,9 +150,14 @@ fi
 WATCHER_PREFIX="probe-research-tap"
 [ "$SOURCE" = "codex" ] && WATCHER_PREFIX="prbe-codex-tap"
 [ -n "$REGISTRY_ENV" ] && WATCHER_PREFIX="$TAP_WATCHER_PREFIX"
-PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
-SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
-STOPPING_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping"
+# The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
+# it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
+# variable names there as a Windows path (session-start.sh sets it).
+WATCHER_DIR=/tmp
+case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
+PID_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
+SHUTDOWN_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
+STOPPING_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping"
 
 touch "$SHUTDOWN_FILE"
 
@@ -337,7 +342,7 @@ wait_while() {
 # The service finishes the session whether or not this client is still waiting,
 # so the deadline ends the client too: its start-up and the call's own timeout
 # never push the hook past its budget.
-HOSTED_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
+HOSTED_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
 if [ -s "$HOSTED_FILE" ]; then
     if [ "$WAITS" = 1 ]; then
         TAP_ROOT="${TAP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"

@@ -896,9 +896,10 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
 #   read-only   reads allowed, records nothing new. What "tracking off" has
 #               always meant -- the switch never gated reads.
 #   off         no Probe calls at all, and no session-start injections; and
-#               the Probe service stops capturing the transcript
-#               (`probe.service.capture_gate`; this setup may still upload it
-#               until the next tap update).
+#               nothing captures the transcript (`probe.service.capture_gate`,
+#               and from tap 0.10.19 every `tap watch`: `tap/capture_gate.py`;
+#               a `tap watch` still running an older tap uploads it until it
+#               ends).
 #
 #                 /probe
 #          full <----------> read-only        off ----------> read-only
