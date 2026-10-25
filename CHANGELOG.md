@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.315.1
+
 - **A pi started during `pi update` starts.** `pi update` reinstalls its clone's packages (`git clean -fdx`, then `npm install`); pi package 0.7.2's entry loads Probe's code beside it only when no pin can run, so a pi started in that second no longer fails to load the extension: it starts, and Probe runs a pinned version from the next turn once one of the clone's version exists (set up for the session it missed the start of); with none, pi says once to run /reload. On macOS, where `ps` shows a command line without argument boundaries, a Kimi Code session's own `tap watch` and a pi run from a folder whose path holds a space are now seen (before, the space split the path and they were missed), so an update never says "no restart needed" past them.
 
 - **The Probe daemon keeps each session's state apart inside one process (groundwork for one daemon host per machine; nothing changes for a worker that runs as its own process).** The model's refusal fallback, the settings the server pushes, the HTTP client, the alert gate, the trace drain, the tool guide cache and the environment are now each run's own (`probe.daemon.runctx`), the write lease names the run that holds it (an additive `owner` field: two runs of one session in one process never both hold it), the TLS trust is built outside its shared lock (a certificate path on a hung mount stalls only the session that set it), and the worker's start splits into its process setup and `run_session`, which a host can call.
