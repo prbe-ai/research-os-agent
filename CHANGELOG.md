@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **No `probe` command fails or mixes versions during a machine's first update.** That update is the one-time move to the side-by-side install and runs in place, longer than the 10 s a command waited: `probe session status` and `probe --version` answered "Probe is updating itself" (exit 75) to agents mid-work, and a command that did wait went on with old modules under the new CLI (`module 'probe.service.procid' has no attribute 'exists'`; release gate, 2026-10-25). Every command except a hook's call now waits it out (up to 90 s, under an agent's own 2-minute command limit), then runs again in a fresh interpreter on the new code. A hook's call still answers at once.
+
 - **Per-push CI runs fast logic tests only.** A new `heavy` marker holds back 140 slow end-to-end tests (a spawned service, a real tap, packaged builds; 8–28 s each) from agent-ci; the nightly full-regression still runs them. The temporary release-smoke test that installed CLI 0.309.1 from PyPI to host tap 0.10.19 is removed.
 
 - **The Probe service checks whether it may update the desktop app without asking macOS.** Its "can I write the app?" check used `os.access`, which on macOS makes App Management evaluate the protected bundle; a background caller's ask was refused and logged (seen on a real Mac, 2026-10-25; silent, and the install went on). It now reads the owner and mode bits instead.
