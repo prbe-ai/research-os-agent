@@ -417,8 +417,8 @@ def _seed_tracking_signal() -> None:
         # reading `daemon` from when the switch had that position (Richard
         # 2026-09-29: the daemon is the wizard's alone).
         state = _session_marker.seed_state(session_id, state)
-        # Who decided it (`seed_source`): the daemon may pause itself for work
-        # that is not ML only in a session whose state is a machine default.
+        # Who decided it (`seed_source`): `probe session status` says whether the
+        # researcher set the state or it is a machine default.
         _session_marker.set_session_state_if_absent(
             session_id, state, source=_session_marker.seed_source(source)
         )

@@ -118,10 +118,6 @@ _LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
 #: The researcher set Probe inline (`/probe inline`, `is_inline`, Richard 2026-10-06).
 _LABEL_INLINE = "on (inline) " + _ARROW + " "
 _LABEL_INLINE_BARE = "on (inline)"
-#: The daemon paused itself: the session's work is not ML and its state is a
-#: default (`auto_paused`). Hung off the state's own words; the dot goes yellow,
-#: as for any state that records nothing right now.
-_LABEL_PAUSED = " " + _SEPARATOR + " paused: not ML"
 #: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
 #: reaches it when no three-valued state was passed in, which is the shape a
 #: pre-three-state caller has. New callers pass `session_state` and get one of
@@ -2295,8 +2291,7 @@ def set_session_state(
     neither can be written the move does not happen (False).
 
     `explicit` (every caller but automation): the researcher chose it, so the
-    source becomes `explicit` and a pause for work that is not ML ends for good
-    in this session. Automation that only follows a default
+    source becomes `explicit`. Automation that only follows a default
     (`explicit=False`, an `on` session following its profile) keeps a
     `default` source a default."""
     if not valid_session_id(session_id) or state not in STATES:
@@ -2312,7 +2307,6 @@ def set_session_state(
             _remove_inline_marker(session_id)
         if explicit:
             _publish_atomically(state_source_path(session_id), SOURCE_EXPLICIT + "\n")
-            clear_auto_pause(session_id)
         elif was_default:
             # Rewritten AFTER the state, so the source is not older than it.
             _publish_atomically(state_source_path(session_id), SOURCE_DEFAULT + "\n")
@@ -2394,48 +2388,36 @@ def mark_session_profile(session_id: str, profile: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# WHO SET THE STATE, and the daemon's pause for work that is not ML
+# WHO SET THE STATE
 # ---------------------------------------------------------------------------
 #
-# The daemon may pause itself in a session that is not ML work
-# (`probe.daemon.gate`), but only when the session's state came from a DEFAULT,
-# never when the researcher chose it (Richard 2026-10-06: "only if the
-# researcher didnt explicit set the state either at the beginning or during the
-# conversation"). Two files beside `<sid>.state`, whose bytes never change:
+# Whether the session's state came from a DEFAULT or the researcher chose it
+# (`state_source`; `probe session status` says which). One file beside
+# `<sid>.state`, whose bytes never change:
 #
 #     <sid>.state-source   `explicit` | `default`
-#     <sid>.auto-pause     {"since": <epoch s>, "p_ml": [...], "reason": "..."}
 #
 # EXPLICIT is a typed `/probe ...`, `probe session state ...` and the environment
 # override. DEFAULT is the machine's (the
 # wizard's) setting and the shipped one. A MISSING or unreadable source reads
-# explicit: an older client wrote that state, and nothing may pause what we
-# cannot prove was a default. A `default` older than the state it describes
+# explicit: an older client wrote that state, and what we cannot prove was a
+# default is never called one. A `default` older than the state it describes
 # reads explicit too: a writer that does not know this file (an older plugin's
 # guard) moved the state after the seed.
 #
-# A pause is not a state. The writer stops recording and the reader stops its
-# unasked turns while the marker exists, the events stay queued, and the writer
-# records them once the pause lifts. Any explicit move removes the marker.
+# An older CLI may have left a `<sid>.auto-pause` beside it (its ML gate's
+# pause): nothing reads it, and `prune` takes it with the session's other files.
 
 STATE_SOURCE_SUFFIX = ".state-source"
 SOURCE_EXPLICIT = "explicit"
 SOURCE_DEFAULT = "default"
-AUTO_PAUSE_SUFFIX = ".auto-pause"
 #: How much newer `.state` may be than a `default` source and still be the seed's
 #: own write (the seed claims the source a moment BEFORE it publishes the state).
 _SOURCE_SLACK_S = 2.0
-#: The states a pause applies to: the daemon records (`on (daemon)`) or still
-#: reads (`read only (daemon)`).
-PAUSABLE_STATES = (STATE_DAEMON, STATE_READ_ONLY)
 
 
 def state_source_path(session_id: str) -> Path:
     return sessions_dir() / (session_id + STATE_SOURCE_SUFFIX)
-
-
-def auto_pause_path(session_id: str) -> Path:
-    return sessions_dir() / (session_id + AUTO_PAUSE_SUFFIX)
 
 
 def default_is_explicit(source: str) -> bool:
@@ -2506,48 +2488,6 @@ def _drop_source(session_id: str) -> None:
         state_source_path(session_id).unlink()
     except OSError:
         pass
-
-
-def auto_pause(session_id: str) -> "dict | None":
-    """The pause marker's record, or None when there is none (an unreadable one
-    is none too: a pause may only ever be proven, never assumed)."""
-    if not valid_session_id(session_id):
-        return None
-    try:
-        data = json.loads(auto_pause_path(session_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def auto_paused(session_id: str, state: "str | None" = None) -> bool:
-    """Is the daemon paused for this session (not ML work)? Only in a pausable
-    state whose source is a default: an explicit choice outranks a marker."""
-    if state is None:
-        state = session_state(session_id)
-    if state not in PAUSABLE_STATES:
-        return False
-    return auto_pause(session_id) is not None and state_source(session_id) == SOURCE_DEFAULT
-
-
-def set_auto_pause(session_id: str, record: dict) -> bool:
-    """Pause the daemon for this session. Refused (False) unless the state is
-    pausable and its source a default."""
-    state = session_state(session_id)
-    if state not in PAUSABLE_STATES or state_source(session_id) != SOURCE_DEFAULT:
-        return False
-    return _publish_atomically(auto_pause_path(session_id), json.dumps(record, sort_keys=True) + "\n")
-
-
-def clear_auto_pause(session_id: str) -> bool:
-    """Lift the pause. True when there was one."""
-    if not valid_session_id(session_id):
-        return False
-    try:
-        auto_pause_path(session_id).unlink()
-        return True
-    except OSError:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -2933,7 +2873,7 @@ def set_session_state_if_absent(
     `source`: who decided the default (`SOURCE_DEFAULT` for the machine's or the
     shipped one, `SOURCE_EXPLICIT` for the environment's or a folder's,
     `default_is_explicit`). None writes no source file, which reads explicit:
-    a caller that does not know never lets the daemon pause the session. A
+    a caller that does not know never labels the session's state a default. A
     `default` is claimed BEFORE the state is published and dropped again when
     the seed loses, so an explicit write never ends up labelled a default.
 
@@ -3725,19 +3665,6 @@ def _recording_labels(
     return _LABEL_DAEMON_DEGRADED, _LABEL_DAEMON_DEGRADED_BARE
 
 
-def _pause_shown(session_state: "str | None", daemon_live: bool, capture_reason: str) -> bool:
-    """Is `· paused: not ML` the truth about this session? Only while the daemon
-    that paused itself is alive: in `on (daemon)` its lease is live and capture
-    runs (what `_recording_labels` reads for `on (daemon)`); in `read only
-    (daemon)` capture runs, its worker's parent. Otherwise the line says what it
-    says without a pause (a marker a dead worker left behind is no news)."""
-    if capture_reason:
-        return False
-    if session_state == STATE_DAEMON:
-        return daemon_live
-    return session_state == STATE_READ_ONLY
-
-
 def _no_capture_clause(reason: str, label_bare: str = _LABEL_TRACKING_BARE) -> str:
     """The `· not capturing session transcript: …` suffix, as it hangs off
     `label_bare`.
@@ -3790,12 +3717,8 @@ def render(
     daemon_live: bool = False,
     daemon: bool = False,
     inline: bool = False,
-    paused: bool = False,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
-
-    `paused`: the daemon paused itself for work that is not ML (`auto_paused`):
-    `on (daemon) · paused: not ML` (or `read only (daemon) · ...`), yellow.
 
     In the `daemon` state the label is `on (daemon)` while the daemon holds a
     live lease (`daemon_live`), and `on (daemon degraded)` when it does not.
@@ -3836,10 +3759,6 @@ def render(
     """
     if not configured:
         return ""
-
-    if paused and _pause_shown(session_state, daemon_live, _capture_reason(state)):
-        return (_INDENT + _paint(_DOT, _YELLOW, color) + " " + DAEMON_STATE_DISPLAY[session_state]
-                + _LABEL_PAUSED)
 
     if not tracking:
         # THE SWITCH NOW HAS THREE POSITIONS AND TWO OF THEM ARE NOT RECORDING,
