@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.325.1
+
 - **The daemon's compaction summary no longer carries ids the model typed: plain code appends the logbook of landed writes after it.** The writer's summary REPLACES its history, and the summary prompt asked the model to quote "every Probe write that landed, with exact ids and slugs" and "the last turn and event ids covered", so one mistyped id made a later write fail or land on a real but wrong entity. The prompt now asks for prose and no ids or slugs; after the model's text the daemon adds `## Landed writes (from your logbook, not the summary)`, built from the session's logbook: each `probe` write that ran (help, reads and shell commands left out), newest first, one line per command, target and id, with the id and slug Probe answered with and the events the run that made it covered (at most 100, the rest counted, older ones one `session` op=logbook away). A block in that shape the model wrote is cut first, and a later compaction's anchor is the earlier summary's prose alone, so the model is never handed ids to copy.
 
 ## 0.325.0
