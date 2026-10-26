@@ -78,6 +78,7 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 
 - A phase of a bigger effort is a SUBPROJECT of it, never a new top-level sibling: `--parent <project>`. Related but separate: `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
 - No question: a project-direct run. `freeze` pins an experiment's runs.
+- No headline metric yet? Ask the researcher which metric and which way is better: `probe project set P --metric KEY --goal max|min`.
 - A project's description comes from its summary's first line.
 - Pass `--project`; `project use` is machine-wide.
 
@@ -100,6 +101,7 @@ Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
 - When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
+- A run beats the pick? Tell the researcher; set it (`probe project set P --best EXP --reason "..."`) only if they agree.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.
 
@@ -122,6 +124,7 @@ A link points from the newer thing to what it came from.
 1. Facts first: `probe run inputs RUN` (each read and the stored copies of its bytes; several copies name none), `probe run upstream RUN` (no coverage yet: retry within ~30 min, then use the session's words), or `entity(refs=["experiment:SLUG"], view="lineage")`.
 2. B built on A:
    - a new experiment varying experiment A: `probe experiment fork A B --question "..."` (links `forked_from`)
+   - link every follow-up to what it built on (fork or `derived_from`): that draws its branch
    - B relaunches run A because A failed or crashed: `retried_from`
    - B reruns A's setup any other way: `branched_from`
    - B uses only A's outputs: `derived_from`; B replaces A: also `supersedes`
