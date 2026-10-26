@@ -78,7 +78,7 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 
 - A phase of a bigger effort is a SUBPROJECT of it, never a new top-level sibling: `--parent <project>`. Related but separate: `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
 - No question: a project-direct run. `freeze` pins an experiment's runs.
-- No headline metric yet? Ask the researcher which metric and which way is better: `probe project set P --metric KEY --goal max|min`.
+- No headline metric yet? Choose one from the code and runs, set it (`probe project set P --metric KEY --goal max|min`), and tell the researcher in one line.
 - A project's description comes from its summary's first line.
 - Pass `--project`; `project use` is machine-wide.
 
@@ -101,7 +101,7 @@ Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
 - When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
-- A run beats the pick? Tell the researcher; set it (`probe project set P --best EXP --reason "..."`) only if they agree.
+- A better experiment to use than the pick? Set it (`probe project set P --best EXP --reason "..."`) and tell the researcher in one line.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.
 
