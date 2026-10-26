@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.326.0
+
 - **An install or an Update ends on a short summary instead of every coding agent's full report.** The final screen spent a page on lines like "already at the latest", "Refreshed the Probe block" and "Status line: on" around the one that mattered. It now says how many coding agents worked ("Updated 3 of 4 coding agents", "Installed Probe in all 4 coding agents"), lists them with where their plugins ended ("plugin 0.180.0 (updated), tap 0.10.23"), then a Details section with only what needs attention: what failed and the commands to run by hand, a restart or hook approval to do, a CLI or pi package failure (once), and the agents an install that stopped never reached. Scripted (`--yes` without a terminal) and `--json` runs keep the full report. **An Update no longer reports Codex's plugins missing when `codex plugin list --json` cannot answer:** on 2026-10-26 it timed out after 20 s on a Mac right after the update reinstalled both plugins, so the update said neither could be confirmed. When the list cannot be read, the update now reads Codex's own files instead (the plugins `codex plugin add` records in config.toml and the copies it installs under `plugins/cache`) and says so; the server's update report still records that the list was unreadable.
 
 ## 0.325.1
