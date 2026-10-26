@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.323.1
+
 - **The Probe daemon audits the team note in T3 Code's Claude sessions too, and never in a `codex exec` an app started.** T3 Code (pingdotgg/t3code) runs Claude Code through the Agent SDK, so its sessions say `sdk-cli`, as `claude -p` does, and the daemon took them for programs. It now reads past a program's entrypoint, in a transcript's first 40 lines (was 20), for T3's `t3-code` MCP tools in Claude Code's own tool list, which a `claude -p` started from a T3 shell does not get. T3's Codex threads already passed (`originator: "T3 Code"`); a Codex rollout with `source: "exec"` is now a program whatever originator it inherited (a `codex exec` run from a T3 shell says `T3 Code`). A transcript line nested past the JSON parser's depth no longer escapes the check. The prompt hook (agent profile) is unchanged: T3's environment variables reach every program its agents start, so they prove nothing. Measured on t3 0.1.2 (2026-10-26): Claude and Codex threads started from T3 run Probe's hooks (Codex once they are approved, which T3 has no screen for: approve them in Codex's `/hooks`), `/probe on` typed in T3 turns Probe on, and both sessions reach the knowledge base.
 
 ## 0.323.0
