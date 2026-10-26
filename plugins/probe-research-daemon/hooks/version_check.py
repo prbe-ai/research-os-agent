@@ -64,6 +64,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -1296,7 +1297,8 @@ def _local_tap():
 
 
 # ---------------------------------------------------------------------------
-# Auto-update (opt-in via the wizard).
+# Auto-update: on for the machine's managed CLI unless a person turned it off,
+# opt-in (the wizard) for any other install (`version_policy.autoupdate_state`).
 #
 # The upgrade is spawned DETACHED and this hook returns immediately. The hook is
 # synchronous by contract -- its systemMessage cannot come from a background
@@ -1311,7 +1313,8 @@ def _local_tap():
 
 
 def _autoupdate_settings() -> dict:
-    """Read the opt-in state written by the wizard. Fail-soft to OFF.
+    """Read the state the wizard (and the managed CLI's default) wrote; `{}`
+    when missing or unreadable. What it means is `version_policy.autoupdate_state`'s.
 
     This used to recompute the state path that autoupdate.py owns. It now shares
     one definition -- the divergence that duplication invited would have stopped
@@ -1319,6 +1322,18 @@ def _autoupdate_settings() -> dict:
     reporting it enabled with a months-old success.
     """
     return version_policy.read_state()
+
+
+def _managed_cli(probe_bin: str) -> bool:
+    """Is the `probe` this hook would update the machine's managed CLI, its uv
+    tool env (`version_policy.managed_cli`)? A bare name is looked up on PATH;
+    one not found is not. A pip install in a researcher's project env is not,
+    and the default never updates it (plan D4)."""
+    try:
+        path = probe_bin if os.path.isabs(probe_bin) else shutil.which(probe_bin)
+        return bool(path) and version_policy.managed_cli(os.path.realpath(path))
+    except Exception:
+        return False
 
 
 #: `sh -c` with $1 = the probe binary and "$@" = the wizard's update argv: ask
@@ -1337,8 +1352,11 @@ def _service_on() -> bool:
 
 def _spawn_autoupdate(probe_bin: str) -> None:
     """Fire the upgrade and forget it. Never raises into the hook."""
-    settings = _autoupdate_settings()
-    if not settings.get("enabled"):
+    # The same rule as the CLI's own readers, for the `probe` it would update:
+    # an explicit `false` in any known state folder is off; no choice is ON for
+    # the managed CLI (computed here, never written) and off for any other install.
+    enabled, _default = version_policy.autoupdate_state(_autoupdate_settings(), managed=_managed_cli(probe_bin))
+    if not enabled:
         return
     # No `--channel`: there is one channel, and the flag it used to pass did
     # nothing. Newer CLIs still ACCEPT it (hidden and ignored) because a plugin
@@ -1650,8 +1668,9 @@ def main() -> None:
             "Do not nag; only act if they ask."
         )
 
-    # An update exists. If the user opted in, apply it in the background; the
-    # nudge below still renders this session, because the update lands after
+    # An update exists. Where automatic updates are on (`_spawn_autoupdate`: on
+    # for the managed CLI unless turned off, opt-in elsewhere), apply it in the
+    # background; the nudge below still renders this session, because the update lands after
     # it (open sessions then pick it up at their next prompt, where `_picked_up`).
     _spawn_autoupdate(os.environ.get("PROBE_BIN") or "probe")
 

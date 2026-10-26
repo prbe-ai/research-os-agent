@@ -55,6 +55,7 @@ import os
 import ssl
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,23 @@ def state_path() -> Path:
     return state_dir() / STATE_FILENAME
 
 
+def default_state_dir() -> Path:
+    """The state folder with no XDG_STATE_HOME: the Probe service's, which
+    starts with none (`probe.service.client.ENV_ALLOWLIST`)."""
+    return Path.home() / ".local" / "state" / STATE_DIRNAME
+
+
+def known_state_dirs(extra_dirs=()) -> list[Path]:
+    """Every state folder an auto-update choice may have been saved in: this
+    process's (`state_dir`), the default one, and `extra_dirs` (the folders
+    live sessions named to the Probe service), once each, in that order."""
+    out: list[Path] = []
+    for folder in (state_dir(), default_state_dir(), *(Path(d) for d in extra_dirs)):
+        if folder not in out:
+            out.append(folder)
+    return out
+
+
 def lock_path() -> Path:
     return state_dir() / LOCK_FILENAME
 
@@ -158,10 +176,10 @@ def atomic_write_json(path: Path, payload: object) -> bool:
     The temp name carries the pid and a monotonic-ish counter because a FIXED
     `.tmp` name -- which is what both writers used before -- is shared by every
     process writing that file. Two of them racing through one temp path can
-    interleave a partial write, and a truncated read of the state file lands on
-    `autoupdate.load()`'s fail-soft branch, which reads as "auto-update is OFF".
-    A collision there does not merely lose a diagnostic; it silently disables
-    the feature.
+    interleave a partial write, and a truncated read of the state file reads as
+    no choice at all (`autoupdate_state`): OFF on an install that had opted
+    in, and ON for the managed CLI whose person had turned it off. A collision
+    there does not merely lose a diagnostic; it silently undoes a choice.
 
     Returns True on success. Never raises: a read-only filesystem or a full disk
     must degrade the version check, not break the command that triggered it.
@@ -191,28 +209,142 @@ def atomic_write_json(path: Path, payload: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def read_state() -> dict:
-    """The raw autoupdate state, or `{}` when unreadable.
+#: Where the machine's managed CLI lives, as text in a path (`/` separators):
+#: `uv tool install probe-research`'s env, the legacy `probe-agent` tool's, and
+#: each version of it side by side (`probe._shared.installs`, plan D6).
+#: `probe.cli.updater.detect_install` reads its uv-tool installs from these.
+UV_TOOL_MARK = "/uv/tools/probe-research/"
+LEGACY_UV_TOOL_MARK = "/uv/tools/probe-agent/"
+VERSIONS_MARK = "/probe-versions/"
 
-    Fail-soft to empty rather than raising: an unreadable state file reads as
-    "auto-update is off", because defaulting a background process that mutates
-    an installed package to ON when we cannot tell what the user chose is the
-    wrong direction to guess.
+
+def managed_cli(path: str | None = None) -> bool:
+    """Is `path` part of the machine's managed CLI: its uv tool env, under
+    either name, or one version of it in `probe-versions/`?
+
+    `path` defaults to this file, so the answer is about the `probe` package
+    running it (the plugin's copy of this file is never one). A pip, pipx,
+    editable or project install is not: it lives in a researcher's own
+    environment (plan D4)."""
+    if path is None:
+        path = os.path.realpath(__file__)
+    text = str(path).replace(os.sep, "/")
+    return any(mark in text for mark in (UV_TOOL_MARK, LEGACY_UV_TOOL_MARK, VERSIONS_MARK))
+
+
+def read_state(folder: Path | None = None) -> dict:
+    """The raw autoupdate state in `folder` (default: `state_dir`), or `{}`
+    when missing or unreadable.
+
+    Fail-soft to empty rather than raising. What an empty state means is
+    `autoupdate_state`'s to say.
     """
     try:
-        loaded = json.loads(state_path().read_text())
+        loaded = json.loads(((folder or state_dir()) / STATE_FILENAME).read_text())
     except (OSError, ValueError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
 
 
-def autoupdate_enabled() -> bool:
-    """The cheapest gate in the chain, and deliberately first.
+@contextmanager
+def state_write_lock(*, wait: bool = True, folder: Path | None = None):
+    """Serialize read-modify-write over the state file (in `folder`, default
+    `state_dir`).
 
-    `enabled` defaults False, so for every install that has not opted in this is
-    the only file the version check touches on a CLI invocation.
+    Atomic replacement makes each WRITE whole; it does nothing for the read that
+    preceded it. Every writer here reads the file, changes one key and writes it
+    all back, so without this an updater can read `enabled=true`, race a
+    `save(enabled=false)`, and write its attempt back with the stale `true` --
+    silently undoing the user's opt-out.
+
+    Advisory and best-effort: if the lock cannot be taken the write still
+    happens, because losing a diagnostic is better than dropping one. Yields
+    whether the block may write: always, except with `wait=False` while another
+    writer holds the lock (a caller that must never wait on it: the Probe
+    service, `autoupdate.amend_attempt`).
     """
-    return bool(read_state().get("enabled", False))
+    handle = None
+    free = True
+    try:
+        import fcntl
+
+        path = (folder or state_dir()) / "state.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+")  # noqa: SIM115 -- released in the finally
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:  # wait=False, and another writer holds it
+        free = False
+        if handle is not None:
+            handle.close()
+            handle = None
+    except Exception:  # noqa: BLE001 -- no fcntl, or an unwritable dir
+        if handle is not None:
+            handle.close()
+            handle = None
+    try:
+        yield free
+    finally:
+        if handle is not None:
+            try:
+                handle.close()  # releases the flock
+            except OSError:
+                pass
+
+
+def autoupdate_state(
+    raw: dict | None = None, *, managed: bool | None = None, extra_dirs=()
+) -> tuple[bool, bool]:
+    """`(enabled, by_default)`: are automatic updates on, and is that the
+    default rather than a person's choice? `raw` is this process's state,
+    already read (`read_state`); `managed` whether the CLI in question is the
+    machine's managed one (default: the one running this, `managed_cli`);
+    `extra_dirs` more state folders a choice may be saved in (the Probe
+    service's live sessions').
+
+    THE RULE (owner, 2026-10-26: updates must never stall; plan C2, I6).
+    `"enabled": false` in ANY known state folder (`known_state_dirs`: a person
+    who runs with XDG_STATE_HOME saved it there, and the service reads the
+    default one) is off, for every reader; so is an `enabled` that is not a
+    boolean, which nothing of ours writes. Else a person's `"enabled": true` is
+    on, whatever the install. With no choice on record at all -- no file, a
+    file that does not parse, no `enabled` -- it is ON for the machine's
+    managed CLI and OFF (opt-in, as always) for every other install.
+
+    That default is computed here, on every read, and NEVER WRITTEN DOWN.
+    Every CLI and plugin hook before this rule reads a plain `"enabled": true`
+    as a person's opt-in, so a written default would reach an old pip-installed
+    `probe` in a researcher's own environment, which then runs `pip install -U`
+    there (plan D4, R5). The file holds only what a person chose.
+
+    This used to read no choice as OFF, "because defaulting a background
+    process that mutates an installed package to ON when we cannot tell what
+    the user chose is the wrong direction to guess". For the managed CLI that
+    guess is what stranded machines: a lost or corrupt file stopped every
+    update, silently, until a person came by. That install is ours to keep
+    current; someone who wants it frozen says so, and their `false` is never
+    overridden.
+    """
+    if raw is None:
+        raw = read_state()
+    here = state_dir()
+    values = [raw.get("enabled")] + [
+        read_state(folder).get("enabled") for folder in known_state_dirs(extra_dirs) if folder != here
+    ]
+    chosen = [value for value in values if value is not None]
+    if any(value is not True for value in chosen):
+        return False, False  # an explicit false, or a value nothing of ours wrote
+    if chosen:
+        return True, False
+    if managed_cli() if managed is None else managed:
+        return True, True
+    return False, False
+
+
+def autoupdate_enabled(*, managed: bool | None = None, extra_dirs=()) -> bool:
+    """The cheapest gate in the chain, and deliberately first: a small read of
+    each known state folder (`autoupdate_state`; one, without XDG_STATE_HOME).
+    Writes nothing."""
+    return autoupdate_state(managed=managed, extra_dirs=extra_dirs)[0]
 
 
 # ---------------------------------------------------------------------------
