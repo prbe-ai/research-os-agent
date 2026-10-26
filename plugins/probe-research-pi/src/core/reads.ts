@@ -129,6 +129,10 @@ export const SLOT_HINT = "hint";
 export const TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}";
 export const TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}";
 export const TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}";
+/** `mailbox.WRITER_RELAY_PREFIX` / `TEXT_WRITER_RELAY`: a writer receipt for the
+ * researcher (a headline metric or a best pick the writer set), under its own label. */
+export const WRITER_RELAY_PREFIX = "For your researcher, in one line: ";
+export const TEXT_WRITER_RELAY = "[Probe] {message}";
 
 export const STATUS_OK = "ok";
 export const STATUS_TURN_STOPPED = "reader_turn_stopped";
@@ -229,6 +233,7 @@ function framed(msg: Message): string {
   if (msg.origin === ORIGIN_INBOX && msg.kind === KIND_MESSAGE && msg.text.startsWith(INBOX_PREFIX)) return inboxSafe(msg.text);
   if (msg.origin === ORIGIN_WRITER) {
     if (msg.kind === KIND_FAILED) return fill(TEXT_WRITER_FAILED);
+    if (msg.kind === KIND_MESSAGE && msg.text.startsWith(WRITER_RELAY_PREFIX)) return fill(TEXT_WRITER_RELAY);
     if (msg.kind === KIND_MESSAGE) return fill(TEXT_WRITER_RECEIPT);
     return fill(TEXT_WRITER_REPLY);
   }

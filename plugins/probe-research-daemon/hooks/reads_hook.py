@@ -114,6 +114,10 @@ SLOT_HINT = "hint"
 TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}"
 TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}"
 TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}"
+#: `mailbox.WRITER_RELAY_PREFIX` / `TEXT_WRITER_RELAY`: a writer receipt for the
+#: researcher (a headline metric or a best pick the writer set), under its own label.
+WRITER_RELAY_PREFIX = "For your researcher, in one line: "
+TEXT_WRITER_RELAY = "[Probe] {message}"
 
 #: What the RESEARCHER sees when something fails: a `systemMessage` (shown in
 #: the UI, never in the model's context), once per change of state. Mirrors
@@ -383,6 +387,8 @@ def _framed(msg: dict) -> str:
     if msg.get("origin") == ORIGIN_WRITER:
         if kind == KIND_FAILED:
             return TEXT_WRITER_FAILED.format(reason=msg.get("reason") or "unknown")
+        if kind == KIND_MESSAGE and text.startswith(WRITER_RELAY_PREFIX):
+            return TEXT_WRITER_RELAY.format(message=text)
         if kind == KIND_MESSAGE:
             return TEXT_WRITER_RECEIPT.format(message=msg.get("text") or "")
         return TEXT_WRITER_REPLY.format(message=msg.get("text") or "")
