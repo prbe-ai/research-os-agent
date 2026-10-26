@@ -48,20 +48,32 @@ Translation:
                                        (empty dropped; `encrypted` dropped)
     tool.call                       -> CC `assistant` tool_use (summary + stats)
     tool.result                     -> CC `user` tool_result (size, is_error)
+    step.end with usage             -> CC `assistant` with no content: the
+                                       step's usage (below)
     step.* / <other>                -> dropped
   context.apply_compaction          -> CC `system` subtype=compaction (summary)
   context.clear                     -> CC `system` subtype=clear
   context.undo                      -> CC `system` subtype=undo (count)
-  everything else                   -> dropped (fail closed): llm.request,
-                                       usage, profile.bind (the system prompt),
+  llm.request                       -> dropped; its `model` is kept for the
+                                       call's usage (`sanitize.call_models`)
+  usage.record outside a turn       -> CC `assistant` with no content: that
+                                       call's usage (a compaction's; a turn's
+                                       calls are their step.end's)
+  everything else                   -> dropped (fail closed): profile.bind
+                                       (the system prompt),
                                        tools snapshots, permission and
                                        interaction records, subagent.*, the UI
                                        family, and any record type Kimi adds
 
 probe-events/1 fields: a `content.part` or `tool.call` event carries
 `inference_id` = `<turn_id>:<step>` (one step is one model call), and a shell
-command input carries `origin: "user_shell"`. Kimi's `usage` records are not
-read, so no event carries `usage`.
+command input carries `origin: "user_shell"`. A step's `step.end` carries the
+call's `usage` (`inputOther`, `output`, `inputCacheRead`,
+`inputCacheCreation`: apart, as probe-events/1 counts them); it ships as an
+assistant event with no content under the same `inference_id`, with the
+step's model (its `llm.request`, earlier in the file) in `message.model`. A
+call outside a turn (a compaction) has no step: its `usage.record` ships the
+same way, `inference_id` = `<usageScope>:<time>`.
 
 TOOL ARGUMENTS follow sanitize.py's policy: a recognized key becomes a capped
 summary (the full shell `command`), file-mutating tools get counts, never
@@ -85,7 +97,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL, PastedImage, data_url_image
+from .sanitize import (
+    COMMAND_MAX_LEN,
+    ORIGIN_USER_SHELL,
+    PastedImage,
+    active_call_models,
+    data_url_image,
+    usage_counts,
+)
 
 #: Single definition in sanitize.py -- see COMMAND_MAX_LEN there.
 _COMMAND_MAX_LEN = COMMAND_MAX_LEN
@@ -105,6 +124,21 @@ _TOOL_SUMMARY_KEYS: tuple[str, ...] = (
 
 #: User-role origins that are the researcher's own words.
 _PROMPT_ORIGINS = frozenset({"user"})
+
+#: Kimi's `step.end` usage names for the four counts in sanitize.USAGE_KEYS.
+_USAGE_NAMES = {
+    "input_tokens": "inputOther",
+    "output_tokens": "output",
+    "cache_read_input_tokens": "inputCacheRead",
+    "cache_creation_input_tokens": "inputCacheCreation",
+}
+#: Lines the journal reads back to rebuild a file's call models after its
+#: saved ones are lost (`session_journal`): the ones that change them.
+CALL_MODEL_MARKERS = (b'"llm.request"', b'"step.end"', b'"usage.record"')
+#: The call-models key of the latest request outside a turn (a compaction's).
+_UNSTEPPED = "unstepped"
+#: `usage.record`'s scope for a turn's calls (their usage is on step.end).
+_TURN_SCOPE = "turn"
 
 _HANDLERS: dict[str, Any] = {}
 
@@ -437,6 +471,11 @@ def _translate_loop_event(event: dict) -> dict | None:
         if stats:
             block["stats"] = stats
         return _with_inference(_message_event("assistant", timestamp, [block], extras), inference)
+    if kind == "step.end":
+        usage = usage_counts(loop.get("usage"), _USAGE_NAMES)
+        if inference is None or usage is None:
+            return None
+        return _usage_event(timestamp, extras, inference, usage, inference)
     if kind == "tool.result":
         result = loop.get("result") if isinstance(loop.get("result"), dict) else {}
         block = {"type": "tool_result", "tool_use_id": _str(loop.get("toolCallId"))}
@@ -470,6 +509,51 @@ def _translate_compaction(event: dict) -> dict:
     )
 
 
+def _usage_event(timestamp: Any, extras: dict | None, inference: str, usage: dict, key: str) -> dict:
+    """A call's usage as an assistant event with no content, with the model
+    its request named (`key` in the file's call models), which it then drops."""
+    event = _with_inference(_message_event("assistant", timestamp, [], extras), inference)
+    models = active_call_models()
+    model = models.get(key) if models is not None else None
+    if models is not None:
+        models.forget(key)
+    if model:
+        event["message"]["model"] = model
+    event["usage"] = usage
+    return event
+
+
+def _note_request_model(event: dict) -> None:
+    """An `llm.request` ships nothing (it names the system prompt's and tools'
+    hashes); its `model` is kept for its call's usage: a step's by
+    `<turn_id>:<step>` (`turnStep` is `<turn_id>.<step>`), any other's as the
+    next call outside a turn."""
+    models = active_call_models()
+    model = _str(event.get("model"))
+    if models is None or not model:
+        return None
+    turn, sep, step = _str(event.get("turnStep"), 64).rpartition(".")
+    if sep and turn and step.isascii() and step.isdigit():
+        models.remember(f"{turn}:{int(step)}"[:200], model)
+    elif not event.get("turnStep"):
+        models.remember(_UNSTEPPED, model)
+    return None
+
+
+def _translate_usage_record(event: dict) -> dict | None:
+    """A call outside a turn (a compaction): no step.end carries its usage,
+    so its `usage.record` does, keyed `<usageScope>:<time>`. A turn's records
+    are skipped: their step.end has the same counts."""
+    scope = _str(event.get("usageScope"), 32)
+    when = event.get("time")
+    usage = usage_counts(event.get("usage"), _USAGE_NAMES)
+    if scope == _TURN_SCOPE or not scope or usage is None:
+        return None
+    if isinstance(when, bool) or not isinstance(when, int):
+        return None
+    return _usage_event(_timestamp(when), None, f"{scope}:{when}", usage, _UNSTEPPED)
+
+
 def _translate_clear(event: dict) -> dict:
     return _system_event(subtype="clear", timestamp=_timestamp(event.get("time")))
 
@@ -487,4 +571,6 @@ _HANDLERS.update({
     "context.apply_compaction": _translate_compaction,
     "context.clear": _translate_clear,
     "context.undo": _translate_undo,
+    "llm.request": _note_request_model,
+    "usage.record": _translate_usage_record,
 })

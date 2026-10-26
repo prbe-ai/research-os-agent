@@ -5,7 +5,8 @@ Codex writes RolloutItems in the shape:
 
 where known conversation variants include session_meta, response_item,
 compacted, turn_context, and event_msg. Newer clients also emit world_state,
-which is internal configuration and is dropped.
+which is internal configuration and is dropped, and token_usage_record, whose
+token counts ship (below).
 We shim-translate each line into the Claude-Code transcript shape that the
 existing prbe-knowledge connector understands — `{type, message, timestamp,
 […]}` — and stash allowlisted Codex-only metadata under a top-level
@@ -46,14 +47,25 @@ Translation rules:
   event_msg.task_started, task_complete → drop (turn-boundary plumbing)
   event_msg.item_completed             → drop (UI mirror with raw tool output)
   event_msg.thread_settings_applied    → drop (runtime configuration)
-  event_msg.token_count                 → drop (rate_limits + usage; pure noise)
+  token_usage_record                    → CC `assistant` with no content: the
+                                          turn's usage so far (see below)
+  event_msg.token_count                 → drop (rate_limits, and the same counts
+                                          as token_usage_record without a turn id)
   event_msg.user_message,agent_message  → drop (UI mirror of response_item.message,
                                           which is canonical)
   event_msg.<other>                     → drop (fail closed on future payloads)
   world_state / unknown top variants   → drop (may contain instructions/secrets)
 
-probe-events/1's `inference_id` and `usage` are not emitted: a rollout names
-no model call, and `token_count` reports per turn, not per inference.
+probe-events/1's `inference_id` and `usage` come from `token_usage_record`
+alone, one per TURN: `inference_id` = `turn:<turn_id>` and `usage` = the
+record's `turn_token_usage`, the turn's running total, which only grows -- so
+every later record of a turn supersedes the one before, as Claude Code's
+repeated snapshot of one call does. The model is the turn's (its
+`turn_context`, read earlier in the file: `sanitize.call_models`), in
+`message.model`. Codex counts cached and cache-written tokens INSIDE
+`input_tokens` (OpenAI's shape); probe-events/1 counts them apart, as
+Anthropic does, so `input_tokens` here is what is left. Codex before
+`token_usage_record` existed ships no usage.
 
 `sanitize_event(event)` returns:
   - None  → drop the event entirely (turn-boundary, duplicates, pure metadata)
@@ -80,7 +92,14 @@ from typing import Any
 # RELATIVE import, deliberately: this file is byte-identical in its two homes
 # (canonical src/probe/tap_core/, vendored plugins/probe-research-tap/tap/),
 # and `.sanitize` resolves correctly inside both packages.
-from .sanitize import COMMAND_MAX_LEN, PastedImage, _result_size, data_url_image, output_withheld
+from .sanitize import (
+    COMMAND_MAX_LEN,
+    PastedImage,
+    _result_size,
+    active_call_models,
+    data_url_image,
+    output_withheld,
+)
 
 # Per-message phase from Codex's `MessagePhase` enum. Tracked in extras since
 # CC has no equivalent.
@@ -177,6 +196,8 @@ def sanitize_event(event: Any) -> Any:
         return _translate_session_meta(payload, timestamp)
     if rollout_type == "turn_context":
         return _translate_turn_context(payload, timestamp)
+    if rollout_type == "token_usage_record":
+        return _translate_token_usage(payload, timestamp)
     if rollout_type == "compacted":
         return _translate_compacted(payload, timestamp)
     if rollout_type == "response_item":
@@ -201,8 +222,70 @@ def _translate_session_meta(payload: dict, timestamp: Any) -> dict:
 
 
 def _translate_turn_context(payload: dict, timestamp: Any) -> dict:
+    turn, model = _id_str(payload.get("turn_id")), _id_str(payload.get("model"))
+    models = active_call_models()
+    if models is not None and turn and model:
+        models.remember(turn, model)
     extras = {k: payload[k] for k in _TURN_CONTEXT_EXTRAS if k in payload}
     return _system_event(subtype="turn_context", timestamp=timestamp, extras=extras)
+
+
+#: Lines the journal reads back to rebuild a file's call models after its
+#: saved ones are lost (`session_journal`): the ones that change them.
+CALL_MODEL_MARKERS = (b'"turn_context"', b'"task_complete"', b'"turn_aborted"')
+#: A turn's end: its model is not needed after it.
+_TURN_ENDS = frozenset({"task_complete", "turn_aborted"})
+
+
+def _translate_token_usage(payload: dict, timestamp: Any) -> dict | None:
+    """The turn's usage so far, as probe-events/1 `usage` on an assistant event
+    with no content, `inference_id` = `turn:<turn_id>`. Nothing for a record
+    with no turn or no count."""
+    turn = _id_str(payload.get("turn_id"))
+    usage = _turn_usage(payload.get("turn_token_usage"))
+    if not turn or usage is None:
+        return None
+    message: dict[str, Any] = {"role": "assistant", "content": []}
+    models = active_call_models()
+    model = models.get(turn) if models is not None else None
+    if model:
+        message["model"] = model
+    return {
+        "type": "assistant",
+        "timestamp": timestamp,
+        "message": message,
+        "inference_id": f"turn:{turn}"[:_ID_MAX_LEN],
+        "usage": usage,
+    }
+
+
+def _turn_usage(source: Any) -> dict[str, int] | None:
+    """Codex's counts in probe-events/1's four (`sanitize.USAGE_KEYS`).
+    `cached_input_tokens` and `cache_write_input_tokens` are part of Codex's
+    `input_tokens`; ours are apart, so `input_tokens` is the rest. Reasoning
+    tokens are part of `output_tokens` in both. A count Codex did not report
+    is absent, never 0."""
+    if not isinstance(source, dict):
+        return None
+
+    def count(key: str) -> int | None:
+        value = source.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    total, cached, written, output = (
+        count("input_tokens"), count("cached_input_tokens"),
+        count("cache_write_input_tokens"), count("output_tokens"),
+    )
+    usage: dict[str, int] = {}
+    if total is not None:
+        usage["input_tokens"] = max(0, total - (cached or 0) - (written or 0))
+    if output is not None:
+        usage["output_tokens"] = output
+    if cached is not None:
+        usage["cache_read_input_tokens"] = cached
+    if written is not None:
+        usage["cache_creation_input_tokens"] = written
+    return usage or None
 
 
 def _translate_compacted(payload: dict, timestamp: Any) -> dict:
@@ -219,6 +302,11 @@ def _translate_compacted(payload: dict, timestamp: Any) -> dict:
 
 def _translate_event_msg(payload: dict, timestamp: Any) -> Any:
     sub = payload.get("type")
+    models = active_call_models()
+    if models is not None and sub in _TURN_ENDS:
+        turn = _id_str(payload.get("turn_id"))
+        if turn:
+            models.forget(turn)
     if not isinstance(sub, str) or sub in _DROP_EVENT_MSG_TYPES:
         return None
     return None

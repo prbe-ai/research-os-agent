@@ -140,6 +140,9 @@ export const READ_GROUP_WRITES: ReadonlySet<string> = new Set(["metrics backfill
 /** `session_marker.READ_GROUP_REMOVALS`: the commands inside a read group that remove (cleanup, never refused). */
 export const READ_GROUP_REMOVALS: ReadonlySet<string> = new Set(["metrics delete", "shared delete"]);
 
+/** `session_marker.PLUMBING_GROUP_WRITES`: commands of a plumbing group that record research content. */
+export const PLUMBING_GROUP_WRITES: ReadonlySet<string> = new Set(["workspace set"]);
+
 /** `session_marker.DAEMON_AGENT_WRITES`: the agent's writes under the daemon (a run and its own data). */
 export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
   "exec",
@@ -299,7 +302,9 @@ export function classifyProbeArgs(args: readonly string[]): [ProbeKindValue | nu
   const command = `${head} ${verb}`;
   if (UNGATED_COMMANDS.has(command)) return [null, `probe ${command}`];
   if (TOP_LEVEL_WRITES.has(head)) return [ProbeKind.Write, `probe ${head}`];
-  if (READ_GROUP_WRITES.has(command)) return [ProbeKind.Write, `probe ${command}`];
+  if (READ_GROUP_WRITES.has(command) || PLUMBING_GROUP_WRITES.has(command)) {
+    return [ProbeKind.Write, `probe ${command}`];
+  }
   if (READ_GROUP_REMOVALS.has(command)) return [null, `probe ${head}`];
   if (READ_GROUPS.has(head)) return [ProbeKind.Read, `probe ${head}`];
   if (DIRECTED_ONLY.has(command)) return [ProbeKind.Write, `probe ${command}`];

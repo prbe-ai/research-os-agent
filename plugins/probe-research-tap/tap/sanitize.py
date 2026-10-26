@@ -80,6 +80,9 @@ canonical file, never the plugin copy.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, NamedTuple
 
 # Top-level event types to drop entirely. These are CC-internal bookkeeping
@@ -394,6 +397,62 @@ def usage_counts(source: Any, names: dict[str, str]) -> dict[str, int] | None:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             out[ours] = value
     return out or None
+
+
+class CallModels:
+    """One transcript file's models of the calls whose usage line is still to come.
+
+    Codex and Kimi Code write a call's usage on a line that does not name the
+    model; an earlier line of the SAME file does (Codex's `turn_context`,
+    Kimi's `llm.request`). The sanitizers remember the model here and drop it
+    when the usage arrives. The journal keeps one per session, saved with the
+    session's cursor (`session_journal`), so a restart loses nothing; only a
+    call whose usage never comes stays, and LIMIT bounds those."""
+
+    LIMIT = 256
+    KEY_CHARS = 200
+
+    def __init__(self, saved: Any = None) -> None:
+        self._models: dict[str, str] = {}
+        if isinstance(saved, dict):
+            for key, model in saved.items():
+                if isinstance(key, str) and isinstance(model, str) and key and model:
+                    self.remember(key, model)
+
+    def remember(self, key: str, model: str) -> None:
+        key, model = key[: self.KEY_CHARS], model[: self.KEY_CHARS]
+        self._models.pop(key, None)
+        self._models[key] = model
+        while len(self._models) > self.LIMIT:
+            del self._models[next(iter(self._models))]
+
+    def get(self, key: str) -> str | None:
+        return self._models.get(key[: self.KEY_CHARS])
+
+    def forget(self, key: str) -> None:
+        self._models.pop(key[: self.KEY_CHARS], None)
+
+    def snapshot(self) -> dict[str, str]:
+        return dict(self._models)
+
+
+_CALL_MODELS: ContextVar[CallModels | None] = ContextVar("probe_call_models", default=None)
+
+
+@contextmanager
+def call_models(models: CallModels) -> Iterator[CallModels]:
+    """Sanitize the lines of one file with `models` as its memory (the journal
+    reads one file at a time; outside this, a usage line names no model)."""
+    token = _CALL_MODELS.set(models)
+    try:
+        yield models
+    finally:
+        _CALL_MODELS.reset(token)
+
+
+def active_call_models() -> CallModels | None:
+    """The file memory `call_models` set, or None."""
+    return _CALL_MODELS.get()
 
 
 def output_withheld(size: int) -> str:

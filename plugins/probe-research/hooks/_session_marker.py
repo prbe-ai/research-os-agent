@@ -1299,6 +1299,10 @@ READ_GROUP_WRITES = frozenset({"metrics backfill", "shared add", "shared share",
 #: a write group. Read as reads, `off` refused them.
 READ_GROUP_REMOVALS = frozenset({"metrics delete", "shared delete"})
 
+#: Commands of a plumbing group (not in WRITE_GROUPS) that record research
+#: content: `workspace set` picks the workspace's best experiment.
+PLUMBING_GROUP_WRITES = frozenset({"workspace set"})
+
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
 #: launch of a run and the run's own data -- the `instrument-code` surface the
 #: daemon never authors -- and nothing else (daemon v2, D2 / S11). The project,
@@ -1411,7 +1415,7 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
         return (None, "probe " + command)
     if head in TOP_LEVEL_WRITES:
         return ("write", "probe " + head)
-    if command in READ_GROUP_WRITES:
+    if command in READ_GROUP_WRITES or command in PLUMBING_GROUP_WRITES:
         return ("write", "probe " + command)
     if command in READ_GROUP_REMOVALS:
         return (None, "probe " + head)

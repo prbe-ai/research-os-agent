@@ -74,13 +74,13 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
 from . import capture_gate, codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
-from .sanitize import PastedImage
+from .sanitize import CallModels, PastedImage, call_models
 from .secrets import redact, redact_event
 from .transcript import nesting_exceeds
 
@@ -245,6 +245,52 @@ def _pasted_extractor(source: str):
     """The harness's reader of researcher-pasted images (`pasted_images`), or
     None for a harness that has none (its images keep their placeholders)."""
     return getattr(_SANITIZER_MODULES[_harness(source).capture.sanitizer], "pasted_images", None)
+
+
+def _call_model_markers(source: str) -> tuple[bytes, ...]:
+    """The lines that change a file's call models (`sanitize.CallModels`), for
+    a harness whose usage lines do not name their model; () for any other."""
+    return getattr(_SANITIZER_MODULES[_harness(source).capture.sanitizer], "CALL_MODEL_MARKERS", ())
+
+
+#: Where a session's call models are saved in its state, with the cursor they
+#: belong to: `{"at": source byte, "models": {key: model}}`.
+CALL_MODELS_STATE = "call_models"
+#: How far back the journal reads to rebuild call models it has not saved at
+#: this cursor (a session from an older tap, a cursor the server moved).
+CALL_MODELS_LOOKBACK_BYTES = 16 * 1024 * 1024
+
+
+def _resume_call_models(state: dict, path: Path, sanitize_line, markers: tuple[bytes, ...],
+                        at: int) -> CallModels:
+    """The call models of `path` up to byte `at`: the saved ones when they
+    belong to that cursor, else rebuilt from the lines before it (at most
+    CALL_MODELS_LOOKBACK_BYTES; only lines naming a marker are parsed)."""
+    saved = state.get(CALL_MODELS_STATE)
+    if isinstance(saved, dict) and saved.get("at") == at:
+        return CallModels(saved.get("models"))
+    models = CallModels()
+    if at <= 0:
+        return models
+    start = max(0, at - CALL_MODELS_LOOKBACK_BYTES)
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start)
+            window = handle.read(at - start)
+    except OSError:
+        return models
+    lines = window.split(b"\n")
+    if start > 0:
+        lines = lines[1:]  # the first may be the tail of a line before the window
+    with call_models(models):
+        for raw in lines:
+            if not any(marker in raw for marker in markers):
+                continue
+            try:
+                sanitize_line(json.loads(raw))
+            except Exception:  # noqa: BLE001 -- a line it cannot read costs that line's model
+                continue
+    return models
 
 
 def _route(source: str) -> str:
@@ -1912,7 +1958,14 @@ class Journal:
             marks: list[_Mark] = []  # after each packed line, to give lines back
             sanitize = _sanitizer(self.source)  # an unknown source refuses, never guesses
             read_title = _title_reader(self.source)
-            with path.open("rb") as handle:
+            markers = _call_model_markers(self.source)
+            # A call's usage line names no model; an earlier line does. Kept
+            # per session, saved with the cursor, and one copy per packed
+            # line, so a line given back is read again from the models before it.
+            models = _resume_call_models(state, path, sanitize, markers, end) if markers else None
+            models_at_start = models.snapshot() if models is not None else None
+            kept_models: list[dict | None] = []
+            with call_models(models) if models is not None else nullcontext(), path.open("rb") as handle:
                 handle.seek(end)
                 while True:
                     # Written while Probe was off: read past, sent as nothing.
@@ -2016,6 +2069,7 @@ class Journal:
                     lines += 1
                     records += bool(additions)
                     marks.append(_Mark(len(events), end, lines, event_no, size, records))
+                    kept_models.append(models.snapshot() if models is not None else None)
                     # Bound reads even when the sanitizer drops everything.
                     if end - state["source_byte_end"] >= 4 * 1024 * 1024:
                         break
@@ -2094,6 +2148,7 @@ class Journal:
                 over = len(encoded) - envelope_limit
                 while len(marks) > 1 and over > 0:
                     over -= marks.pop().size - marks[-1].size
+                    kept_models.pop()
                 count, end, lines, event_no, size, records = marks[-1]
                 del events[count:]
             if len(encoded) > envelope_limit:
@@ -2116,6 +2171,12 @@ class Journal:
                         "INSERT INTO media(session_id,sha256,media_type,size,bytes) VALUES(?,?,?,?,?)",
                         (session_id, digest, media_type, len(data), data),
                     )
+            if models is not None:
+                # The models at this batch's end: the next batch starts there.
+                state[CALL_MODELS_STATE] = {
+                    "at": end,
+                    "models": kept_models[-1] if kept_models else models_at_start,
+                }
             # The reservation is represented by this row. It is committed together
             # with state; no source cursor can pass it until its receipt arrives.
             self._save(state)
