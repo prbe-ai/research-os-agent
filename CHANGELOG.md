@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.325.0
+
 - **The daemon's ML gate and its reader gate are removed.** The worker no longer asks Probe whether a session is ML work and never pauses itself (no `<sid>.auto-pause`, no `paused: not ML` on the status line, no `auto_paused` in `probe session status`; `state_source` stays). The reader no longer asks a cheap model "look or skip?" before an unasked turn: a due wake is a reader turn, and its cost is only its own rounds. The Probe service's hint lookups no longer send the gate's ML state. Both ran only in shadow: the ML gate scored Strand's real ML sessions "not ML" (97% under 0.5) and the reader gate missed 30% of the turns that mattered. A store an older CLI wrote may still hold `skipped` read turns and an `auto-pause` file; nothing reads either, and the status line's 30-day prune deletes the file.
 
 ## 0.324.1
