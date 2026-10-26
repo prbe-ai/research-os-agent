@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.329.3
+
 - **instrument-code: a remote job gets its own Probe token, and recording it afterwards from the launcher is named for what it loses.** An agent that would not put the researcher's login into a cloud job spec recorded the training from the laptop after it finished instead, so the run had no curves, logs, data reads or real hardware. The skill now says to have the researcher mint one in their own terminal with `probe token create --name <job> --scope read --scope write` and keep it in the platform's secret store, and to state that cost before offering a launcher-side record. `probe exec`'s Modal hint now passes the token from a Modal secret (`modal.Secret.from_name`) instead of naming `PROBE_API_KEY`, which nothing reads, and its "forward these into the job" list now includes `PROBE_TOKEN`.
 
 ## 0.329.2
