@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.322.0
+
 - **Folder imports run your agent at the model and reasoning effort the server sets, per lane, and report what each lane cost.** An import reads `GET /v1/import-jobs/agent-settings` once (5 s at most; any failure or no answer keeps today's launch byte for byte) and `PROBE_IMPORT_AGENT_SETTINGS` (same JSON, wins field by field) for its classify, import and draft lanes. Codex gets `-m <model>` and `-c model_reasoning_effort="<effort>"` (the effort only as a literal from Codex's own list), Claude `--model` and `--effort` (dropped, and named in the degraded note, on a Claude without them). An agent that refuses the setting before doing anything (a model this account cannot use: about 4 s, no output) is relaunched once without it, under a fresh session. `backfill.summary` and each background attempt's `import_job.finished` carry per lane the model, effort, source, launches, refusals, prep-cache hits, launches with no usage report (never counted as 0) and the input, cached, cache-write, output and reasoning token sums.
 
 ## 0.321.0
