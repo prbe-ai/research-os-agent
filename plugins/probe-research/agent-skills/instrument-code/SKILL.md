@@ -117,7 +117,7 @@ boundary:
 
 | Launcher | id + epoch | the package |
 |---|---|---|
-| Modal | `secrets=[modal.Secret.from_dict({"PROBE_RUN_ID": ..., "PROBE_RUN_EPOCH": ..., "PROBE_TOKEN": os.environ["PROBE_TOKEN"]})]` (local env is not forwarded; never a literal - the snapshot uploads this script) | `modal.Image.debian_slim().pip_install("probe-research")` |
+| Modal | `secrets=[modal.Secret.from_dict({"PROBE_RUN_ID": ..., "PROBE_RUN_EPOCH": ...}), modal.Secret.from_name("<the token's secret>")]` (local env is not forwarded; never a literal - the snapshot uploads this script) | `modal.Image.debian_slim().pip_install("probe-research")` |
 | Ray | `runtime_env={"env_vars": {...}}` | `runtime_env={"pip": ["probe-research"]}` |
 | Slurm | `sbatch --export=ALL,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` | the venv the job activates |
 | Docker / k8s | `-e PROBE_RUN_ID=...` / `env:` on the pod | the image |
@@ -129,8 +129,11 @@ config still lands on that run. If the launcher only submitted the job, `probe
 exec` opened the run AWAITING ATTACH and this same call takes ownership.
 
 The credential is `PROBE_TOKEN`, plus `PROBE_BASE_URL` if you are not on the
-default server. There is NO `PROBE_API_KEY` - nothing reads it, though `probe
-exec` prints it in the Modal hint.
+default server; there is NO `PROBE_API_KEY`. Give the job its own: the researcher
+runs `probe token create --name <job> --scope read --scope write` in their own
+terminal and puts it in the platform's secret store, never a literal in a job
+spec or script. Recording from the launcher after the job ends loses its curves,
+logs and data reads - say so before offering it.
 
 On Kubernetes the outbox sits on the container's own disk and its background
 worker dies with the pod, so writes still queued when the pod is deleted are
