@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.329.4
+
 - **The daemon writer's note for the researcher is shorter.** When the writer sets a project's headline metric or a best pick, the main agent now reads `[Probe] Tell the researcher: <P>'s headline metric is now <KEY> (higher is better).` (`lower is better`; `, best value per run` with `--reduce best`) or `[Probe] Tell the researcher: <P>'s best experiment is now <EXP> ("<reason>").` (`workspace <W>'s ...` for a workspace pick; `... is now <EXP>.` with no reason), in place of `[Probe] For your researcher, in one line: the headline metric for <P> is now ...` and `... the best experiment for <P> is now <EXP> (reason: "<reason>")`. The reason stays one line of at most 200 characters with its double quotes turned to single ones; a single period ending it is dropped, since the note's own period now follows the closing quote. `mailbox.WRITER_RELAY_PREFIX` is `Tell the researcher: ` in the mailbox, both plugins' hooks and pi; a hook from before this release (0.328.0's included) shows the new text under "The writer recorded:". In a live check (Opus 5.5, `claude -p`, the note handed over as hook context the way `reads_hook.py` does) the main agent passed the short form on in 12 of 12 runs and the old form in 7 of 8 in the same setup.
 
 ## 0.329.3
