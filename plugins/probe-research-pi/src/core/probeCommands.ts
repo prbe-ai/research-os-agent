@@ -97,6 +97,8 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "graph",
   "find",
   "inherited",
+  "branches",
+  "branch",
   "options",
 ]);
 
