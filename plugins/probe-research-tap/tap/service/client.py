@@ -54,7 +54,8 @@ from collections.abc import Callable
 
 from . import paths, procid
 from .protocol import (
-    API_VERSION, JSONRPC, MAX_LINE_BYTES, REPORT_ENV, Client, Method, Mode, encode, report_consent, request,
+    API_VERSION, CHECK_TRIGGERS, JSONRPC, MAX_LINE_BYTES, REPORT_ENV, Client, Method, Mode, encode, report_consent,
+    request,
 )
 
 
@@ -677,7 +678,7 @@ def check_now(
     client_version: str = "unknown",
 ) -> dict:
     """Ask the service for an update check now, starting it when none runs.
-    `trigger` says what asks (app | cli | session | schedule). OSError when no
+    `trigger` says what asks (`protocol.CHECK_TRIGGERS`). OSError when no
     service answers after `wait`."""
     ensure(wait=wait)
     answer = call(
@@ -1014,7 +1015,7 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     # `socket` first, then `legacy_socket`; the rest is `locations()`.
     sub.add_parser("socket", help="print this machine's service socket paths (JSON)")
     p_check = sub.add_parser("check-now", help="update.check_now, starting the service when none runs")
-    p_check.add_argument("--trigger", default="cli", choices=("app", "cli", "session", "schedule"))
+    p_check.add_argument("--trigger", default="cli", choices=sorted(CHECK_TRIGGERS))
     p_check.add_argument(
         "--wait-for-pid", type=int, default=None, help="first wait for this process (the asking command) to exit"
     )

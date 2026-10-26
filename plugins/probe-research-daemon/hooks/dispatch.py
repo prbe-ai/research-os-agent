@@ -1485,6 +1485,20 @@ RECORD_KEEPING = "--record-keeping"
 #: A miss gives the Probe service this long, from the connect, to take its
 #: record-keeping routes (`hooks.queue`).
 QUEUE_WAIT_S = 0.3
+#: Test-only: that wait in seconds (`queue_wait_s`). A stand-in service is a
+#: thread of the test's own process, which a loaded runner may not schedule
+#: within 0.3 s (agent-ci 3.11, 2026-10-26): its answer then came too late and
+#: the event was queued instead. Nothing in production sets it.
+QUEUE_WAIT_ENV = "PROBE_HOOK_QUEUE_WAIT_S"
+
+
+def queue_wait_s() -> float:
+    """QUEUE_WAIT_S, or the test-only QUEUE_WAIT_ENV (a positive number)."""
+    try:
+        value = float(os.environ.get(QUEUE_WAIT_ENV) or QUEUE_WAIT_S)
+    except ValueError:
+        return QUEUE_WAIT_S
+    return value if value > 0 else QUEUE_WAIT_S
 #: A queued event (its id, folder, lane, payload, environment and working
 #: folder, as one JSON object) is at most this big (`protocol.MAX_HOOK_QUEUE_ITEM`),
 #: and at most MAX_QUEUED wait in the queue (`hookqueue.MAX_QUEUED`): past
@@ -1737,6 +1751,59 @@ def ensure_service(sp, allowed) -> None:
         pass
 
 
+#: The lifeboat (plan fool-proof-updates B4): `probe.service.lifeboat` keeps it
+#: in this folder under $HOME, outside every release, with its frozen wrapper.
+#: The keeper unit runs it every minute; where there is none (a pod with no user
+#: scheduler) or the service did not answer this session's start, the start
+#: runs it here, detached, at most every LIFEBOAT_EVERY_S (its stamp), so a
+#: machine whose CLI cannot even import still recovers when someone uses it.
+#: tests/test_hook_miss.py holds these paths to the service's own.
+LIFEBOAT_DIR = (".local", "state", "probe", "lifeboat")
+LIFEBOAT_WRAPPER = "lifeboat.sh"
+LIFEBOAT_STAMP = "session.stamp"
+LIFEBOAT_EVERY_S = 3600.0
+#: The keeper's units (`keeper.NAME`, `keeper.LABEL`): systemd's timer, launchd's agent.
+KEEPER_TIMER = ("systemd", "user", "probe-service-keeper.timer")
+KEEPER_PLIST = ("Library", "LaunchAgents", "ai.prbe.probe-service-keeper.plist")
+
+
+def keeper_installed() -> bool:
+    """Does the system run the keeper (and with it the lifeboat) every minute?
+    Its unit file, where the service writes it or this session's config says."""
+    home = os.path.expanduser("~")
+    configs = {os.path.join(home, ".config"), os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")}
+    timers = [os.path.join(config, *KEEPER_TIMER) for config in configs]
+    return any(os.path.exists(path) for path in [*timers, os.path.join(home, *KEEPER_PLIST)])
+
+
+def launch_lifeboat(answered: bool) -> bool:
+    """A session starts: run the lifeboat's wrapper (`/bin/sh <it> session`),
+    detached and never waited on, when no keeper unit runs it or the service
+    did not answer (`answered`), at most every LIFEBOAT_EVERY_S. Imports
+    nothing of Probe. True when it was started. Never raises."""
+    try:
+        if answered and keeper_installed():
+            return False
+        folder = os.path.join(os.path.expanduser("~"), *LIFEBOAT_DIR)
+        wrapper = os.path.join(folder, LIFEBOAT_WRAPPER)
+        stamp = os.path.join(folder, LIFEBOAT_STAMP)
+        if not os.path.isfile(wrapper) or not _private(folder) or _fresh(stamp, LIFEBOAT_EVERY_S):
+            return False
+        if not _touch(stamp):
+            return False
+        import subprocess
+
+        env = {k: v for k, v in os.environ.items() if k not in OWNED_ENV}
+        subprocess.Popen(  # noqa: S603 - the lifeboat's own frozen wrapper
+            ["/bin/sh", wrapper, "session"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env, cwd="/", close_fds=True, start_new_session=True,
+        )
+        return True
+    except Exception:  # noqa: BLE001 - fail open: the session goes on
+        return False
+
+
 def queue_folder(sp, any_drainer: bool) -> "str | None":
     """The service's hook queue (`paths.hook_queue_dir`), when an event written
     there will run: it exists (a service that drains it made it) and, unless
@@ -1895,7 +1962,7 @@ class Miss:
                 path = sp.socket_path()
                 sp.require_private(path.parent)
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                sock.settimeout(QUEUE_WAIT_S)
+                sock.settimeout(queue_wait_s())
                 sock.connect(str(path))
                 self.sock, sock = sock, None
                 self.state = "connected"
@@ -1961,7 +2028,7 @@ class Miss:
             if reached != self.DOWN:
                 started = time.monotonic()
                 try:
-                    answer = self._answer(self._request("hooks.queue", item), started + QUEUE_WAIT_S)
+                    answer = self._answer(self._request("hooks.queue", item), started + queue_wait_s())
                 except OSError:
                     answer = None
                 if answer is _ERROR:
@@ -2066,6 +2133,8 @@ def serve(argv: list, payload: "bytes | None" = None) -> int:
         except Exception:  # noqa: BLE001 - the host is a speed-up; the event runs here instead
             hosted = None
         if hosted is not None:
+            if lane == "session-start":
+                launch_lifeboat(answered=True)  # the service's host took it: it answers
             return hosted
     try:
         code = main(["dispatch.py", *argv], payload=payload, miss=miss)
@@ -2073,6 +2142,10 @@ def serve(argv: list, payload: "bytes | None" = None) -> int:
         code = 0
     if miss is not None:
         miss.finish()
+    if lane == "session-start" and RECORD_KEEPING not in argv[1:]:
+        # A miss that reached no service did not hear it answer; neither did
+        # an event no host could take at all (hosting off, no CLI to run one).
+        launch_lifeboat(answered=miss is not None and miss.state not in (Miss.DOWN, Miss.SKIPPED))
     if isinstance(code, tuple):
         # Outside the fail-open net: the route's own behavior, exits and
         # tracebacks included (an uncaught error is exit 1, as `python3 <route>` gives).
