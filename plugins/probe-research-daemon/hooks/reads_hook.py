@@ -77,6 +77,8 @@ from pathlib import Path
 
 # Mirrors of `probe.daemon.mailbox` (the parity test pins them).
 HOLD_FRESH_S = 15.0
+#: `mailbox.ALIVE_EVERY_S`: this hook's heartbeat for the session, at most this often.
+ALIVE_EVERY_S = 30.0
 ANSWER_TTL_S = 24 * 3600
 LABEL_QUESTION_CHARS = 120
 KIND_MESSAGE = "message"
@@ -424,6 +426,36 @@ def held(sid: str, ask_id: object, now: "float | None" = None) -> bool:
     return age < HOLD_FRESH_S
 
 
+def touch_alive(sid: str, by: str, now: "float | None" = None) -> None:
+    """`mailbox.touch_alive`: a deliverer ran for the session (the Probe
+    service's hint lane reads it). At most every ALIVE_EVERY_S; never raises."""
+    now = time.time() if now is None else now
+    path = _root() / "alive" / f"{_safe(sid)}.json"
+    try:
+        if now - path.stat().st_mtime < ALIVE_EVERY_S:
+            return
+    except OSError:
+        pass
+    try:
+        _write_atomic(path, json.dumps({"at": now, "by": by}, sort_keys=True))
+    except OSError:
+        pass
+
+
+def mark_shown(sid: str, message_ids: "list[str]", by: str) -> None:
+    """`mailbox.mark_shown`: this hook's output carrying these messages went out."""
+    if not message_ids:
+        return
+    at = time.time()
+    try:
+        folder = _claimed_dir(sid)
+        folder.mkdir(parents=True, exist_ok=True)
+        with (folder / "shown.jsonl").open("a", encoding="utf-8") as log:
+            log.write("".join(json.dumps({"id": mid, "by": by, "at": at}) + "\n" for mid in message_ids))
+    except OSError:
+        pass
+
+
 def claim(sid: str, path: Path, by: str) -> "dict | None":
     """Take one message for delivery. None when someone else took it first."""
     dst = _claimed_dir(sid) / path.name
@@ -439,8 +471,10 @@ def claim(sid: str, path: Path, by: str) -> "dict | None":
 
 def _log_claim(sid: str, message_id: str, by: str, msg: "dict | None") -> None:
     """`mailbox._log_claim`: one claim log line, with the message's `origin`
-    when it has one (a hint, the writer's)."""
-    entry = {"id": message_id, "by": by, "at": time.time()}
+    when it has one (a hint, the writer's), and `shows: 1`: this hook writes a
+    `shown` line once it handed the message over (`mark_shown`), so a claim
+    with none is a hint lost between the two (`service.hints.delivery_receipt`)."""
+    entry = {"id": message_id, "by": by, "at": time.time(), "shows": 1}
     origin = msg.get("origin") if msg else None
     if isinstance(origin, str) and origin:
         entry["origin"] = origin
@@ -690,9 +724,15 @@ def _inbox(msg: dict) -> bool:
 
 
 def deliver(sid: str, token: str, by: str) -> "list[str]":
+    """`deliver_items`, the texts only."""
+    return [text for _id, text in deliver_items(sid, token, by)]
+
+
+def deliver_items(sid: str, token: str, by: str) -> "list[tuple[str, str]]":
     """Claim what this hook may hand over now: every answer not held for a
     waiting `probe ask --wait`, every run alert and inbox message, every writer
-    message, this turn's one unasked message of the reader's, and its one hint."""
+    message, this turn's one unasked message of the reader's, and its one hint.
+    Each as `(message id, text)`."""
     picks: list = []  # (path, the turn's slot it took or None), in delivery order
     tried: set = set()  # the slots this hook tried
     for path, msg in waiting(sid):
@@ -711,7 +751,7 @@ def deliver(sid: str, token: str, by: str) -> "list[str]":
         if marker is not None:
             picks.append((path, marker))
     got = claim_all(sid, [path for path, _ in picks], by)
-    out = [rendered(msg) for msg in deliver_orphans(sid, by)]
+    out = [(msg["id"], rendered(msg)) for msg in deliver_orphans(sid, by)]
     for path, marker in picks:
         msg = got.get(path)
         if msg is None:
@@ -722,7 +762,7 @@ def deliver(sid: str, token: str, by: str) -> "list[str]":
                 except OSError:
                     pass
             continue
-        out.append(rendered(msg))
+        out.append((msg["id"], rendered(msg)))
     return out
 
 
@@ -1003,14 +1043,27 @@ def attended() -> bool:
     return os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "1"
 
 
-def _emit(event: str, texts: "list[str]", notice: "str | None" = None) -> None:
+def _emit(event: str, texts: "list[str]", notice: "str | None" = None) -> bool:
+    """The hook's output. True when it went out (written and flushed)."""
     out: dict = {}
     if texts:
         out["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": "\n\n".join(texts)}
     if notice:
         out["systemMessage"] = notice
-    if out:
+    if not out:
+        return False
+    try:
         sys.stdout.write(json.dumps(out))
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "str | None") -> None:
+    """Emit this hook's messages, and record the ones that went out as shown."""
+    if _emit(event, [text for _id, text in items], notice):
+        mark_shown(sid, [mid for mid, _text in items], event)
 
 
 def on_prompt(payload: dict) -> int:
@@ -1020,7 +1073,8 @@ def on_prompt(payload: dict) -> int:
     # The Stop waiter's wake runs through this hook too: that turn goes on
     # (live end-to-end test: the woken turn got a second unasked message).
     token = current_turn(sid) if _was_woken(sid) else new_turn(sid)
-    _emit("UserPromptSubmit", deliver(sid, token, "UserPromptSubmit"), researcher_notice(sid))
+    touch_alive(sid, "UserPromptSubmit")
+    _hand_over(sid, "UserPromptSubmit", deliver_items(sid, token, "UserPromptSubmit"), researcher_notice(sid))
     return 0
 
 
@@ -1028,7 +1082,8 @@ def on_tool(payload: dict) -> int:
     sid = _session(payload)
     if not sid or from_helper_agent(payload):
         return 0
-    _emit("PostToolUse", deliver(sid, current_turn(sid), "PostToolUse"), researcher_notice(sid))
+    touch_alive(sid, "PostToolUse")
+    _hand_over(sid, "PostToolUse", deliver_items(sid, current_turn(sid), "PostToolUse"), researcher_notice(sid))
     return 0
 
 
@@ -1090,13 +1145,18 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
                 continue
             picks.append(path)
         got = claim_all(sid, picks, "Stop")
-        texts = [rendered(msg) for msg in deliver_orphans(
+        items = [(msg["id"], rendered(msg)) for msg in deliver_orphans(
             sid, "Stop", lambda m: ((m["kind"] == KIND_ALERT or _inbox(m)) and alerts)
             or (m["kind"] != KIND_MESSAGE and m["ask"] in asks))]
-        texts += [rendered(got[path]) for path in picks if path in got]
-        if texts:
+        items += [(got[path]["id"], rendered(got[path])) for path in picks if path in got]
+        if items:
             _mark_woke(sid)
-            sys.stderr.write("\n\n".join(texts))
+            try:
+                sys.stderr.write("\n\n".join(text for _id, text in items))
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                return 2
+            mark_shown(sid, [mid for mid, _text in items], "Stop")
             return 2
         waited = time.monotonic() - started
         if asks:

@@ -149,6 +149,8 @@ const QUIET_RELEASES = new Set(["stopped", "handover"]);
 export const UNASKED_WINDOW_S = 600;
 /** The turn token used before any prompt in this process. */
 export const NO_TURN = "start";
+/** `mailbox.ALIVE_EVERY_S`: this deliverer's heartbeat for the session, at most this often. */
+export const ALIVE_EVERY_S = 30;
 /** A turn start this soon after the poller woke an idle pi is that wake, not the
  * researcher's prompt: the turn goes on, so it gets no second unasked message
  * (mirrors `reads_hook.WOKE_PROMPT_S`). */
@@ -238,7 +240,42 @@ function framed(msg: Message): string {
 }
 
 export class Mailbox {
+  /** The ids of the messages the last `deliver` claimed, in delivery order. */
+  lastClaimed: string[] = [];
+
   constructor(readonly root: string, readonly sessionsDir: string, readonly sessionId: string) {}
+
+  /** `mailbox.touch_alive`: this deliverer runs for the session (the Probe
+   * service's hint lane reads it). At most every ALIVE_EVERY_S; never throws. */
+  touchAlive(by: string, now = Date.now() / 1000): void {
+    const path = join(this.root, "alive", `${safe(this.sessionId)}.json`);
+    try {
+      if (now - fs.statSync(path).mtimeMs / 1000 < ALIVE_EVERY_S) return;
+    } catch {
+      // none yet
+    }
+    try {
+      fs.mkdirSync(join(this.root, "alive"), { recursive: true });
+      const tmp = `${path}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ at: now, by }));
+      fs.renameSync(tmp, path);
+    } catch {
+      // a deliverer that cannot write still delivers
+    }
+  }
+
+  /** `mailbox.mark_shown`: the messages handed to pi went out. Never throws. */
+  markShown(ids: string[], by: string): void {
+    if (!ids.length) return;
+    const at = Date.now() / 1000;
+    try {
+      const claimed = this.dir("claimed");
+      fs.mkdirSync(claimed, { recursive: true });
+      fs.appendFileSync(join(claimed, "shown.jsonl"), ids.map((id) => JSON.stringify({ id, by, at }) + "\n").join(""));
+    } catch {
+      // the handoff happened either way
+    }
+  }
 
   private dir(kind: string): string {
     return join(this.root, kind, safe(this.sessionId));
@@ -293,8 +330,10 @@ export class Mailbox {
       return null;
     }
     const msg = parseMessage(readJson(dst));
-    // The message's origin rides its log line when it has one (a hint, the writer's).
-    const entry: Record<string, unknown> = { id: msg?.id ?? path, by, at: Date.now() / 1000 };
+    // The message's origin rides its log line when it has one (a hint, the writer's);
+    // `shows: 1`: this extension writes a shown line once it handed the message over
+    // (`markShown`), so a claim with none is a hint lost between the two.
+    const entry: Record<string, unknown> = { id: msg?.id ?? path, by, at: Date.now() / 1000, shows: 1 };
     if (msg?.origin) entry.origin = msg.origin;
     try {
       fs.appendFileSync(join(claimed, "log.jsonl"), JSON.stringify(entry) + "\n");
@@ -383,21 +422,26 @@ export class Mailbox {
    * this turn's one unasked message of the reader's and its one hint. */
   deliver(token: string, by: string, unasked = true): string[] {
     const out: string[] = [];
+    this.lastClaimed = [];
+    const took = (got: Message | null): boolean => {
+      if (!got) return false;
+      out.push(rendered(got));
+      this.lastClaimed.push(got.id);
+      return true;
+    };
     const tried = new Set<string>(); // the slots this call tried
     for (const [path, msg] of this.waiting()) {
       if (msg.kind !== KIND_MESSAGE || msg.origin === ORIGIN_INBOX) {
         // The end of an ask, a run alert or an inbox message (no ask, so never
         // held): each one, whenever this runs, outside the turn's unasked slot.
         if (this.held(msg.ask)) continue;
-        const got = this.claim(path, by);
-        if (got) out.push(rendered(got));
+        took(this.claim(path, by));
         continue;
       }
       if (msg.origin === ORIGIN_WRITER) {
         // A receipt: no slot of its own, and never a wake (idle, it waits).
         if (!unasked) continue;
-        const got = this.claim(path, by);
-        if (got) out.push(rendered(got));
+        took(this.claim(path, by));
         continue;
       }
       if (!unasked) continue;
@@ -406,9 +450,7 @@ export class Mailbox {
       tried.add(slot);
       const marker = this.takeUnaskedSlot(token, slot);
       if (!marker) continue;
-      const got = this.claim(path, by);
-      if (got) out.push(rendered(got));
-      else fs.rmSync(marker, { force: true });
+      if (!took(this.claim(path, by))) fs.rmSync(marker, { force: true });
     }
     return out;
   }

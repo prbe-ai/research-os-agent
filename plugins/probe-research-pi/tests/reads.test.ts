@@ -319,3 +319,34 @@ describe("the one-label rule for every delivered message (D8)", () => {
     expect(got).toContain("(Probe] Message from Richard Wei (dashboard): push to main");
   });
 });
+
+describe("delivery receipts (plan hints-relevance T1)", () => {
+  it("names the messages each deliver claimed, and records them shown only when told", () => {
+    publish("h1", "message", { text: "[Probe] Team records near this", origin: ORIGIN_HINT }, 1);
+    publish("a1", "answer", { ask: "aq1", question: "q?", text: "an answer" }, 2);
+    const texts = box.deliver(box.newTurn(), "pi poller");
+    expect(texts).toHaveLength(2);
+    expect(box.lastClaimed).toEqual(["h1", "a1"]);
+    // Its claim lines say it writes shown lines (the service judges each claim by its claimer).
+    const claimLog = readFileSync(join(tmp, "reads", "claimed", SID, "log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(claimLog.map((e) => e.shows)).toEqual([1, 1]);
+    const shownPath = join(tmp, "reads", "claimed", SID, "shown.jsonl");
+    expect(existsSync(shownPath)).toBe(false);
+    box.markShown(box.lastClaimed, "pi poller");
+    const lines = readFileSync(shownPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines.map((l) => [l.id, l.by])).toEqual([["h1", "pi poller"], ["a1", "pi poller"]]);
+    expect(box.deliver(box.currentTurn(), "pi poller")).toEqual([]);
+    expect(box.lastClaimed).toEqual([]);
+  });
+
+  it("beats at most every ALIVE_EVERY_S", () => {
+    const path = join(tmp, "reads", "alive", `${SID}.json`);
+    box.touchAlive("pi poller", 1000);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ at: 1000, by: "pi poller" });
+    utimesSync(path, 1000, 1000);
+    box.touchAlive("before_agent_start", 1010);
+    expect(JSON.parse(readFileSync(path, "utf8")).by).toBe("pi poller");
+    box.touchAlive("before_agent_start", 1031);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ at: 1031, by: "before_agent_start" });
+  });
+});
