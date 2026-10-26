@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.329.1
+
 - **The lifeboat no longer "rescues" machines that are only idle.** The Probe service stops when no session needs it, so on an idle machine it does not answer, and after each release the lifeboat read that as a service that cannot start: idle machines updated through the lifeboat, and each one posted a "Lifeboat rescued" alert for a routine update. Now, when the machine is behind and the service is silent, the lifeboat first asks the service for an update check, which starts it; a working service then updates the machine the usual way. The lifeboat installs the newest release itself only when the service still has not answered 5 to 30 minutes after that ask, as a service that crashes at start never does. This ships as a new lifeboat copy (`handoff.py` version 2): it replaces the lifeboat's current copy, and the known-good copy stays at version 1 until version 2 proves itself.
 
 ## 0.329.0
