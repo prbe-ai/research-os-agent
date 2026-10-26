@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The final screen's Details hold errors only.** An install's Details listed a restart line for every agent ("Restart Claude Code to load Probe.", "Restart Codex ...", ...) and a failed agent's Details repeated its whole screen, routine lines included. Restarts are now one Next line ("Restart Claude Code, Codex, Kimi Code and pi to load Probe."; after an Update, "/reload (or restart)" where that works), with only the steps besides it that matter (Codex's hook approval, sessions still on an older tap, pi's /reload). Details list errors and what to do about them, and nothing else: no "Status line: on", "Auto-update on." or "paired" lines.
+
 - **A background import no longer reports itself stuck over a brief connection blip.** The worker sent `import_job.stalled` (`waiting_for_connection`) on its very first retry, so one transient error from the API raised an "Import stuck" alert for an import that went on to finish. It now reports a stall only once it has been waiting for 5 minutes (`STALL_GRACE_S`), then every 10 minutes as before; `import_job.finished` still carries `network_retries`.
 
 ## 0.329.4
