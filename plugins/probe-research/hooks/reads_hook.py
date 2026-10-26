@@ -116,7 +116,7 @@ TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}"
 TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}"
 #: `mailbox.WRITER_RELAY_PREFIX` / `TEXT_WRITER_RELAY`: a writer receipt for the
 #: researcher (a headline metric or a best pick the writer set), under its own label.
-WRITER_RELAY_PREFIX = "For your researcher, in one line: "
+WRITER_RELAY_PREFIX = "Tell the researcher: "
 TEXT_WRITER_RELAY = "[Probe] {message}"
 
 #: What the RESEARCHER sees when something fails: a `systemMessage` (shown in

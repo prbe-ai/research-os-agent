@@ -201,7 +201,7 @@ describe("the daemon writer's messages (writer channel, 10-13)", () => {
   });
 
   it("delivers a note for the researcher like a receipt, under its own label, never waking pi", () => {
-    const NOTE = "For your researcher, in one line: the headline metric for digits-mlp is now test/acc (higher is better).";
+    const NOTE = "Tell the researcher: digits-mlp's headline metric is now test/acc (higher is better).";
     publish("w1", "message", { text: NOTE, origin: "writer" }, 1);
     publish("m1", "message", { text: NOTE }, 2); // the same words from the reader stay team context
     expect(box.deliver(box.currentTurn(), "pi poller", false)).toEqual([]);
