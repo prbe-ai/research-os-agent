@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.324.0
+
 - **An install or an Update shows one progress bar with its percentage for the whole run.** An install's bar started again from empty on every coding agent's screen (1/6, then 2/5, then 3/4), never said which agent it was on, and sat still through its longest wait: every agent's marketplace refresh and plugin installs, inside the first agent's refresh step. It is now one bar from 0% to 100% across every agent, headed by what is running ("Installing plugins for Claude Code, Codex and Kimi Code", then "Installing for Codex (2 of 4)"), and it moves as each agent's refresh and installs finish (8% to 51% during that wait for 4 agents). The screen is centred like the wizard's prompts and spinner: it opens in the middle of the terminal (it was pinned 4 rows from the top whatever its height) and grows down, moving up only as far as new lines need; the bar spans the text column (it sat at the column's left edge). The Update was a spinner with no idea of how far along it was, and the screen went blank while each agent's state was sent to the server afterwards; now the spinner names each stage (the CLI, pi's package, the plugins still updating, the recording) with a bar and its percentage under it, until the results show. When `codex plugin list --json` cannot confirm the Codex plugins after an update, the message now says whether the list could not be read (and why) or what it lists instead: two machines reported both plugins unconfirmed on 2026-10-25 with nothing to tell those apart.
 
 ## 0.323.1
