@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.179.0",
+  "version": "0.180.0",
   "description": "Probe Research tracking: the probe switch (on / read / off per conversation), track-work (recording ML work from a shell), instrument-code (the SDK inside a training or eval script), visualize-progress, edit-notes, write-summary (project and experiment summaries) and overview-visuals (their Metrics-center tables and charts), audit-team-note and plan-research-review (plan research before code: reuse existing code, ask instead of guessing), plus a read-only MCP.",
   "author": {
     "name": "Probe",

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.323.0
+
 - **Probe knows whether its hints reach your agent, and gives the daemon's reader back where they do not.** The hook (Claude Code, Codex) and pi's extension now record each message they hand the agent (`claimed/<sid>/shown.jsonl`, written only once their output went out) and leave a heartbeat (`reads/alive/<sid>.json`) whenever they run. The Probe service's hint lane reads them, with its own ledger of what it posted and took back, and sends what became of the session's hints with every `/v1/hints` request (`delivery`: posted, claimed, shown, missed, withdrawn, and whether delivery is `ok`, `unproven` or `undeliverable`). The markers that let the reader skip its prompt turns and check-ins (`<sid>.live`, `.window`) are now touched only where a deliverer is seen (a heartbeat: pi's within 10 minutes, a hook's within 12 hours) or a hint was shown in the last 30 minutes, so a session whose hints go nowhere keeps its reader instead of hearing nothing. A session whose hints keep missing their chance to be shown (two, each after two tool calls with the turn's hint slot free, on a harness that shows hints mid-turn) is `undeliverable`: the lane asks for it only at a researcher's prompt, at most every 30 minutes, until one is shown, and `probe status` / `probe doctor` name it (with the fix: quit the agent and resume the session; on pi `/reload` is not enough). A worker's start-up sweep no longer deletes another live session's status file once it is a week old, and it now takes an ended session's heartbeat and hint files with the rest of its mailbox. Plan hints-relevance T1-T2.
 
 ## 0.322.0
