@@ -9,10 +9,12 @@ same files through both.
 
     UserPromptSubmit   start a new turn token (not for the Stop waiter's own
                        wake, which is the same turn going on); deliver every
-                       waiting answer (answer / nothing found / failed) and run
-                       alert, every message from the daemon's writer (its
-                       replies and receipts), plus at most ONE unasked message of
-                       the reader's and at most ONE hint (the Probe service's,
+                       waiting answer (answer / nothing found / failed), run
+                       alert and message Probe held for the session (`origin`
+                       "inbox": its person's, or one of their agent sessions'),
+                       every message from the daemon's writer (its replies and
+                       receipts), plus at most ONE unasked message of the
+                       reader's and at most ONE hint (the Probe service's,
                        `origin` "hint") for the turn, as `additionalContext`
     PostToolUse        the same, after each MAIN-agent tool call. A helper
                        agent's tool call never claims: its context is not the
@@ -22,7 +24,7 @@ same files through both.
                        and while the session's daemon worker runs. Waits in the
                        background (Claude Code's `asyncRewake`) up to WAKE_MAX_S
                        for an open ask's end, and up to ALERT_WAKE_MAX_S for a
-                       run alert; claims what came, writes it to stderr and exits
+                       run alert or an inbox message; claims what came, writes it to stderr and exits
                        2, which wakes the model with it. A new prompt, a tool call
                        that took the answer first, the worker gone (the session
                        closed: nobody would read a claimed alert), or a newer
@@ -41,7 +43,7 @@ ends the last one and wakes no stale waiter. The turn's slot is an exclusive cre
 of `turns/<sid>.unasked-<token>`: of any number of hooks racing in one turn
 (parallel tool calls), exactly one gets it. A hint has a slot of its own
 (`turns/<sid>.hint-<token>`), so one hint and one reader message can both go out
-in a turn. Answers and run alerts are exempt. Unasked messages and hints never
+in a turn. Answers, run alerts and inbox messages are exempt. Unasked messages and hints never
 wake the agent.
 
 ONE OWNER PER MESSAGE. Delivery is `os.rename` into `claimed/<sid>/`: exactly one
@@ -67,6 +69,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -92,6 +95,18 @@ ORIGIN_WRITER = "writer"
 #: A hint the Probe service posted: its own slot, its text shown as it came.
 ORIGIN_HINT = "hint"
 HINT_PREFIX = "[Probe] "
+#: A message Probe held for this session (G7): delivered like a run alert, its
+#: text (the worker's whole delivered line) shown as it came.
+ORIGIN_INBOX = "inbox"
+INBOX_PREFIX = "[Probe] Message from "
+#: `mailbox.inbox_safe`, the delivery rule (the parity test pins it): only the
+#: label's own `[Probe]` opens the message; the tag elsewhere reads `(Probe`,
+#: and every further line is quoted, so no body line can start a message.
+INBOX_QUOTE = "> "
+INBOX_LABEL_TAG = "[Probe]"
+INBOX_TAG = re.compile(r"\[probe", re.IGNORECASE)
+INBOX_TAG_SAFE = "(Probe"
+INBOX_LINE_BREAK = re.compile("\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
 SLOT_UNASKED = "unasked"
 SLOT_HINT = "hint"
 TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}"
@@ -292,12 +307,77 @@ def _message(data: "dict | None") -> "dict | None":
     return msg
 
 
+#: `mailbox.INBOX_TAG_FOLDED`, `_tag_spans`, `_untagged` (the parity test pins them).
+#: The tag as the matcher reads it: after NFKC folding (a fullwidth `［Ｐｒｏｂｅ］`
+#: is the tag), without format characters (Unicode Cf: a zero-width space in
+#: `[Pro\u200bbe]` hides nothing), in lower case (review of #3451).
+INBOX_TAG_FOLDED = "[probe"
+
+
+def _tag_spans(value: str) -> "list[tuple[int, int]]":
+    """Where `value` carries the tag, as (start, end) of the original text: the
+    ASCII spelling in any case, or any lookalike that NFKC folds to it, with
+    format characters inside or around it."""
+    if value.isascii():
+        return [(m.start(), m.end()) for m in INBOX_TAG.finditer(value)]
+    import unicodedata
+
+    folded: list = []  # (character, where its original character starts)
+    for at, ch in enumerate(value):
+        if unicodedata.category(ch) == "Cf":
+            continue
+        for piece in unicodedata.normalize("NFKC", ch).lower():
+            folded.append((piece, at))
+    text = "".join(piece for piece, _ in folded)
+    spans = []
+    found = text.find(INBOX_TAG_FOLDED)
+    while found != -1:
+        last = found + len(INBOX_TAG_FOLDED) - 1
+        spans.append((folded[found][1], folded[last][1] + 1))
+        found = text.find(INBOX_TAG_FOLDED, last + 1)
+    return spans
+
+
+def _untagged(value: str) -> str:
+    """`value` with every tag (`_tag_spans`) read `(Probe`."""
+    out, done = [], 0
+    for start, end in _tag_spans(value):
+        if start < done:
+            continue
+        out.append(value[done:start])
+        out.append(INBOX_TAG_SAFE)
+        done = end
+    out.append(value[done:])
+    return "".join(out)
+
+
+def one_label(text: str) -> str:
+    """`mailbox.one_label`: only a delivered message's own label keeps `[Probe]`."""
+    if not text.startswith(INBOX_LABEL_TAG):
+        return _untagged(text)
+    return INBOX_LABEL_TAG + _untagged(text[len(INBOX_LABEL_TAG):])
+
+
+def inbox_safe(text: str) -> str:
+    """`mailbox.inbox_safe`: an inbox message's text under the delivery rule."""
+    first, *rest = INBOX_LINE_BREAK.split(text)
+    head = first[:len(INBOX_LABEL_TAG)] + _untagged(first[len(INBOX_LABEL_TAG):])
+    lines = [_untagged(line) for line in rest]
+    return "\n".join([head] + [line if line.startswith(INBOX_QUOTE) else INBOX_QUOTE + line for line in lines])
+
+
 def rendered(msg: dict) -> str:
-    """`Message.rendered`: what the main agent reads."""
+    """`Message.rendered`: what the main agent reads, under the one-label rule."""
+    return one_label(_framed(msg))
+
+
+def _framed(msg: dict) -> str:
     kind = msg.get("kind")
     text = msg.get("text") or ""
     if msg.get("origin") == ORIGIN_HINT and kind == KIND_MESSAGE and text.startswith(HINT_PREFIX):
         return text  # rendered whole by Probe, its framing included; else framed as its kind
+    if msg.get("origin") == ORIGIN_INBOX and kind == KIND_MESSAGE and text.startswith(INBOX_PREFIX):
+        return inbox_safe(text)  # the delivered line, labelled by the worker, under the rule
     if msg.get("origin") == ORIGIN_WRITER:
         if kind == KIND_FAILED:
             return TEXT_WRITER_FAILED.format(reason=msg.get("reason") or "unknown")
@@ -604,16 +684,22 @@ def _take_unasked_slot(sid: str, token: str, slot: str = SLOT_UNASKED) -> "Path 
     return marker
 
 
+def _inbox(msg: dict) -> bool:
+    """A message Probe held for this session (G7): delivered like a run alert."""
+    return msg.get("kind") == KIND_MESSAGE and msg.get("origin") == ORIGIN_INBOX
+
+
 def deliver(sid: str, token: str, by: str) -> "list[str]":
     """Claim what this hook may hand over now: every answer not held for a
-    waiting `probe ask --wait`, every run alert, every writer message, this
-    turn's one unasked message of the reader's, and its one hint."""
+    waiting `probe ask --wait`, every run alert and inbox message, every writer
+    message, this turn's one unasked message of the reader's, and its one hint."""
     picks: list = []  # (path, the turn's slot it took or None), in delivery order
     tried: set = set()  # the slots this hook tried
     for path, msg in waiting(sid):
-        if msg["kind"] != KIND_MESSAGE or msg.get("origin") == ORIGIN_WRITER:
-            # The end of an ask, a run alert (no ask, so never held) or a writer
-            # message: each one, whenever a hook runs, outside the turn's unasked slot.
+        if msg["kind"] != KIND_MESSAGE or msg.get("origin") in (ORIGIN_WRITER, ORIGIN_INBOX):
+            # The end of an ask, a run alert or an inbox message (no ask, so never
+            # held) or a writer message: each one, whenever a hook runs, outside
+            # the turn's unasked slot.
             if not held(sid, msg["ask"]):
                 picks.append((path, None))
             continue
@@ -954,8 +1040,9 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
     if not sid or no_wake() or not attended() or from_helper_agent(payload):
         return 0
     asks = set(open_asks(sid))
-    # Run alerts come from the worker of a session the reader serves. A worker
-    # restarting right now still counts: the loop gives it WORKER_GONE_GRACE_S.
+    # Run alerts and inbox messages come from the worker of a session the reader
+    # serves. A worker restarting right now still counts: the loop gives it
+    # WORKER_GONE_GRACE_S.
     alerts = _served(sid)
     if not asks and not alerts:
         return 0
@@ -996,7 +1083,7 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             return 0  # a newer Stop's waiter waits for this session now
         picks = []
         for path, msg in waiting(sid):
-            if msg["kind"] == KIND_ALERT:
+            if msg["kind"] == KIND_ALERT or _inbox(msg):
                 if not alerts:
                     continue
             elif msg["kind"] == KIND_MESSAGE or msg["ask"] not in asks or held(sid, msg["ask"]):
@@ -1004,7 +1091,7 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             picks.append(path)
         got = claim_all(sid, picks, "Stop")
         texts = [rendered(msg) for msg in deliver_orphans(
-            sid, "Stop", lambda m: (m["kind"] == KIND_ALERT and alerts)
+            sid, "Stop", lambda m: ((m["kind"] == KIND_ALERT or _inbox(m)) and alerts)
             or (m["kind"] != KIND_MESSAGE and m["ask"] in asks))]
         texts += [rendered(got[path]) for path in picks if path in got]
         if texts:

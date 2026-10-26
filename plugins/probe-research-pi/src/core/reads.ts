@@ -8,13 +8,15 @@
  * pins these texts to the mailbox's.
  *
  *   before_agent_start  a new turn token; every waiting answer (answer / nothing
- *                       found / failed) and run alert, every message from the
+ *                       found / failed), run alert and message Probe held for the
+ *                       session (origin "inbox"), every message from the
  *                       daemon's writer, plus at most ONE unasked message of the
  *                       reader's and at most ONE hint (the Probe service's,
  *                       origin "hint", in a slot of its own), as the turn's message
- *   the poller (2 s)    an answer or a run alert that lands mid-run is steered in
- *                       after the current tool calls; one that lands while pi is
- *                       idle starts a turn (pi's `triggerTurn`: the wake). An
+ *   the poller (2 s)    an answer, a run alert or an inbox message that lands
+ *                       mid-run is steered in after the current tool calls; one
+ *                       that lands while pi is idle starts a turn (pi's
+ *                       `triggerTurn`: the wake). An
  *                       unasked message (or hint) goes in mid-run only (one per
  *                       turn); idle, it waits for the next prompt. A writer's receipt
  *                       likewise: mid-run, outside the one-per-turn slot; never a
@@ -55,6 +57,72 @@ export const ORIGIN_HINT = "hint";
 /** How a hint's own text begins (Probe frames it): one that does not is framed
  * as a reader message. */
 export const HINT_PREFIX = "[Probe] ";
+/** A message Probe held for this session (G7: its person's, or one of their
+ * agent sessions'): delivered like a run alert, and it wakes an idle pi; its
+ * text (the worker's whole delivered line) is shown as it came. */
+export const ORIGIN_INBOX = "inbox";
+/** How an inbox message's text begins: one that does not is framed as a reader
+ * message. */
+export const INBOX_PREFIX = "[Probe] Message from ";
+/** `mailbox.inbox_safe`, the delivery rule (tests/test_reads_hook.py pins it):
+ * only the label's own `[Probe]` opens the message; the tag elsewhere (any
+ * case) reads `(Probe`, and every further line is quoted, so no body line can
+ * start a message. The line breaks are Python's `str.splitlines` ones. */
+export const INBOX_QUOTE = "> ";
+export const INBOX_LABEL_TAG = "[Probe]";
+export const INBOX_TAG_SAFE = "(Probe";
+const INBOX_TAG = /\[probe/gi;
+/** `mailbox.INBOX_TAG_FOLDED`: the tag as the matcher reads it, after NFKC
+ * folding, without format characters (Unicode Cf), in lower case. */
+const INBOX_TAG_FOLDED = "[probe";
+const FORMAT_CHAR = /^\p{Cf}$/u;
+const ASCII_ONLY = /^[\x00-\x7f]*$/;
+
+/** `mailbox._tag_spans`: where `value` carries the tag, in its own UTF-16
+ * offsets -- the ASCII spelling in any case, or a lookalike NFKC folds to it,
+ * with format characters inside or around it. */
+function tagSpans(value: string): Array<[number, number]> {
+  if (ASCII_ONLY.test(value)) return [...value.matchAll(INBOX_TAG)].map((m) => [m.index!, m.index! + m[0].length]);
+  const folded: Array<[string, number, number]> = []; // (character, its original's start, end)
+  let at = 0;
+  for (const ch of value) {
+    if (!FORMAT_CHAR.test(ch)) {
+      for (const piece of ch.normalize("NFKC").toLowerCase()) folded.push([piece, at, at + ch.length]);
+    }
+    at += ch.length;
+  }
+  const spans: Array<[number, number]> = [];
+  const n = INBOX_TAG_FOLDED.length;
+  for (let k = 0; k + n <= folded.length; ) {
+    let match = true;
+    for (let j = 0; j < n; j++) if (folded[k + j][0] !== INBOX_TAG_FOLDED[j]) { match = false; break; }
+    if (match) {
+      spans.push([folded[k][1], folded[k + n - 1][2]]);
+      k += n;
+    } else k += 1;
+  }
+  return spans;
+}
+
+/** `mailbox._untagged`: every tag (`tagSpans`) read `(Probe`. */
+function untagged(value: string): string {
+  let out = "";
+  let done = 0;
+  for (const [start, end] of tagSpans(value)) {
+    if (start < done) continue;
+    out += value.slice(done, start) + INBOX_TAG_SAFE;
+    done = end;
+  }
+  return out + value.slice(done);
+}
+const INBOX_LINE_BREAK = /\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]/;
+
+export function inboxSafe(text: string): string {
+  const untag = untagged;
+  const [first, ...rest] = text.split(INBOX_LINE_BREAK);
+  const head = first.slice(0, INBOX_LABEL_TAG.length) + untag(first.slice(INBOX_LABEL_TAG.length));
+  return [head, ...rest.map(untag).map((line) => (line.startsWith(INBOX_QUOTE) ? line : INBOX_QUOTE + line))].join("\n");
+}
 /** The turn's delivery slot files (`turns/<sid>.<slot>-<token>-<window>`). */
 export const SLOT_UNASKED = "unasked";
 export const SLOT_HINT = "hint";
@@ -128,8 +196,21 @@ function parseMessage(data: Record<string, unknown> | null): Message | null {
   };
 }
 
-/** `Message.rendered`: what the agent reads. */
+/** `mailbox.one_label`, the one-label rule for every delivered message: its
+ * leading `[Probe]` (its own label) stays; the tag anywhere after it, in any
+ * case, reads `(Probe`, so a quoted record can never pass for a message. */
+export function oneLabel(text: string): string {
+  const untag = untagged;
+  if (!text.startsWith(INBOX_LABEL_TAG)) return untag(text);
+  return INBOX_LABEL_TAG + untag(text.slice(INBOX_LABEL_TAG.length));
+}
+
+/** `Message.rendered`: what the agent reads, under the one-label rule. */
 export function rendered(msg: Message): string {
+  return oneLabel(framed(msg));
+}
+
+function framed(msg: Message): string {
   let question = msg.question ?? "";
   if (question.length > LABEL_QUESTION_CHARS) question = question.slice(0, LABEL_QUESTION_CHARS - 3).trimEnd() + "...";
   // One pass over the template, values as plain text: `String.replace` would
@@ -142,6 +223,8 @@ export function rendered(msg: Message): string {
   // Rendered whole by Probe, its framing included; anything else of this origin
   // renders as its kind does (`origin` alone never takes the label off).
   if (msg.origin === ORIGIN_HINT && msg.kind === KIND_MESSAGE && msg.text.startsWith(HINT_PREFIX)) return msg.text;
+  // The delivered line, labelled by the worker, under the delivery rule.
+  if (msg.origin === ORIGIN_INBOX && msg.kind === KIND_MESSAGE && msg.text.startsWith(INBOX_PREFIX)) return inboxSafe(msg.text);
   if (msg.origin === ORIGIN_WRITER) {
     if (msg.kind === KIND_FAILED) return fill(TEXT_WRITER_FAILED);
     if (msg.kind === KIND_MESSAGE) return fill(TEXT_WRITER_RECEIPT);
@@ -296,15 +379,15 @@ export class Mailbox {
   }
 
   /** Claim every answer not held for a waiting `probe ask --wait`, every run
-   * alert, and -- when `unasked` -- every writer receipt, this turn's one
-   * unasked message of the reader's and its one hint. */
+   * alert and inbox message, and -- when `unasked` -- every writer receipt,
+   * this turn's one unasked message of the reader's and its one hint. */
   deliver(token: string, by: string, unasked = true): string[] {
     const out: string[] = [];
     const tried = new Set<string>(); // the slots this call tried
     for (const [path, msg] of this.waiting()) {
-      if (msg.kind !== KIND_MESSAGE) {
-        // The end of an ask, or a run alert (no ask, so never held): each one,
-        // whenever this runs, outside the turn's unasked slot.
+      if (msg.kind !== KIND_MESSAGE || msg.origin === ORIGIN_INBOX) {
+        // The end of an ask, a run alert or an inbox message (no ask, so never
+        // held): each one, whenever this runs, outside the turn's unasked slot.
         if (this.held(msg.ask)) continue;
         const got = this.claim(path, by);
         if (got) out.push(rendered(got));

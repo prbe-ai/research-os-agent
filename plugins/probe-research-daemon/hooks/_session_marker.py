@@ -1490,8 +1490,11 @@ def daemon_allows_agent(matched: str) -> bool:
 #: discard|pause|resume`), the team's permissions and workspaces, printed
 #: secrets (`mcp headers|env`, `token create`), the researcher's agent settings
 #: (`statusline install|uninstall`), and the daemon's own ledger and install.
+#: `session send` messages one of the researcher's own sessions (an orchestrator
+#: steering its workers, G7): the server takes it only for a session of the same
+#: person and labels it as from an agent session, never as the researcher.
 DAEMON_PROFILE_ALLOWED = frozenset(
-    {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find",
+    {"ask", "session status", "session parent", "session send", "ignore check", "run expect", "doctor", "paper find",
      "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
      "daemon status", "whoami", "context list", "wandb discover", "wandb key status",
      "update", "status", "flush", "service status", "service start", "service stop", "service check-now",
