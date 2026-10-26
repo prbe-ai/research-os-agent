@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.326.1
+
 - **A folder import's file notes now feed the project's draft, and a new draft replaces the one the import published before.** The unit agents' one-line notes (`probe-backfill-plan note`) were saved and never read. Each file excerpt the draft reads now carries that file's note (masked whole by the excerpt's credential gate, then cut to 240 characters), and described files are read first within the excerpt caps; a note never becomes a source on its own. The draft prompt treats a note as a hint for finding and connecting files, never as support (`backfill-reconstruction/4`). Publishing replaces an earlier draft only when the Overview still holds it word for word as this import published it (formatting the page renderer rewrites aside); a draft a person edited, another import's draft, prose and a README embed are left alone, and the confirmation says which. Each project redrafts once on its next completed import.
 
 ## 0.326.0
