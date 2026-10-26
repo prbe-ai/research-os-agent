@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **On macOS, the Probe service no longer waits forever on a daemon host that stopped reading.** A message to the daemon host (a run's start carries the session's whole environment) was sent with `MSG_DONTWAIT`, which macOS's `send()` ignores, so a host that stopped reading held the sending thread for good and was never marked stuck and killed. Each send to the host now has its own send timeout (`SEND_SLICE_S`, 1 s, which leaves the host's reader blocking as before), so it gives up after `SEND_TIMEOUT_S` on every platform.
+
 ## 0.330.0
 
 - **The final screen's Details hold errors only.** An install's Details listed a restart line for every agent ("Restart Claude Code to load Probe.", "Restart Codex ...", ...) and a failed agent's Details repeated its whole screen, routine lines included. Restarts are now one Next line ("Restart Claude Code, Codex, Kimi Code and pi to load Probe."; after an Update, "/reload (or restart)" where that works), with only the steps besides it that matter (Codex's hook approval, sessions still on an older tap, pi's /reload). Details list errors and what to do about them, and nothing else: no "Status line: on", "Auto-update on." or "paired" lines.
