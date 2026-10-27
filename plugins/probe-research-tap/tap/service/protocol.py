@@ -187,6 +187,11 @@ class DesktopOp:
     #: Every workspace on the team (`{id, name, slug, kind}`), fetched WITHOUT this
     #: computer's workspace limit, and that limit: the Settings picker's list.
     WORKSPACES = "workspaces"
+    COMPUTER_WORKSPACE = "computer_workspace"
+    SET_COMPUTER_WORKSPACE = "set_computer_workspace"
+    CREATE_COMPUTER_WORKSPACE = "create_computer_workspace"
+    SETUP_OPTIONS = "setup_options"
+    SET_SETUP_OPTION = "set_setup_option"
 
 
 #: The ops that change nothing a stopped child could leave half-written (a
@@ -203,6 +208,8 @@ DESKTOP_READS = frozenset(
         DesktopOp.PROFILE,
         DesktopOp.ANALYTICS_POLICY,
         DesktopOp.WORKSPACES,
+        DesktopOp.COMPUTER_WORKSPACE,
+        DesktopOp.SETUP_OPTIONS,
     }
 )
 #: `action.run`'s and `desktop.request`'s `origin`: a person asked, in the app.
