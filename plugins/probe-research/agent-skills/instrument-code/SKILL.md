@@ -111,29 +111,33 @@ check passes, nothing initialises.
 ## WHAT MUST REACH THE JOB:
 
 Three things, none of which travel on their own - the PACKAGE, the run id +
-epoch, and a TOKEN. `probe exec` exports `PROBE_RUN_ID` and `PROBE_RUN_EPOCH`
-into its child and `probe.init()` attaches, but that export dies at the machine
-boundary:
+epoch, and a TOKEN. `probe exec --token-ttl <the job's expected length, plus a
+margin>` exports `PROBE_RUN_ID`, `PROBE_RUN_EPOCH` and a `PROBE_TOKEN` that
+records that one run and nothing else into its child, and `probe.init()`
+attaches, but that export dies at the machine boundary:
 
-| Launcher | id + epoch | the package |
+| Launcher | id + epoch + token | the package |
 |---|---|---|
-| Modal | `secrets=[modal.Secret.from_dict({"PROBE_RUN_ID": ..., "PROBE_RUN_EPOCH": ...}), modal.Secret.from_name("<the token's secret>")]` (local env is not forwarded; never a literal - the snapshot uploads this script) | `modal.Image.debian_slim().pip_install("probe-research")` |
-| Ray | `runtime_env={"env_vars": {...}}` | `runtime_env={"pip": ["probe-research"]}` |
-| Slurm | `sbatch --export=ALL,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` | the venv the job activates |
-| Docker / k8s | `-e PROBE_RUN_ID=...` / `env:` on the pod | the image |
+| Modal | `secrets=[modal.Secret.from_local_environ(["PROBE_RUN_ID", "PROBE_RUN_EPOCH", "PROBE_TOKEN"])]` (local env is not forwarded; never a literal - the snapshot uploads this script) | `modal.Image.debian_slim().pip_install("probe-research")` |
+| Ray | `runtime_env={"env_vars": {...}}`, the same three | `runtime_env={"pip": ["probe-research"]}` |
+| Slurm | `sbatch --export=ALL,PROBE_TOKEN,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` | the venv the job activates |
+| Docker / k8s | `-e PROBE_TOKEN -e PROBE_RUN_ID=...` / `env:` on the pod | the image |
 
-When those two variables are set, call `probe.init(config=args)` with nothing
+When they are set (the token alone is enough), call `probe.init(config=args)` with nothing
 that names the run (`project`, `experiment`, `name`, `slug`, `question`,
 `hypothesis`): that contradicts the run the launcher opened, and it raises. The
 config still lands on that run. If the launcher only submitted the job, `probe
 exec` opened the run AWAITING ATTACH and this same call takes ownership.
 
 The credential is `PROBE_TOKEN`, plus `PROBE_BASE_URL` if you are not on the
-default server; there is NO `PROBE_API_KEY`. Give the job its own: the researcher
-runs `probe token create --name <job> --scope read --scope write` in their own
-terminal and puts it in the platform's secret store, never a literal in a job
-spec or script. Recording from the launcher after the job ends loses its curves,
-logs and data reads - say so before offering it.
+default server; there is NO `PROBE_API_KEY`. Give the job the run's own token,
+the `--token-ttl` one above (a `--detached-launcher` hand-off gets one anyway).
+If the run is still live near expiry, Probe alerts you and the researcher:
+`probe run token <run> --extend 7d`. Only a job that opens runs of its own
+needs the researcher's `probe token create --name <job> --scope read --scope
+write`, run in their own terminal and kept in the platform's secret store.
+Recording from the launcher after the job ends loses its curves, logs and data
+reads - say so before offering it.
 
 On Kubernetes the outbox sits on the container's own disk and its background
 worker dies with the pod, so writes still queued when the pod is deleted are

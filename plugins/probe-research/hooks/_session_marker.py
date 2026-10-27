@@ -1311,6 +1311,9 @@ PLUMBING_GROUP_WRITES = frozenset({"workspace set"})
 #: words under a `SUBGROUPS` entry), or the bare top-level command.
 #: `probe session status` prints this list as `daemon.agent_writes`, and
 #: `DAEMON_CONTEXT` below says the same thing in words.
+#: `run token` mints, extends or revokes the one-run token a remote job records
+#: with: part of the launch (`probe exec --detached-launcher` mints one), and
+#: the run's expiry alert tells the agent to `--extend` it.
 DAEMON_AGENT_WRITES = frozenset(
     {
         "exec",
@@ -1320,6 +1323,7 @@ DAEMON_AGENT_WRITES = frozenset(
         "run child",
         "run fork",
         "run end",
+        "run token",
         "span add",
         "trial add",
         "trial stage",

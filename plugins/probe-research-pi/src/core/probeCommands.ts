@@ -154,6 +154,7 @@ export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
   "run child",
   "run fork",
   "run end",
+  "run token",
   "span add",
   "trial add",
   "trial stage",

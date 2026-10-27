@@ -178,6 +178,12 @@ _RULES: tuple[_Rule, ...] = (
     _r("probe-token", r"\b(?:probe_pat_|ros_pat_|probe_svc_)[0-9a-f]{32}\b",
        ("probe_pat_", "ros_pat_", "probe_svc_")),
     _r("probe-ingest-token", r"\bros_ing_[0-9a-f]{32}(?:[0-9a-f]{16})?\b", ("ros_ing_",)),
+    # Per-run tokens (app/auth/run_tokens.py): `probe_run_` + an ES256 JWT, the
+    # credential `probe exec` prints for a remote job. One run only, but still a
+    # credential: bounded tails, so the accelerated scan never runs open.
+    _r("probe-run-token",
+       r"\bprobe_run_[A-Za-z0-9_\-]{10,200}\.[A-Za-z0-9_\-]{10,4000}\.[A-Za-z0-9_\-]{20,200}",
+       ("probe_run_",)),
     # OpenAI, both the project-scoped and the classic shape.
     _r("openai-api-key", r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{40,200}\b",
        ("sk-proj-", "sk-svcacct-", "sk-admin-")),
