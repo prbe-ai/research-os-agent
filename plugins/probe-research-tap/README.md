@@ -39,11 +39,13 @@ codex plugin marketplace add prbe-ai/research-os-agent
 codex plugin add probe-research-tap@research-os-agent
 ```
 
-Codex requires a new session after installation. Open `/hooks`, review the
-Probe hook definition, and trust it; Codex deliberately skips untrusted plugin
-hooks. This approval does not block installation or MCP login: it gates hook
-execution. Codex persists trust for the reviewed hook definition; a future
-definition change may require review again.
+Codex requires a new session after installation, and it deliberately skips
+plugin hooks nobody approved. The Probe wizard approves Probe's own hooks for
+you (the same `trusted_hash` write `/hooks` makes), and every Probe update
+approves any hook definition that changed. If the wizard says Codex did not
+take the approval (an older Codex, or a managed config), open `/hooks` in a new
+session and approve the Probe hooks there. Approval does not block installation
+or MCP login: it gates hook execution.
 
 The dashboard authorization creates a source-bound device: a Codex credential
 cannot post to the Claude Code route, and a Claude Code credential cannot post
