@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.333.1
+
 - **Probe staff can bring back session capture on a machine where a bug revoked it, with nothing for you to do.** A wizard bug (fixed in 0.331.1) could revoke a coding agent's capture credential nobody had turned off, and a new one needed your browser approval. Staff can now open a one-time repair for one machine: the server marks that machine's answers to its own CLI token with `X-Probe-Capture-Repair` (the update-report flush hears it too), and the next `probe` command there fetches the replacement credentials (`POST /v1/client/capture-repair`), writes them where the wizard's sign-in would (Claude Code's in the CLI config, and over an older tap `.token` that would hide it; every other agent's in its tap folder), lifts those agents' locks, then confirms (`POST /v1/client/capture-repair/applied`), which closes the request. Until it confirms, a lost answer or a failed write is simply fetched again next time. A capture you turned off yourself after staff asked stays off and is reported as kept off; when capture you had turned off before resumes, one line on stderr says so and how to turn it off. Never from inside a training run, the Probe service, a command the Probe daemon runs, the wizard, or under a `PROBE_TOKEN`, `PROBE_BASE_URL` or `--base-url` that is not the config's own account. `capture.repair_applied` reports the agents written, those kept off, and whether the confirmation landed. Capture tokens are now created owner-only (0600) before the secret is written.
 
 ## 0.333.0
