@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.333.0
+
 - **Every wizard result page answers what you asked, then lists only what you must do and what went wrong.** The pages printed every step every helper took, for every coding agent. Interactive runs now show:
   - **Who records:** "The Probe daemon now records for all 4 coding agents" or "All 4 coding agents record for themselves again", then Next (start new sessions; Codex's hook approval; a daemon key kept for open sessions) and the errors. It was 13 to 25 lines: "Installed 11 skill(s) in <path>: <every name>" as the title, "Takes effect in new X sessions." once per agent, and the reasoning-summaries paragraph.
   - **Uninstall:** "Removed Probe from all 4 coding agents", "This device is signed out.", the agents, and only the errors (a token the server could not be told to revoke). It was about 34 lines.
