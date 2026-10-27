@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`probe log` and `probe span add` refuse a run ref that is really a `key=value`, before anything is queued.** When the run argument is missing (`probe log $RUN loss=0.5 acc=0.9` with `$RUN` empty, which the shell drops), the first metric took the run's place; the write was queued with exit 0 and dead-lettered as a 404 minutes later (Bucket, 2026-10-27). It now exits 2 at once: `'loss=0.5' looks like key=value, not a run ref — the run argument is missing`. No run ref can hold `=`: the server refuses one in a run slug since this release.
+- **`outbox.drained` says what the server answered each write it gave up on**: `dead_lettered_by_status` (e.g. `{"404": 1}`, keyed like `sdk.delivery.summary`'s) and `dead_lettered_no_such_run`, how many were the server's own 404 "run not found" rather than any other 404 (a run token's refusal, a swept upload). The delivery-loss alert reads the second to tell a write naming no run from a real loss; dead-letter records carry it as `no_such_run`.
+
 ## 0.338.0
 
 - Research plan review is automatically included and routed in every agent profile. Remove its settings toggle and restore automatic routing on devices with the retired opt-out.
