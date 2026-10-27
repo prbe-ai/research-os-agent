@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Wizard polish from a click-through of 0.333.0 in a real terminal.**
+  - Diagnose says each problem once and names every agent that has it ("Claude Code and Codex: could not verify the capture credential"). It used to repeat it under each agent, and it said Codex's MCP login twice in different words.
+  - Three or more coding agents read "Claude Code, Codex, pi and Kimi Code", not "Claude Code and Codex and pi and Kimi Code".
+  - After an Uninstall signs this device out, its page says "Press enter to finish…", because the wizard ends there; it used to promise a menu.
+  - Diagnose's agent picker says "Checks each agent you pick." instead of "One report per agent you pick."
+
 ## 0.336.0
 
 - **A device with no Probe opens straight into setup, and setup asks who records and what new sessions do.** `npx probe-research` on a machine with no sign-in and no coding agent set up goes to the guided install instead of the menu; its one browser approval is the sign-in. The install gains a Defaults step (Who records ‹ agent | daemon ›, Probe in new sessions ‹ on | read | off ›) that writes nothing until Install: the session default is saved at the Install keypress, Who records once the agents are installed, agent by agent.
