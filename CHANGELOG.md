@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.332.1
+
 - **The daemon's command spec matches the CLI again.** `cli_spec.json` (the CLI's command tree, which the Probe daemon checks commands against) carried the hash of an older CLI source after #3500, so each daemon host rebuilt its own copy in a ~1 s child process once per CLI version. Commands were never refused; this release ships a spec that matches.
 
 ## 0.332.0
