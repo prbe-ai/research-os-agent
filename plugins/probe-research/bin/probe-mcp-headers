@@ -6,15 +6,12 @@
 # with whatever environment Claude Code itself has: launched from the dock, no
 # profile is ever sourced and ~/.local/bin is not on PATH.
 #
-# Resolution matches sdk.config.resolve: PROBE_MCP_TOKEN first, so a shell that
-# already exports it keeps working untouched, then the `mcp_token` that the
-# Probe wizard writes. The write token in the same file is never read —
-# this surface is read-only.
-#
-# Caveat of that order: if the launching shell exports a *stale* PROBE_MCP_TOKEN, this
-# re-emits it after every 401 and the token can never heal — the wizard writes
-# a config the export keeps shadowing. `probe mcp status` names that case; the fix is to
-# drop the export and let the config win.
+# Resolution matches sdk.config.resolve: PROBE_MCP_TOKEN first, then the
+# `mcp_token` that the Probe wizard writes. The write token in the same file is
+# never read — this surface is read-only. Claude Code strips credential-named
+# variables (PROBE_MCP_TOKEN among them) from a plugin helper's environment
+# (measured, 2.1.296), so under Claude Code only the config counts: an
+# exported token alone is no token at all there.
 #
 # It reads the config file rather than calling `probe mcp headers` on purpose. The
 # plugin and the CLI version independently, and a CLI older than the plugin fails
@@ -27,12 +24,10 @@
 # landed, and this read only ever knew v1's top-level key. So the fast path returned
 # nothing on every install the wizard has ever produced, and the whole surface silently
 # rode on the CLI fallback: fine on a machine with `probe` at one of the four paths
-# below, and a hard failure on any other. A failure here is not a degraded MCP, it is
-# an unauthenticated request, which the edge answers with a `WWW-Authenticate`
-# challenge — so Claude Code discovers an authorization server and offers OAuth, and
-# the user is sent to `/mcp` to re-authenticate a device the installer had already
-# authorized. Mirror sdk.config._migrate/load_context here: contexts first, v1 flat
-# second.
+# below, and a hard failure on any other. A failure here is not a degraded MCP: no
+# token is read, the placeholder at the bottom goes out, and Probe "fails to
+# connect" on a device the installer had already authorized. Mirror
+# sdk.config._migrate/load_context here: contexts first, v1 flat second.
 #
 # Diagnostics go to stderr; stdout must be JSON and nothing else.
 set -eu
@@ -277,7 +272,17 @@ do
   fi
 done
 
+# No token anywhere. NEVER exit without a header: Claude Code then sends the
+# request bare, the edge answers with its OAuth challenge, and Claude Code shows
+# "Needs authentication" AND records the server in mcp-needs-auth-cache.json, so
+# every new session for 15 minutes skips Probe without running this helper again
+# (measured, Claude Code 2.1.296; the same happens past its 10s helper timeout).
+# A placeholder the server refuses instead reads as "Failed to connect" with no
+# OAuth and no record, and the next connect runs this helper again: once the
+# wizard writes a token, the session heals on its own. The server knows the
+# placeholder (probe.mcp.server.NO_TOKEN_PLACEHOLDER; tests pin the two).
+#
 # The wording is probe.sdk.session_marker.WIZARD_HINT, inlined: a shell script
 # cannot import it (tests/test_wizard_hint_sync.py pins the two together).
-echo "no Probe MCP token: run the Probe wizard: probe wizard or npx probe-research (or export PROBE_MCP_TOKEN)" >&2
-exit 1
+echo "no Probe MCP token: run the Probe wizard: probe wizard or npx probe-research" >&2
+emit "probe-no-token"

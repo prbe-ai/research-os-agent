@@ -52,8 +52,11 @@ plugin is added to the central prbe-ai marketplace, the install becomes `probe-r
   without a restart additionally wants ≥ 2.1.193, which is implied by the above.)
 - **MCP server** (`.mcp.json`): defaults to the hosted endpoint
   `https://mcp.research.prbe.ai/mcp` (read-only). `bin/probe-mcp-headers` supplies the
-  Authorization header at connect time, reading `PROBE_MCP_TOKEN` or the stored
-  `mcp_token` — so no shell profile is involved and a dock-launched Claude Code works.
+  Authorization header at connect time from the `mcp_token` the Probe wizard stores
+  (Claude Code strips an exported `PROBE_MCP_TOKEN` from the helper), so no shell
+  profile is involved and a dock-launched Claude Code works. With no token it sends a
+  placeholder the server refuses: Probe "fails to connect" until the wizard runs,
+  instead of Claude Code locking it out for 15 minutes behind "Needs authentication".
   Self-host: point it at a local `probe-research-mcp` (see `deploy/mcp/`).
 - **Command:** `/probe-research-setup`.
 - **Hooks** (`hooks/`): a SessionStart version nudge, and session-funnel

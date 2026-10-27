@@ -12,7 +12,7 @@
  *
  * Resolution order, from `probe-mcp-headers`:
  *   1. `PROBE_MCP_TOKEN` env — a shell that already exports it keeps working
- *      untouched.
+ *      untouched (pi passes it through; Claude Code strips it from its helper).
  *   2. The `mcp_token` key in the probe CLI's config.json, read from BOTH
  *      shapes: v2 (`contexts.<current_context>.mcp_token`, current_context
  *      defaulting to "default" exactly like `probe-mcp-headers`' python
@@ -26,7 +26,7 @@
  * instead is the day a read-only MCP client can silently do more than it
  * should.
  *
- * CAVEAT, carried over from `probe-mcp-headers`' own comment: if the
+ * CAVEAT (pi's own: Claude Code strips the variable, pi does not): if the
  * launching shell exports a *stale* `PROBE_MCP_TOKEN`, this re-emits it on
  * every re-resolve and the token can never heal on its own — `probe mcp
  * token set` writes a config the export keeps shadowing. There is nothing
