@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Every wizard result page answers what you asked, then lists only what you must do and what went wrong.** The pages printed every step every helper took, for every coding agent. Interactive runs now show:
+  - **Who records:** "The Probe daemon now records for all 4 coding agents" or "All 4 coding agents record for themselves again", then Next (start new sessions; Codex's hook approval; a daemon key kept for open sessions) and the errors. It was 13 to 25 lines: "Installed 11 skill(s) in <path>: <every name>" as the title, "Takes effect in new X sessions." once per agent, and the reasoning-summaries paragraph.
+  - **Uninstall:** "Removed Probe from all 4 coding agents", "This device is signed out.", the agents, and only the errors (a token the server could not be told to revoke). It was about 34 lines.
+  - **Diagnose:** the verdict ("no problems found" / "2 problems"), one line for the device and one per agent, then the problems, each once; `c` still copies the full report. It was the whole doctor report per agent, about 300 lines for four agents, most of it the device's own sections repeated.
+  - **Settings:** one line per changed setting ("Automatic updates → on") and the errors, instead of a "Codex:" section per agent saying "Already set up the way you asked. Nothing to change.".
+  - **Sign out, account switch, import details:**
+    - Sign out is two lines plus errors.
+    - An account switch is one line, with one capture warning naming every affected agent.
+    - An import's detail page shows the worker's output only when the import did not finish, and drops the job id and log path (`c` copies the path).
+
+  Also:
+  - The install screen says "Session capture paired: Claude Code, Codex, Kimi Code and pi." once, instead of a line per agent with its device id.
+  - Skills are reported as "Installed 11 skills in ~/.claude/skills." without listing every name, in scripted runs too.
+  - Diagnose names a Probe daemon that records with no key, and a sign-in's capture lock as `capture off (finish Install)`.
+  - Update's "Turn on session capture?" answer is one line under the headline, not each agent's configure report.
+
+  Scripted and `--json` runs otherwise keep the full report.
+
 ## 0.332.1
 
 - **The daemon's command spec matches the CLI again.** `cli_spec.json` (the CLI's command tree, which the Probe daemon checks commands against) carried the hash of an older CLI source after #3500, so each daemon host rebuilt its own copy in a ~1 s child process once per CLI version. Commands were never refused; this release ships a spec that matches.
