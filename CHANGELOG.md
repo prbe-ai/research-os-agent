@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.338.0
+
 - Research plan review is automatically included and routed in every agent profile. Remove its settings toggle and restore automatic routing on devices with the retired opt-out.
 
 ## 0.337.0
