@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.332.0
+
 - **Desktop onboarding parity.** The app can now choose or create this computer's default filing workspace before imports, using the wizard's preselection and pin writer. Account changes, deleted/read-only workspaces and conflicting workspace limits are refused. Creation retries reuse the same workspace after a lost response. The app also gains the wizard's settings-only research-plan review, pasted-image upload and reasoning-summary options through shared readers and writers.
 
 ## 0.331.1
