@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  INBOX_PREFIX, KIND_ALERT, Mailbox, MSG_BACK_TO_NORMAL, MSG_READER_FAILING, ORIGIN_HINT, ORIGIN_INBOX, SLOT_HINT,
-  SLOT_UNASKED, inboxSafe, oneLabel, rendered,
+  DAEMON_INSTANCE_HEADER, INBOX_PREFIX, KIND_ALERT, Mailbox, MSG_BACK_TO_NORMAL, MSG_READER_FAILING, ORIGIN_HINT,
+  ORIGIN_INBOX, RECEIPT_REDIRECT, REPORT_BUDGET_MS, SLOT_HINT, SLOT_UNASKED, inboxSafe, oneLabel, rendered,
 } from "../src/core/reads.js";
 
 /** The inbox delivery rule as the mailbox writes it, shared with agent/tests/test_reads_hook.py. */
@@ -359,5 +360,190 @@ describe("delivery receipts (plan hints-relevance T1)", () => {
     expect(JSON.parse(readFileSync(path, "utf8")).by).toBe("pi poller");
     box.touchAlive("before_agent_start", 1031);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ at: 1031, by: "before_agent_start" });
+  });
+});
+
+/** The request a deliverer sends once it showed an inbox message, shared with
+ * agent/tests/test_reads_hook.py (`reads_hook.receipt_requests`). */
+const RECEIPT = JSON.parse(
+  readFileSync(new URL("../../../tests/fixtures/inbox_receipt.json", import.meta.url), "utf-8"),
+) as {
+  budget_s: number;
+  redirect: string;
+  claim_marker: Record<string, unknown>;
+  claim_paths: { hook: string[]; pi: string[] };
+  session: string;
+  server_id: string;
+  cases: Array<{
+    name: string;
+    env: Record<string, string>;
+    config: Record<string, unknown> | null;
+    message: Record<string, unknown>;
+    shown?: boolean;
+    expect: { url: string; authorization: string; instance: string; body: Record<string, unknown> } | null;
+  }>;
+};
+const MACHINE_A = "machine-a-" + "a".repeat(16);
+
+/** A claimed inbox message file, as a deliverer leaves it; its message id. */
+function claimedInbox(sid: string, serverId: string, message: Record<string, unknown>): string {
+  const id = "s" + serverId.replace(/-/g, "");
+  const dir = join(tmp, "reads", "claimed", sid);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${"1".padStart(20, "0")}-${id}.json`), JSON.stringify({
+    id, session: sid, text: "[Probe] Message from Richard Wei (dashboard): ship it", made_at: 1, expires_at: 0, keep: true,
+    ...message,
+  }));
+  return id;
+}
+
+/** A config file for the case, and the environment the receipt reads. */
+function receiptEnv(config: Record<string, unknown> | null, env: Record<string, string> = {}): Record<string, string> {
+  const path = join(tmp, "cli", "config.json");
+  if (config !== null) {
+    mkdirSync(join(tmp, "cli"), { recursive: true });
+    writeFileSync(path, JSON.stringify(config));
+  }
+  return { HOME: join(tmp, "home"), PROBE_CONFIG_PATH: path, ...env };
+}
+
+describe("telling Probe a message it held was shown (G7)", () => {
+  it.each(RECEIPT.cases.map((c) => [c.name, c] as const))("%s: is the shared fixture's", (_name, c) => {
+    const sid = RECEIPT.session;
+    const mailbox = new Mailbox(join(tmp, "reads"), join(tmp, "sessions"), sid);
+    const id = claimedInbox(sid, RECEIPT.server_id, c.message);
+    if (c.shown !== false) mailbox.markShown([id], "pi poller");
+    const got = mailbox.receiptRequests([id, "m0123abcd"], receiptEnv(c.config, c.env));
+    if (c.expect === null) {
+      expect(got).toEqual([]);
+      return;
+    }
+    expect(got).toHaveLength(1);
+    expect(got[0].url).toBe(c.expect.url);
+    expect(got[0].headers.Authorization).toBe(c.expect.authorization);
+    expect(got[0].headers[DAEMON_INSTANCE_HEADER]).toBe(c.expect.instance);
+    expect(JSON.parse(got[0].body)).toEqual(c.expect.body);
+    expect(got[0].redirect).toBe(RECEIPT.redirect);
+    expect(RECEIPT_REDIRECT).toBe(RECEIPT.redirect);
+  });
+
+  it("posts each shown inbox message, never another kind, and spends at most its budget", async () => {
+    expect(REPORT_BUDGET_MS).toBe(RECEIPT.budget_s * 1000);
+    status("ok");
+    publish("s" + RECEIPT.server_id.replace(/-/g, ""), "message", {
+      text: "[Probe] Message from Richard Wei (dashboard): ship it", origin: ORIGIN_INBOX, keep: true, daemon_instance: MACHINE_A,
+    }, 1);
+    publish("a1", "alert", { text: "digits-svm crashed" }, 2);
+    expect(box.deliver(box.newTurn(), "pi poller")).toHaveLength(2);
+    box.markShown(box.lastClaimed, "pi poller");
+    const calls: Array<[string, RequestInit]> = [];
+    const answered = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push([String(url), init ?? {}]);
+      return new Response("{}", { status: 200 });
+    };
+    const env = receiptEnv({ contexts: { default: { companion_token: "pk_daemon", base_url: "https://probe.example" } } });
+    await box.reportDelivered(box.lastClaimed, env, answered as typeof fetch);
+    expect(calls.map(([url, init]) => [url, init.method, (init.headers as Record<string, string>)[DAEMON_INSTANCE_HEADER], init.redirect])).toEqual([
+      [`https://probe.example/v1/sessions/${SID}/messages/${RECEIPT.server_id}/ack`, "POST", MACHINE_A, "error"],
+    ]);
+
+    // Probe silent: the report gives up at its budget, and never rejects.
+    const silent = (_url: string | URL | Request, _init?: RequestInit) => new Promise<Response>(() => undefined);
+    const started = Date.now();
+    await box.reportDelivered(box.lastClaimed, env, silent as typeof fetch, 50);
+    expect(Date.now() - started).toBeLessThan(1000);
+    const failing = async () => {
+      throw new Error("offline");
+    };
+    await expect(box.reportDelivered(box.lastClaimed, env, failing as typeof fetch)).resolves.toBeUndefined();
+  });
+
+  it("asks nothing without the daemon's key", async () => {
+    const id = claimedInbox(SID, RECEIPT.server_id, { origin: ORIGIN_INBOX, kind: "message", daemon_instance: MACHINE_A });
+    box.markShown([id], "pi poller");
+    let asked = 0;
+    const counting = async () => {
+      asked += 1;
+      return new Response("{}");
+    };
+    await box.reportDelivered([id], receiptEnv({ contexts: { default: { token: "pk_cli" } } }), counting as typeof fetch);
+    expect(asked).toBe(0);
+  });
+});
+
+/** A server on 127.0.0.1 that records each request and answers with `answer`. */
+async function localServer(answer: (req: IncomingMessage, res: import("node:http").ServerResponse) => void): Promise<{
+  server: Server;
+  url: string;
+  seen: Array<{ method: string; url: string; authorization: string | undefined }>;
+}> {
+  const seen: Array<{ method: string; url: string; authorization: string | undefined }> = [];
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method ?? "", url: req.url ?? "", authorization: req.headers.authorization });
+    req.resume();
+    answer(req, res);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as { port: number };
+  return { server, url: `http://127.0.0.1:${address.port}`, seen };
+}
+
+describe("a receipt's key and a handoff that failed (review of #3530)", () => {
+  it("never follows a redirect, so the key never reaches the host it names", async () => {
+    const elsewhere = await localServer((_req, res) => res.end("{}"));
+    const probe = await localServer((req, res) => {
+      res.writeHead(302, { Location: `${elsewhere.url}${req.url}` });
+      res.end();
+    });
+    try {
+      const id = claimedInbox(SID, RECEIPT.server_id, { origin: ORIGIN_INBOX, kind: "message", daemon_instance: MACHINE_A });
+      box.markShown([id], "pi poller");
+      await box.reportDelivered([id], receiptEnv({ companion_token: "pk_daemon", base_url: probe.url }));
+      expect(probe.seen.map((r) => [r.method, r.authorization])).toEqual([["POST", "Bearer pk_daemon"]]);
+      expect(elsewhere.seen).toEqual([]);
+    } finally {
+      probe.server.close();
+      elsewhere.server.close();
+    }
+  });
+
+  it("puts an inbox message it never handed over back to waiting, and reports nothing for it", async () => {
+    status("ok");
+    const id = "s" + RECEIPT.server_id.replace(/-/g, "");
+    publish(id, "message", {
+      text: "[Probe] Message from Richard Wei (dashboard): ship it", origin: ORIGIN_INBOX, keep: true, daemon_instance: MACHINE_A,
+    }, 1);
+    publish("a1", "alert", { text: "digits-svm crashed" }, 2);
+    expect(box.deliver(box.newTurn(), "pi poller")).toHaveLength(2);
+    // sendMessage threw: nothing was marked shown.
+    box.returnUnshown(box.lastClaimed);
+    expect(box.waiting().map(([, m]) => m.id)).toEqual([id]);
+    let asked = 0;
+    const counting = async () => {
+      asked += 1;
+      return new Response("{}");
+    };
+    const env = receiptEnv({ contexts: { default: { companion_token: "pk_daemon", base_url: "https://probe.example" } } });
+    await box.reportDelivered([id], env, counting as typeof fetch);
+    expect(asked).toBe(0);
+    expect(box.deliver(box.currentTurn(), "pi poller")).toHaveLength(1);
+    box.markShown(box.lastClaimed, "pi poller");
+    await box.reportDelivered(box.lastClaimed, env, counting as typeof fetch);
+    expect(asked).toBe(1);
+  });
+});
+
+describe("every claim pi makes of an inbox message carries the marker (review of #3530)", () => {
+  it.each(RECEIPT.claim_paths.pi.map((path) => [path] as const))("%s", (path) => {
+    expect(path).toBe("claim"); // pi claims only by its own rename
+    status("ok");
+    const id = "s" + RECEIPT.server_id.replace(/-/g, "");
+    publish(id, "message", {
+      text: "[Probe] Message from Richard Wei (dashboard): ship it", origin: ORIGIN_INBOX, keep: true, daemon_instance: MACHINE_A,
+    }, 1);
+    expect(box.deliver(box.newTurn(), "pi poller")).toHaveLength(1);
+    const lines = readFileSync(join(tmp, "reads", "claimed", SID, "log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const last = lines.filter((l) => l.id === id).pop();
+    for (const [key, value] of Object.entries(RECEIPT.claim_marker)) expect(last[key]).toEqual(value);
   });
 });

@@ -62,6 +62,17 @@ of its deliverers was never received (`claimed/<sid>/*.*.json`: `deliver_orphans
 `claude-reads.json` (the Stop waiter; Claude Code only, since `asyncRewake` is a
 Claude Code key). Under Codex: the same prompt and after-tool-call delivery, no wake.
 
+SHOWN, SAID AT ONCE (G7). Once its output carrying a message Probe held for the
+session (`origin` "inbox") went out -- and only then, after its `shown` line --
+the hook tells Probe itself (`report_delivered`: `delivered_to_agent`, under
+the lease holder's name the worker wrote in the file, with the daemon's own key
+from the CLI config), best effort and within REPORT_BUDGET_S in all, never
+following a redirect (the key goes to the configured API only): a daemon that
+dies before its own report never leaves the message for another machine to show
+again. No key, no holder named (an older worker's file), or no answer in time:
+nothing more. An inbox message whose output never went out goes back to waiting
+(`return_unshown`), so the next hook shows it; Probe is never told it was shown.
+
 Fail-soft: any error prints nothing and exits 0; a hook never breaks a session.
 """
 
@@ -475,12 +486,17 @@ def claim(sid: str, path: Path, by: str) -> "dict | None":
     return msg
 
 
-def _log_claim(sid: str, message_id: str, by: str, msg: "dict | None") -> None:
+def _log_claim(sid: str, message_id: str, by: str, msg: "dict | None", receipt: "str | None" = None) -> None:
     """`mailbox._log_claim`: one claim log line, with the message's `origin`
     when it has one (a hint, the writer's), and `shows: 1`: this hook writes a
     `shown` line once it handed the message over (`mark_shown`), so a claim
-    with none is a hint lost between the two (`service.hints.delivery_receipt`)."""
+    with none is a hint lost between the two (`service.hints.delivery_receipt`),
+    and an inbox message with none is not shown (`mailbox.InboxClaims`).
+    `receipt`: the token of a Probe service claim this hook received (the
+    service's own line carries no marker)."""
     entry = {"id": message_id, "by": by, "at": time.time(), "shows": 1}
+    if receipt:
+        entry["receipt"] = receipt
     origin = msg.get("origin") if msg else None
     if isinstance(origin, str) and origin:
         entry["origin"] = origin
@@ -895,14 +911,29 @@ def receive(sid: str, claimed: Path, by: str, *, ledger: bool) -> "dict | None":
     rename of `claimed/<stem>.<token>.json` to the plain name. Of any number of
     deliverers trying, exactly one gets it (the rename picks the one); None for
     the others. `ledger`: also log the claim when no line names it yet (the
-    service died before its own line)."""
+    service died before its own line). An inbox message always gets a line of
+    this hook's, with its marker (`shows: 1`)."""
     plain = _plain(claimed)
+    # An inbox message's marked line is written BEFORE the rename: a hook killed
+    # between the two must leave a claim that counts as unshown (it waits
+    # again), never the service's unmarked line alone, which reads as an old
+    # hook's shown claim and would be acked unseen (`mailbox.InboxClaims`).
+    early = _message(_read_json(claimed))
+    inbox = early is not None and early.get("origin") == ORIGIN_INBOX and early.get("kind") == KIND_MESSAGE
+    if inbox:
+        if ledger and not _logged(sid, early["id"]):
+            _log_claim(sid, early["id"], by, early)
+        else:
+            # The service's claim line has no marker: this one says a hook that
+            # writes `shown` lines holds the claim, so the message counts as
+            # shown only once its `shown` line exists.
+            _log_claim(sid, early["id"], by, early, receipt=claimed.name[: -len(".json")].split(".", 1)[-1])
     try:
         os.rename(claimed, plain)
     except OSError:
         return None
     msg = _message(_read_json(plain))
-    if msg is not None and ledger and not _logged(sid, msg["id"]):
+    if msg is not None and not inbox and ledger and not _logged(sid, msg["id"]):
         _log_claim(sid, msg["id"], by, msg)
     return msg
 
@@ -1018,6 +1049,202 @@ def _next_lapse(sid: str, asks: "set[str]", now: "float | None" = None) -> "floa
 
 
 # ---------------------------------------------------------------------------
+# Shown: the hook tells Probe itself (G7).
+# ---------------------------------------------------------------------------
+
+#: `mailbox.INBOX_ID_PREFIX`: an inbox message's id is this, then its server id's hex.
+INBOX_ID_PREFIX = "s"
+#: `mailbox.DAEMON_INSTANCE_RE`: a lease holder's name as the server takes one.
+DAEMON_INSTANCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+#: `probe_api.DAEMON_INSTANCE_HEADER`.
+DAEMON_INSTANCE_HEADER = "X-Probe-Daemon-Instance"
+#: `probe_api.ACK_DELIVERED_TO_AGENT`.
+ACK_DELIVERED_TO_AGENT = "delivered_to_agent"
+#: `probe.daemon.model.ENV_KEY`: the daemon's own key, before the CLI config's
+#: `companion_token`, as the daemon reads them (`model.endpoint`).
+DAEMON_KEY_ENV = "PROBE_DAEMON_KEY"
+#: `probe.sdk.config.DEFAULT_BASE_URL`.
+DEFAULT_BASE_URL = "https://api.research.prbe.ai"
+#: The longest the hook spends telling Probe what it showed: every message at
+#: once, all of them within this (the hook's own timeout is 5 s).
+REPORT_BUDGET_S = 1.5
+
+
+def _cli_context() -> dict:
+    """The CLI config's active context (`sdk.config.load_context`): its named
+    `current_context` (else "default") of a v2 file, the whole file of a v1 one;
+    {} when there is none."""
+    override = os.environ.get("PROBE_CONFIG_PATH")
+    if override:
+        path = Path(override)
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        path = Path(base) / "probe" / "config.json"
+    data = _read_json(path) or {}
+    contexts = data.get("contexts")
+    if isinstance(contexts, dict):
+        active = contexts.get(data.get("current_context") or "default")
+        return active if isinstance(active, dict) else {}
+    return data
+
+
+def daemon_endpoint() -> "tuple[str, str] | None":
+    """`model.endpoint`: (the Probe API, the daemon's key) as the session's
+    daemon polls with them -- PROBE_DAEMON_KEY or the context's
+    `companion_token`, PROBE_BASE_URL or its `base_url` -- or None without a key."""
+    ctx = _cli_context()
+    key = os.environ.get(DAEMON_KEY_ENV) or ctx.get("companion_token")
+    if not key or not isinstance(key, str):
+        return None
+    base = os.environ.get("PROBE_BASE_URL") or ctx.get("base_url") or DEFAULT_BASE_URL
+    return str(base).rstrip("/"), key
+
+
+#: `mailbox.INBOX_LOG_TAIL_BYTES`: how much of the shown log is read.
+SHOWN_LOG_TAIL_BYTES = 256 * 1024
+
+
+def _shown_ids(sid: str) -> "set[str]":
+    """The message ids `claimed/<sid>/shown.jsonl` names (its tail): handed over."""
+    try:
+        with (_claimed_dir(sid) / "shown.jsonl").open("rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            handle.seek(max(0, size - SHOWN_LOG_TAIL_BYTES))
+            tail = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return set()
+    out = set()
+    for line in tail.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+            out.add(entry["id"])
+    return out
+
+
+def _claimed_inbox(sid: str, message_id: str) -> "tuple[Path, dict] | None":
+    """The claimed file (plain name: its receipt done) and data of inbox message
+    `message_id`, or None."""
+    folder = _claimed_dir(sid)
+    for path in folder.glob(f"*-{message_id}.json") if folder.is_dir() else ():
+        if path.name.count(".") != 1 or path.name[: -len(".json")].rsplit("-", 1)[-1] != message_id:
+            continue
+        data = _read_json(path) or {}
+        if data.get("origin") == ORIGIN_INBOX and data.get("kind") == KIND_MESSAGE:
+            return path, data
+    return None
+
+
+def return_unshown(sid: str, message_ids: "list[str]") -> None:
+    """`mailbox.unclaim`: the inbox messages among `message_ids` this hook took
+    and never handed over (its output did not go out) go back to waiting, so
+    the next hook shows them. Every other kind keeps its claim. Never raises."""
+    for message_id in message_ids:
+        try:
+            found = _claimed_inbox(sid, message_id)
+            if found is not None:
+                path = found[0]
+                _messages_dir(sid).mkdir(parents=True, exist_ok=True)
+                os.rename(path, _messages_dir(sid) / path.name)
+        except OSError:
+            continue
+
+
+def _shown_inbox(sid: str, message_id: str, shown: "set[str] | None" = None) -> "tuple[str, str] | None":
+    """(its server id, its lease holder) for inbox message `message_id` that
+    this hook took (`claimed/<sid>/<ns>-<id>.json`) and handed over (its
+    `shown` line), or None: not an inbox message, never marked shown, or one an
+    older worker wrote without a holder."""
+    import uuid  # noqa: PLC0415
+
+    if not message_id.startswith(INBOX_ID_PREFIX):
+        return None
+    try:
+        server_id = str(uuid.UUID(hex=message_id[len(INBOX_ID_PREFIX):]))
+    except ValueError:
+        return None
+    if message_id not in (_shown_ids(sid) if shown is None else shown):
+        return None
+    found = _claimed_inbox(sid, message_id)
+    holder = found[1].get("daemon_instance") if found is not None else None
+    if isinstance(holder, str) and DAEMON_INSTANCE_RE.fullmatch(holder):
+        return server_id, holder
+    return None
+
+
+def receipt_requests(sid: str, message_ids: "list[str]") -> "list[dict]":
+    """The requests that tell Probe these messages were shown: one per inbox
+    message among them that was marked shown and names its lease holder,
+    `{"url", "headers", "body", "redirect"}` (RECEIPT_REDIRECT: never
+    followed); none without the daemon's key."""
+    marked = _shown_ids(sid) if any(mid.startswith(INBOX_ID_PREFIX) for mid in message_ids) else set()
+    shown = [found for found in (_shown_inbox(sid, mid, marked) for mid in message_ids) if found]
+    endpoint = daemon_endpoint() if shown else None
+    if endpoint is None:
+        return []
+    from urllib.parse import quote  # noqa: PLC0415
+
+    base, key = endpoint
+    return [{"url": f"{base}/v1/sessions/{quote(sid, safe='')}/messages/{server_id}/ack",
+             "headers": {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                         DAEMON_INSTANCE_HEADER: holder},
+             "body": json.dumps({"state": ACK_DELIVERED_TO_AGENT}),
+             "redirect": RECEIPT_REDIRECT}
+            for server_id, holder in shown]
+
+
+#: A receipt never follows a redirect: urllib would carry the key to wherever
+#: the answer points, another host or plain http included (review of #3530).
+#: A redirect is a failed receipt (pi: `fetch`'s `redirect: "error"`).
+RECEIPT_REDIRECT = "error"
+
+
+def _opener():
+    """urllib's opener, with a redirect handler that follows none."""
+    import urllib.request  # noqa: PLC0415
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ARG002
+            return None  # urllib then raises the 3xx as an HTTPError
+
+    return urllib.request.build_opener(NoRedirect)
+
+
+def _post(request: dict, timeout: float) -> None:
+    import urllib.request  # noqa: PLC0415
+
+    try:
+        req = urllib.request.Request(request["url"], data=request["body"].encode("utf-8"),
+                                     headers=request["headers"], method="POST")
+        with _opener().open(req, timeout=timeout) as resp:
+            resp.read()
+    except Exception:  # noqa: BLE001 -- best effort (a redirect too): the daemon says it again
+        pass
+
+
+def report_delivered(sid: str, message_ids: "list[str]", budget: float = REPORT_BUDGET_S) -> None:
+    """Tell Probe the inbox messages among `message_ids` were shown (their
+    output went out), all at once and within `budget` seconds in all: a request
+    still out then is left to finish or die with the hook. Never raises."""
+    try:
+        requests = receipt_requests(sid, message_ids)
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session
+        return
+    if not requests:
+        return
+    import threading  # noqa: PLC0415
+
+    deadline = time.monotonic() + budget
+    threads = [threading.Thread(target=_post, args=(request, budget), daemon=True) for request in requests]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+
+# ---------------------------------------------------------------------------
 # Events.
 # ---------------------------------------------------------------------------
 
@@ -1067,9 +1294,15 @@ def _emit(event: str, texts: "list[str]", notice: "str | None" = None) -> bool:
 
 
 def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "str | None") -> None:
-    """Emit this hook's messages, and record the ones that went out as shown."""
+    """Emit this hook's messages, record the ones that went out as shown, and
+    tell Probe which of them it held for the session (`report_delivered`).
+    Output that never went out: its inbox messages wait again (`return_unshown`)."""
+    ids = [mid for mid, _text in items]
     if _emit(event, [text for _id, text in items], notice):
-        mark_shown(sid, [mid for mid, _text in items], event)
+        mark_shown(sid, ids, event)
+        report_delivered(sid, ids)
+    else:
+        return_unshown(sid, ids)
 
 
 def on_prompt(payload: dict) -> int:
@@ -1161,8 +1394,10 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
                 sys.stderr.write("\n\n".join(text for _id, text in items))
                 sys.stderr.flush()
             except (OSError, ValueError):
+                return_unshown(sid, [mid for mid, _text in items])
                 return 2
             mark_shown(sid, [mid for mid, _text in items], "Stop")
+            report_delivered(sid, [mid for mid, _text in items])
             return 2
         waited = time.monotonic() - started
         if asks:

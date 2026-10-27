@@ -671,11 +671,17 @@ export function prepareExtension(env: ImplEnv): Candidate {
       const texts = box.deliver(box.currentTurn(), "pi poller", !idle);
       if (texts.length) {
         if (idle) box.markWoke(); // the turn this starts is the same turn going on
-        api.sendMessage(
-          { customType: "probe-reads", content: texts.join("\n\n"), display: true },
-          { deliverAs: "steer", triggerTurn: true },
-        );
+        try {
+          api.sendMessage(
+            { customType: "probe-reads", content: texts.join("\n\n"), display: true },
+            { deliverAs: "steer", triggerTurn: true },
+          );
+        } catch (err) {
+          box.returnUnshown(box.lastClaimed); // never handed over: its inbox messages wait again
+          throw err;
+        }
         box.markShown(box.lastClaimed, "pi poller"); // only once sendMessage returned
+        void box.reportDelivered(box.lastClaimed); // Probe hears it was shown (inbox only; never awaited)
       }
       readsNotify(live, box.researcherNotice());
     } catch (err) {
@@ -1156,6 +1162,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
           if (texts.length) {
             notice = [notice, ...texts].filter(Boolean).join("\n\n");
             box.markShown(box.lastClaimed, "before_agent_start"); // returned to pi as this turn's message
+            void box.reportDelivered(box.lastClaimed); // Probe hears it was shown (inbox only; never awaited)
           }
           readsNotify(ctx, box.researcherNotice());
         }
