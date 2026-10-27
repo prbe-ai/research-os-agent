@@ -88,6 +88,15 @@ SERVICE_CHILD_ENV = "PROBE_SERVICE_CHILD"
 HOOK_QUEUE_DIRNAME = "hooks-queue"
 HOOK_QUEUE_DRAINER = "drained-by"
 
+#: `probe uninstall`'s own folder, `<state dir>/uninstall` (plan
+#: clean-uninstall-reinstall U-T3/U-T9): `barrier.json` (while it is LIVE
+#: nothing of Probe's starts: `client.uninstall_barrier`), `plan.json` (what the
+#: uninstall owns) and `finisher.py` (the stdlib copy that deletes the CLI
+#: last). Of the install, not of one machine: under the state dir itself.
+UNINSTALL_DIRNAME = "uninstall"
+UNINSTALL_BARRIER_NAME = "barrier.json"
+UNINSTALL_PLAN_NAME = "plan.json"
+
 #: Where `uv tool install probe-research` puts the CLI's interpreter, for a
 #: client that finds no runtime.json (a CLI that has not run since its install).
 UV_TOOL_PYTHON = (".local", "share", "uv", "tools", "probe-research", "bin", "python")
@@ -250,6 +259,19 @@ def update_state_path() -> Path:
 
 def app_update_path() -> Path:
     return root_dir() / APP_UPDATE_NAME
+
+
+def uninstall_dir() -> Path:
+    """`~/.local/state/probe/uninstall`: `probe uninstall`'s barrier, plan and finisher."""
+    return state_dir() / UNINSTALL_DIRNAME
+
+
+def uninstall_barrier_path() -> Path:
+    return uninstall_dir() / UNINSTALL_BARRIER_NAME
+
+
+def uninstall_plan_path() -> Path:
+    return uninstall_dir() / UNINSTALL_PLAN_NAME
 
 
 def fallback_python() -> Path:

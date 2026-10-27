@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib
 import json
 import os
 import socket
@@ -147,6 +148,42 @@ class Ensured:
     #: This process runs with no_new_privs (Linux): a service it started would
     #: too, and could do no caller's work (`caller.landlock_possible`). None started.
     CONFINED = "confined"
+    #: `probe uninstall` runs (its barrier is LIVE: `uninstall_barrier`). None started.
+    UNINSTALLING = "uninstalling"
+
+
+# -- the uninstall barrier (plan clean-uninstall-reinstall, build contract) ------
+#
+# `probe uninstall` writes `<state dir>/uninstall/barrier.json`; while it is
+# LIVE nothing of Probe's starts or updates anything: `ensure` (UNINSTALLING),
+# the service's own start, the guard, the keeper, `write_runtime`, a daemon
+# worker's start, and every installer. ONE reader decides LIVE / STALE:
+# `probe._shared.uninstall_barrier` (stdlib). This file is also the tap's copy,
+# which has no `probe` to import: there the file being present is enough
+# (conservative: nothing parsed, nothing cleared; the CLI's reader clears a
+# stale one).
+
+UNINSTALLING_MESSAGE = "Probe is being uninstalled on this computer; nothing of Probe starts until that finishes"
+
+
+def uninstall_barrier() -> dict | None:
+    """The uninstall barrier's record when it is LIVE, else None (none, or a
+    stale one). `{}` for a LIVE one nothing could be read of. Never raises."""
+    try:
+        os.stat(paths.uninstall_barrier_path())
+    except FileNotFoundError:
+        return None  # the common path: one failed stat, nothing imported
+    except OSError:
+        pass
+    try:
+        reader = importlib.import_module("probe._shared.uninstall_barrier")
+    except ImportError:
+        return {}
+    try:
+        data = reader.read()
+        return data if data is not None and reader.state(data) == reader.State.LIVE else None
+    except Exception:  # noqa: BLE001 -- a broken barrier reads as an uninstall running
+        return {}
 
 
 class Unanswered(ConnectionError):
@@ -721,6 +758,8 @@ def write_runtime(python: str, cli_version: str) -> bool:
 
     Cheap when nothing changed: one small read. True when the file was written.
     """
+    if uninstall_barrier() is not None:
+        return False  # Probe is being uninstalled: nothing of it is recorded again
     # abspath, never realpath: a venv's python is a symlink to the base
     # interpreter, and resolving it would lose the venv.
     wanted = {"python": os.path.abspath(python), "cli_version": cli_version}
@@ -934,9 +973,13 @@ def ensure(*, wait: float = 0.0) -> str:
     """Make sure a service runs (an `Ensured` value). Never raises.
 
     `wait` > 0 polls for the socket that long after a spawn (`probe service
-    start`); hooks and taps pass nothing and go on at once.
+    start`); hooks and taps pass nothing and go on at once. While `probe
+    uninstall` runs (`uninstall_barrier`): UNINSTALLING, nothing started,
+    nothing written.
     """
     _reap()
+    if uninstall_barrier() is not None:
+        return Ensured.UNINSTALLING
     probe = connect(0.5)
     if probe is not None:
         probe.close()
