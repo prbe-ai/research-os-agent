@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.336.1
+
 - **Wizard polish from a click-through of 0.333.0 in a real terminal.**
   - Diagnose says each problem once and names every agent that has it ("Claude Code and Codex: could not verify the capture credential"). It used to repeat it under each agent, and it said Codex's MCP login twice in different words.
   - Three or more coding agents read "Claude Code, Codex, pi and Kimi Code", not "Claude Code and Codex and pi and Kimi Code".
