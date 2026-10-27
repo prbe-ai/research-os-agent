@@ -31,6 +31,9 @@ _KIMI_STATE_FILE = "state.json"
 _KIMI_STATE_MAX_BYTES = 1024 * 1024
 
 SAMPLE_BYTES = 2 * 1024 * 1024
+#: `check_identity`'s first read from a Claude transcript's end; without a
+#: primary record in it, the whole SAMPLE_BYTES window is read.
+VERDICT_FIRST_BYTES = 64 * 1024
 
 
 class IdentityMismatch(ReconciliationRequired):
@@ -42,51 +45,107 @@ class IdentityMismatch(ReconciliationRequired):
 
 
 def validate_identity(path: Path, source: str, session_id: str) -> dict:
+    return _identify(path, source, session_id, verdict_only=False)
+
+
+def check_identity(path: Path, source: str, session_id: str) -> None:
+    """`validate_identity`'s verdict without its proof. A Claude transcript is
+    read back from its end only as far as its last primary record (usually its
+    last line), where the proof parses every record of the last SAMPLE_BYTES
+    for the lineage. Session discovery checks every transcript on the machine,
+    and only the verdict decides there."""
+    _identify(path, source, session_id, verdict_only=True)
+
+
+def _is_primary(record: dict) -> bool:
+    return bool(
+        record.get("type") in ("user", "assistant")
+        and not record.get("isSidechain")
+        and record.get("sessionId")
+    )
+
+
+#: What `json.loads` raises on a line it cannot use. RecursionError: a line
+#: nested past the interpreter's limit (about 1,000 levels before Python 3.12).
+_UNPARSABLE = (ValueError, UnicodeDecodeError, RecursionError)
+
+
+def _records(lines, marker: bytes | None = None):
+    """The JSON objects among `lines`, in order. With `marker`, only lines that
+    could hold it: its literal bytes, a \\u escape that could spell it, or a NUL
+    (a UTF-16/32 line `json.loads` would still decode)."""
+    for line in lines:
+        if marker is not None and marker not in line and b"\\u" not in line and b"\x00" not in line:
+            continue
+        try:
+            value = json.loads(line)
+        except _UNPARSABLE:
+            continue
+        if isinstance(value, dict):
+            yield value
+
+
+def _window(handle, size: int, span: int, *, tail: bool) -> list[bytes]:
+    """The complete lines of the first (`tail=False`) or last `span` bytes."""
+    if not tail:
+        handle.seek(0)
+        lines = handle.read(span).splitlines()
+        return lines[:-1] if size > span else lines
+    start = max(0, size - span)
+    handle.seek(start)
+    lines = handle.read().splitlines()
+    return lines[1:] if start > 0 else lines
+
+
+def _last_primary(handle, size: int) -> dict | None:
+    """The last primary record in the last SAMPLE_BYTES, reading as little as it
+    can: a record whole inside a shorter span is whole inside the full one, and
+    nothing after it is primary."""
+    for span in (VERDICT_FIRST_BYTES, SAMPLE_BYTES):
+        lines = _window(handle, size, span, tail=True)
+        found = next((r for r in _records(reversed(lines)) if _is_primary(r)), None)
+        if found is not None or span >= size:
+            return found
+    return None
+
+
+def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -> dict:
     try:
         expected = str(UUID(session_id))
     except (ValueError, TypeError, AttributeError) as exc:
         raise ReconciliationRequired("malformed source session identity") from exc
     with path.open("rb") as handle:
-        head = handle.read(SAMPLE_BYTES)
         size = handle.seek(0, 2)
-        handle.seek(max(0, size - SAMPLE_BYTES))
-        tail = handle.read()
-    head_lines = head.splitlines()
-    tail_lines = tail.splitlines()
-    if size > SAMPLE_BYTES:
-        head_lines = head_lines[:-1]
-        tail_lines = tail_lines[1:]
-    try:
-        fmt = _harness(source).transcripts["format"]
-    except (KeyError, TypeError) as exc:
-        raise ReconciliationRequired(f"no identity check for capture source {source!r}") from exc
-    if fmt == FORMAT_KIMI:
-        return _kimi_identity(path, head_lines, _harness(source), expected)
-    if fmt != FORMAT_CLAUDE and fmt not in _HEADER_TYPE:
-        raise ReconciliationRequired(f"no identity check for transcript format {fmt!r}")
-    records = []
-    # Claude's current leg is its LAST primary record; header formats open with theirs.
-    for line in head_lines if fmt != FORMAT_CLAUDE else tail_lines:
         try:
-            value = json.loads(line)
-            if isinstance(value, dict):
-                records.append(value)
-        except (ValueError, UnicodeDecodeError):
-            continue
+            fmt = _harness(source).transcripts["format"]
+        except (KeyError, TypeError) as exc:
+            raise ReconciliationRequired(f"no identity check for capture source {source!r}") from exc
+        if fmt == FORMAT_KIMI:
+            head_lines = _window(handle, size, SAMPLE_BYTES, tail=False)
+            return _kimi_identity(path, head_lines, _harness(source), expected)
+        if fmt != FORMAT_CLAUDE and fmt not in _HEADER_TYPE:
+            raise ReconciliationRequired(f"no identity check for transcript format {fmt!r}")
+        # Claude's current leg is its LAST primary record; header formats open with theirs.
+        if fmt == FORMAT_CLAUDE and verdict_only:
+            last = _last_primary(handle, size)
+            records = [last] if last is not None else []
+        elif fmt == FORMAT_CLAUDE:
+            records = list(_records(_window(handle, size, SAMPLE_BYTES, tail=True)))
+        else:
+            head_lines = _window(handle, size, SAMPLE_BYTES, tail=False)
+            records = list(_records(head_lines, _HEADER_TYPE[fmt].encode()))
     native = None
     lineage = []
     source_cwd = None
     if fmt == FORMAT_CLAUDE:
-        primary = [
-            r
-            for r in records
-            if r.get("type") in ("user", "assistant")
-            and not r.get("isSidechain")
-            and r.get("sessionId")
-        ]
+        primary = [r for r in records if _is_primary(r)]
         if primary:
             native = primary[-1]["sessionId"]
-            lineage = sorted({r["sessionId"] for r in primary if r["sessionId"] != native})
+            # Only string ids: a malformed one would make the proof crash where the verdict passes.
+            lineage = sorted({
+                r["sessionId"] for r in primary
+                if isinstance(r["sessionId"], str) and r["sessionId"] != native
+            })
             source_cwd = next(
                 (r["cwd"] for r in primary if r["sessionId"] == native and r.get("cwd")), None
             )
@@ -95,14 +154,14 @@ def validate_identity(path: Path, source: str, session_id: str) -> dict:
         nested = fmt == FORMAT_CODEX  # Codex wraps the header fields in `payload`
         headers = [r for r in records if r.get("type") == kind]
         if headers:
-            payload = headers[0].get("payload", {}) if nested else headers[0]
+            payload = _header_fields(headers[0], nested)
             native = payload.get("id")
             source_cwd = payload.get("cwd")
             for key in ("forked_from_id", "parentSession", "parent_session_id"):
                 if payload.get(key):
                     lineage.append(str(payload[key]))
             if any(
-                (r.get("payload", {}) if nested else r).get("id") != native
+                _header_fields(r, nested).get("id") != native
                 for r in headers
             ):
                 raise IdentityMismatch("conflicting native session headers")
@@ -125,6 +184,12 @@ def validate_identity(path: Path, source: str, session_id: str) -> dict:
     return proof
 
 
+def _header_fields(record: dict, nested: bool) -> dict:
+    """A header's fields; one that is not an object proves nothing."""
+    fields = record.get("payload") if nested else record
+    return fields if isinstance(fields, dict) else {}
+
+
 def _same_uuid(value: object, expected: str) -> bool:
     try:
         return str(UUID(str(value))) == expected
@@ -142,7 +207,7 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
     """
     try:
         first = json.loads(head_lines[0]) if head_lines else None
-    except (ValueError, UnicodeDecodeError):
+    except _UNPARSABLE:
         first = None
     if not isinstance(first, dict) or first.get("type") != _KIMI_HEADER_TYPE:
         raise ReconciliationRequired("transcript does not open with a Kimi Code header")
@@ -161,7 +226,7 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
     try:
         with (folder / _KIMI_STATE_FILE).open("rb") as handle:
             state = json.loads(handle.read(_KIMI_STATE_MAX_BYTES))
-    except (OSError, ValueError, UnicodeDecodeError) as exc:
+    except (OSError, *_UNPARSABLE) as exc:
         raise ReconciliationRequired("Kimi Code session state is unreadable") from exc
     if not isinstance(state, dict) or not _same_uuid(
         harness.canonical_session_id(state.get("id") if isinstance(state.get("id"), str) else ""),
