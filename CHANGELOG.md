@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The daemon's command spec matches the CLI again.** `cli_spec.json` (the CLI's command tree, which the Probe daemon checks commands against) carried the hash of an older CLI source after #3500, so each daemon host rebuilt its own copy in a ~1 s child process once per CLI version. Commands were never refused; this release ships a spec that matches.
+
 ## 0.332.0
 
 - **Desktop onboarding parity.** The app can now choose or create this computer's default filing workspace before imports, using the wizard's preselection and pin writer. Account changes, deleted/read-only workspaces and conflicting workspace limits are refused. Creation retries reuse the same workspace after a lost response. The app also gains the wizard's settings-only research-plan review, pasted-image upload and reasoning-summary options through shared readers and writers.
