@@ -2301,20 +2301,39 @@ def set_session_state(
     if not valid_session_id(session_id) or state not in STATES:
         return False
     with _StateLock(session_id):
-        keep = _close_inline(session_id, inline_marker(session_id), now)
-        if keep is None:
-            return False
-        was_default = not explicit and state_source(session_id) == SOURCE_DEFAULT
-        if not _set_state_unlocked(session_id, state):
-            return False
-        if not keep:
-            _remove_inline_marker(session_id)
-        if explicit:
-            _publish_atomically(state_source_path(session_id), SOURCE_EXPLICIT + "\n")
-        elif was_default:
-            # Rewritten AFTER the state, so the source is not older than it.
-            _publish_atomically(state_source_path(session_id), SOURCE_DEFAULT + "\n")
+        return _set_session_state_locked(session_id, state, now, explicit=explicit)
+
+
+def _set_session_state_locked(session_id: str, state: str, now: "float | None", *, explicit: bool) -> bool:
+    """`set_session_state`'s move, with the session's `_StateLock` already held."""
+    keep = _close_inline(session_id, inline_marker(session_id), now)
+    if keep is None:
+        return False
+    was_default = not explicit and state_source(session_id) == SOURCE_DEFAULT
+    if not _set_state_unlocked(session_id, state):
+        return False
+    if not keep:
+        _remove_inline_marker(session_id)
+    if explicit:
+        _publish_atomically(state_source_path(session_id), SOURCE_EXPLICIT + "\n")
+    elif was_default:
+        # Rewritten AFTER the state, so the source is not older than it.
+        _publish_atomically(state_source_path(session_id), SOURCE_DEFAULT + "\n")
     return True
+
+
+def lower_session_state(session_id: str, state: str) -> "bool | None":
+    """Move `session_id` to `state` only when its switch is louder than that, read
+    and written under the session's own lock, so a switch the person moves at the
+    same moment is compared against, never overwritten by a louder value (an
+    explicit choice, as `set_session_state`). True: it moved; None: it was not
+    louder (nothing to do); False: the write failed."""
+    if not valid_session_id(session_id) or state not in STATES:
+        return False
+    with _StateLock(session_id):
+        if not louder(session_state(session_id), state):
+            return None
+        return _set_session_state_locked(session_id, state, None, explicit=True) and session_state(session_id) == state
 
 
 def _set_state_unlocked(session_id: str, state: str) -> bool:
@@ -3400,6 +3419,8 @@ def write_default_tracking(on: bool) -> Path:
         # recording. False maps to read-only -- what this boolean has always
         # meant: stop recording, keep searching.
         data[DEFAULTS_KEY][STATE_DEFAULT_KEY] = STATE_FULL if on else STATE_READ_ONLY
+        # A change made here is the person's own: it no longer reads as staff's.
+        data[DEFAULTS_KEY].pop(DEFAULT_SET_BY_KEY, None)
         _save_json_file(target, data, private=True, _resolved=True)
     return path
 
@@ -3443,8 +3464,124 @@ def write_default_state(state: str) -> Path:
         data[DEFAULTS_KEY][STATE_DEFAULT_KEY] = state
         # The compat projection, for clients that only know the old key.
         data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if state in RECORDING_STATES else "off"
+        # A change made here is the person's own: it no longer reads as staff's.
+        data[DEFAULTS_KEY].pop(DEFAULT_SET_BY_KEY, None)
         _save_json_file(target, data, private=True, _resolved=True)
     return path
+
+
+# ---------------------------------------------------------------------------
+# A DEFAULT PROBE STAFF SET (research-os control/074, `probe.cli.remote_settings`)
+# ---------------------------------------------------------------------------
+#
+# Staff may move this machine's default, once, and only toward quieter. The same
+# locked write records who did it, beside the default:
+#
+#     defaults.session_state_set_by = {"by": "probe-staff", "at": "<iso>"}
+#
+# so `probe session default`, `probe doctor` and the wizard can say so even when
+# the command that applied it ran in the background with nobody watching. Any
+# local default change (`write_default_state`, `write_default_tracking`) drops it.
+
+DEFAULT_SET_BY_KEY = "session_state_set_by"
+SET_BY_STAFF = "probe-staff"
+
+#: Quietness, quietest first: `off` stops capture and Probe calls, `read` stops
+#: recording, `on` (stored `full` or `daemon`) records.
+_LOUDNESS = {STATE_OFF: 0, STATE_READ_ONLY: 1, STATE_FULL: 2, STATE_DAEMON: 2}
+
+
+def louder(state: "str | None", than: str) -> bool:
+    """Is `state` louder than `than`? An unknown or missing state is not."""
+    return state in _LOUDNESS and _LOUDNESS[state] > _LOUDNESS[than]
+
+
+def lower_default_state(state: str, *, by: str, at: str) -> "tuple[str, bool]":
+    """Move this machine's STORED default to `state` only where that is quieter
+    than what is stored (nothing stored reads as DEFAULT_STATE), recording `by`
+    and `at` beside it; one locked read-then-write, so a change the person makes
+    meanwhile is compared against, never overwritten by a louder one. Returns the
+    stored state before, and whether it moved. Raises like `write_default_state`
+    (an unreadable config file is reported, never replaced)."""
+    if state not in (STATE_OFF, STATE_READ_ONLY):
+        raise ValueError(f"only off or read-only can be set this way, got {state!r}")
+    from probe.sdk.config import (
+        CONFIG_VERSION,
+        DEFAULT_CONTEXT,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    target = _write_target(config_path())
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(target, strict=True, migrate=True) or {
+            "version": CONFIG_VERSION,
+            "current_context": DEFAULT_CONTEXT,
+            "contexts": {},
+        }
+        defaults = data.get(DEFAULTS_KEY)
+        before = _stored_state(defaults) or DEFAULT_STATE
+        if not louder(before, state):
+            return before, False
+        data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
+        data[DEFAULTS_KEY][STATE_DEFAULT_KEY] = state
+        data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "off"
+        data[DEFAULTS_KEY][DEFAULT_SET_BY_KEY] = {"by": by, "at": at, "value": state}
+        _save_json_file(target, data, private=True, _resolved=True)
+    return before, True
+
+
+def default_set_by(config: "dict | None" = None) -> "dict | None":
+    """`{"by", "at", "value"}` while the stored default is still the value Probe
+    staff set, else None (a writer that does not know this key, an older CLI,
+    may have changed the default and left it). Never raises."""
+    data = _read_config() if config is None else config
+    defaults = data.get(DEFAULTS_KEY) if isinstance(data, dict) else None
+    marked = defaults.get(DEFAULT_SET_BY_KEY) if isinstance(defaults, dict) else None
+    if not isinstance(marked, dict) or marked.get("by") != SET_BY_STAFF or not isinstance(marked.get("at"), str):
+        return None
+    if marked.get("value") != _stored_state(defaults):
+        return None
+    return {"by": marked["by"], "at": marked["at"], "value": marked["value"]}
+
+
+def set_by_note(config: "dict | None" = None) -> "str | None":
+    """`set by Probe staff on <date>` for a default staff set that is the one in
+    effect, else None: an environment variable overriding the file is not
+    staff's value, so it is never credited to them."""
+    if state_env_override() is not None:
+        return None
+    marked = default_set_by(config)
+    return None if marked is None else f"set by Probe staff on {marked['at'][:10]}"
+
+
+#: The files a session's switch is read from (`session_state`): the canonical one
+#: and the two legacy spellings it still migrates.
+_STATE_SUFFIXES = (".state", ".tracking", ".off")
+
+
+def decided_sessions() -> "list[str]":
+    """Every session on this machine with a switch decision on disk, newest
+    file first. Never raises (an unreadable folder is no sessions)."""
+    found: dict[str, float] = {}
+    try:
+        with os.scandir(sessions_dir()) as listing:
+            for entry in listing:
+                suffix = next((s for s in _STATE_SUFFIXES if entry.name.endswith(s)), None)
+                if suffix is None:
+                    continue
+                sid = entry.name[: -len(suffix)]
+                if not valid_session_id(sid):
+                    continue
+                try:
+                    found[sid] = max(found.get(sid, 0.0), entry.stat().st_mtime)
+                except OSError:
+                    continue
+    except OSError:
+        return []
+    return sorted(found, key=lambda sid: found[sid], reverse=True)
 
 
 RECORDERS_KEY = "recorders"
