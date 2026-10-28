@@ -493,13 +493,67 @@ def _segments(command: str):
     with the probe command, and was refused. Tokenizing first lets quotes
     protect what they hold. A segment still open when the quotes stop balancing
     is dropped, not reported: the text after an unclosed quote is inside it.
+
+    Unlike `_split`, a `$(...)`, `<(...)` or `>(...)` among a program's
+    ARGUMENTS does not end its command (`_interrupts`): the command resumes at
+    the `)`, so in `harness --out $(mktemp -d) probe x` the `probe` is an
+    argument of `harness`. A line with a `case` statement (`case` and `esac`:
+    a pattern's `)` closes nothing) or a backtick (where a `` `...` `` starts
+    and ends is not tokenized) keeps `_split`'s reading.
     """
-    yield from _split(command)[0]
+    tokens, complete = _tokens(command)
+    if ("case" in tokens and "esac" in tokens) or any("`" in token for token in tokens):
+        yield from _split(command)[0]
+        return
+    segments: "list[list[str]]" = []
+    segment: "list[str]" = []
+    held_at: "int | None" = None  # how much of `segment` the first `(` that interrupted it held back
+    # Each `(` still open: the command it interrupted and its `held_at`, or
+    # None (a subshell, or a substitution in the program's place).
+    opened: "list[tuple[list[str], int] | None]" = []
+    for token in tokens:
+        if not _is_separator(token):
+            segment.append(token)
+            continue
+        after = 0
+        for at, char in enumerate(token):
+            if at < after:
+                continue
+            if char == "(" and _interrupts(segment, token, at):
+                opened.append((segment, len(segment) if held_at is None else held_at))
+                segment, held_at = [], None
+                continue
+            if char == "(":
+                opened.append(None)
+            elif char not in _SEPARATOR_CHARS:
+                # A redirection glued to a separator (`$(>out ...)`, `;>&2`)
+                # stays in its command, unless it opens `<(...)`/`>(...)`.
+                run = re.match(r"[<>]+[&|]?", token[at:]).group()
+                after = at + len(run)
+                if token[after : after + 1] != "(":
+                    segment.append(run)
+                continue
+            if segment:
+                segments.append(segment)
+            segment, held_at = [], None
+            if char == ")" and opened:
+                segment, held_at = opened.pop() or ([], None)
+    held = [entry for entry in opened if entry]
+    if complete:
+        segments += [words for words, _ in held] + [segment]
+    else:
+        # The open command runs into an unclosed quote: keep only what came
+        # before its first `(`, which `_split` reports as its own segment.
+        segments += [words[:count] for words, count in held]
+        if held_at is not None:
+            segments.append(segment[:held_at])
+    yield from (words for words in segments if words)
 
 
-def _split(command: str) -> "tuple[list[list[str]], bool]":
-    """`_segments`' simple commands, and whether the whole command tokenized
-    (False: the quotes stopped balancing, and what followed was not read)."""
+def _tokens(command: str) -> "tuple[list[str], bool]":
+    """The shell words and operators of `command`, and whether the whole
+    command tokenized (False: the quotes stopped balancing, and what followed
+    was not read)."""
     lexer = shlex.shlex(
         # A backslash-newline is removed, as bash does: `--a\<newline>dd` is `--add`.
         _strip_heredocs(command).replace("\\\n", ""),
@@ -509,25 +563,93 @@ def _split(command: str) -> "tuple[list[list[str]], bool]":
     lexer.whitespace_split = True
     lexer.whitespace = " \t\r"
     lexer.commenters = ""  # as `shlex.split` does: `#` starts no comment here
-    segments: "list[list[str]]" = []
-    segment: "list[str]" = []
+    tokens: "list[str]" = []
     try:
         for token in lexer:
-            if (
-                token not in _REDIRECTIONS
-                and set(token) <= set(_OPERATOR_CHARS)
-                and set(token) & _SEPARATOR_CHARS
-            ):
-                if segment:
-                    segments.append(segment)
-                segment = []
-            else:
-                segment.append(token)
+            tokens.append(token)
     except ValueError:
-        return segments, False  # unbalanced quotes: the open segment is not parseable, lean silent
-    if segment:
+        return tokens, False
+    return tokens, True
+
+
+def _is_separator(token: str) -> bool:
+    return (
+        token not in _REDIRECTIONS
+        and set(token) <= set(_OPERATOR_CHARS)
+        and bool(set(token) & _SEPARATOR_CHARS)
+    )
+
+
+def _split(command: str) -> "tuple[list[list[str]], bool]":
+    """Each simple command's words, ending one at EVERY separator, `(` and `)`
+    included, and whether the whole command tokenized. The tripwires read this;
+    `_segments` reads substitutions among a program's arguments as arguments."""
+    tokens, complete = _tokens(command)
+    segments: "list[list[str]]" = []
+    segment: "list[str]" = []
+    for token in tokens:
+        if _is_separator(token):
+            if segment:
+                segments.append(segment)
+            segment = []
+        else:
+            segment.append(token)
+    if complete and segment:  # unbalanced quotes: the open segment is not parseable, lean silent
         segments.append(segment)
-    return segments, True
+    return segments, complete
+
+
+def _interrupts(segment: "list[str]", token: str, at: int) -> bool:
+    """Does the `(` at `token[at]` open a substitution among a command's
+    ARGUMENTS: `$(...)` (the word before it ends in `$`) or `<(...)`/`>(...)`,
+    after a program that takes its arguments as words (`_has_program`)? Not a
+    subshell, nor a substitution in the program's place (`$(which probe) run
+    start`, `X=$(...) probe ...`, `nohup $(...) probe ...`): there the words
+    after its `)` are a command."""
+    if at == 0:
+        if not segment or not segment[-1].endswith("$"):
+            return False
+        before = segment[:-1]
+    elif token[at - 1] in "<>":
+        before = segment
+    else:
+        return False
+    return _has_program(before)
+
+
+def _has_program(words: "list[str]") -> bool:
+    """Is a program named among `words` that takes its arguments as words?
+    Read past env assignments, shell keywords (`do`, `if`, `{`), redirections
+    and their targets (`>out`, `2>err`, `>&2`), wrappers (`_WRAPPERS`, each
+    option taken to carry a value, so `env -C dir` is read whole) and `uv run`;
+    a shell or a program in `_RUNS_ITS_ARGUMENTS` does not count. Behind any of
+    those, the words after a `$(...)` may be the program: `eval $(...) probe`
+    runs `probe`. A program the guard does not know runs its arguments is read
+    as `_probe_invocations` reads it without the substitution:
+    `mywrapper $(...) probe ...` passes as `mywrapper probe ...` does."""
+    index = 0
+    while index < len(words):
+        word = words[index]
+        name = os.path.basename(word)
+        if "=" in word or word in _SHELL_KEYWORDS:
+            index += 1  # an assignment (`X=1`, `X+=1`, `a[0]=1`) or a keyword
+        elif word in _REDIRECTIONS:
+            index += 2
+        elif _FD_WORD.fullmatch(word) and words[index + 1 : index + 2] and words[index + 1] in _REDIRECTIONS:
+            index += 1  # `2>err`: the descriptor
+        elif name in _WRAPPERS:
+            index += 1
+            while index < len(words) and words[index].startswith("-"):
+                index += 1 if "=" in words[index] else 2
+            if name == "timeout":
+                index += 1  # its duration
+        elif name == "uv" and words[index + 1 : index + 2] == ["run"]:
+            index += 2
+            while index < len(words) and words[index].startswith("-"):
+                index += 2 if words[index] in _UV_VALUE_OPTS else 1
+        else:
+            return name not in _RUNS_ITS_ARGUMENTS and name not in _SHELLS
+    return False
 
 
 #: Commands that run the command after them: `command probe ...`, `nohup probe
@@ -535,6 +657,13 @@ def _split(command: str) -> "tuple[list[list[str]], bool]":
 #: `nice -n N`) are skipped.
 _WRAPPERS = frozenset({"command", "env", "nohup", "exec", "time", "timeout", "nice", "stdbuf", "setsid"})
 _WRAPPER_VALUE_OPTS = frozenset({"-n", "-s", "-k", "--signal", "--kill-after", "-u", "-i", "-o", "-e"})
+#: A redirection's descriptor written before it: `2>err`, `{fd}>out`.
+_FD_WORD = re.compile(r"(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})")
+#: Programs that run their arguments as a command but that `_probe_invocations`
+#: does not look through: a `$(...)` among their arguments may be the
+#: program's place (`eval $(...) probe ...`), so `_segments` ends the command
+#: at its `)`, as `_split` does.
+_RUNS_ITS_ARGUMENTS = frozenset({"eval", "sudo", "doas", "xargs", "builtin", "coproc"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
 _PYTHONS = re.compile(r"^python(\d+(\.\d+)?)?$")
 #: The modules `python -m` runs the CLI as: `probe.cli` is the one that runs
@@ -545,16 +674,19 @@ _PROBE_MODULES = frozenset({"probe", "probe.cli", "probe.cli.main"})
 
 def _probe_invocations(command: str, _depth: int = 0):
     """The args after `probe`, for every `probe` invocation in a shell line --
-    behind env assignments, a leading redirection, a wrapper (`command`, `env`,
-    `nohup`, `timeout 30`, ...), as `python -m probe.cli`, or inside `bash -c "..."`."""
+    behind env assignments, a shell keyword (`then`, `do`, `{`, `!`), a leading
+    redirection (`>out`, `2>&1`), a wrapper (`command`, `env`, `nohup`,
+    `timeout 30`, ...), as `python -m probe.cli`, or inside `bash -c "..."`."""
     for tokens in _segments(command):
         index = 0
         while index < len(tokens):
             word = tokens[index]
-            if _ENV_ASSIGNMENT.match(word):
+            if _ENV_ASSIGNMENT.match(word) or word in _SHELL_KEYWORDS:
                 index += 1
             elif word in _REDIRECTIONS:
                 index += 2  # a leading redirection and its file
+            elif _FD_WORD.fullmatch(word) and tokens[index + 1 : index + 2] and tokens[index + 1] in _REDIRECTIONS:
+                index += 1  # `2>&1`: the descriptor
             elif os.path.basename(word) in _WRAPPERS:
                 wrapper = os.path.basename(word)
                 index += 1

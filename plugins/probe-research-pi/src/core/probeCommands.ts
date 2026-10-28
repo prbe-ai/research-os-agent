@@ -417,6 +417,15 @@ const ENV_ASSIGNMENT = new RegExp(ENV_ASSIGNMENT_SOURCE);
 export const WRAPPERS: ReadonlySet<string> = new Set(["command", "env", "nohup", "exec", "time", "timeout", "nice", "stdbuf", "setsid"]);
 /** `tracking_guard._WRAPPER_VALUE_OPTS`. */
 export const WRAPPER_VALUE_OPTS: ReadonlySet<string> = new Set(["-n", "-s", "-k", "--signal", "--kill-after", "-u", "-i", "-o", "-e"]);
+/** `tracking_guard._FD_WORD`: a redirection's descriptor written before it (`2>err`, `{fd}>out`). */
+export const FD_WORD_SOURCE = String.raw`(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})`;
+const FD_WORD = new RegExp(`^${FD_WORD_SOURCE}$`);
+/** `tracking_guard._RUNS_ITS_ARGUMENTS`: they run their arguments as a command. */
+export const RUNS_ITS_ARGUMENTS: ReadonlySet<string> = new Set(["eval", "sudo", "doas", "xargs", "builtin", "coproc"]);
+/** `tracking_guard._SHELL_KEYWORDS`: shell words a command may stand behind. */
+export const SHELL_KEYWORDS: ReadonlySet<string> = new Set(["{", "!", "if", "then", "elif", "else", "do", "while", "until"]);
+/** `tracking_guard._UV_VALUE_OPTS`: `uv run`'s options that take a value. */
+export const UV_VALUE_OPTS: ReadonlySet<string> = new Set(["--with", "--python", "-p", "--project", "--directory", "--extra", "--group", "--env-file", "--package", "--index", "--index-url", "--with-requirements"]);
 /** `tracking_guard._SHELLS`. */
 export const SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash"]);
 /** `tracking_guard._PYTHONS`'s pattern. */
@@ -657,11 +666,65 @@ function isSeparator(token: string): boolean {
  * `tracking_guard._segments`: each simple command's words, split on the
  * operators OUTSIDE quotes. A segment still open when the quotes stop
  * balancing is dropped, not reported: the text after an unclosed quote is
- * inside it.
+ * inside it. A `$(...)`, `<(...)` or `>(...)` among a program's arguments
+ * resumes its command at the `)` (`interrupts`); a line with a `case`
+ * statement or a backtick is split at every `)`, as `tracking_guard._split` does.
  */
 export function segments(command: string): string[][] {
   // A backslash-newline is removed, as bash does.
   const { tokens, complete } = shlexTokens(stripHeredocs(command).replaceAll("\\\n", ""));
+  if ((tokens.includes("case") && tokens.includes("esac")) || tokens.some((token) => token.includes("`"))) {
+    return splitEverywhere(tokens, complete);
+  }
+  const out: string[][] = [];
+  let segment: string[] = [];
+  let heldAt: number | null = null; // how much of `segment` the first `(` that interrupted it held back
+  // Each `(` still open: the command it interrupted and its `heldAt`, or null.
+  const opened: Array<[string[], number] | null> = [];
+  for (const token of tokens) {
+    if (!isSeparator(token)) {
+      segment.push(token);
+      continue;
+    }
+    const chars = [...token];
+    let after = 0;
+    chars.forEach((char, at) => {
+      if (at < after) return;
+      if (char === "(" && interrupts(segment, chars, at)) {
+        opened.push([segment, heldAt ?? segment.length]);
+        segment = [];
+        heldAt = null;
+        return;
+      }
+      if (char === "(") {
+        opened.push(null);
+      } else if (!SEPARATOR_CHARS.has(char)) {
+        // A redirection glued to a separator stays in its command, unless it opens `<(...)`/`>(...)`.
+        let end = at;
+        while (chars[end] === "<" || chars[end] === ">") end += 1;
+        if (chars[end] === "&" || chars[end] === "|") end += 1;
+        after = end;
+        if (chars[end] !== "(") segment.push(chars.slice(at, end).join(""));
+        return;
+      }
+      if (segment.length) out.push(segment);
+      segment = [];
+      heldAt = null;
+      if (char === ")" && opened.length) [segment, heldAt] = opened.pop() ?? [[], null];
+    });
+  }
+  const held = opened.filter((entry): entry is [string[], number] => entry !== null);
+  if (complete) {
+    out.push(...held.map(([words]) => words), segment);
+  } else {
+    out.push(...held.map(([words, count]) => words.slice(0, count)));
+    if (heldAt !== null) out.push(segment.slice(0, heldAt));
+  }
+  return out.filter((words) => words.length);
+}
+
+/** `tracking_guard._split`: a segment ends at every separator, `(` and `)` included. */
+function splitEverywhere(tokens: readonly string[], complete: boolean): string[][] {
   const out: string[][] = [];
   let segment: string[] = [];
   for (const token of tokens) {
@@ -676,6 +739,58 @@ export function segments(command: string): string[][] {
   return out;
 }
 
+/**
+ * `tracking_guard._interrupts`: does this `(` open a substitution among the
+ * arguments of a program that takes them as words (`$(...)`, `<(...)`,
+ * `>(...)`), so its `)` resumes that command?
+ */
+function interrupts(segment: readonly string[], chars: readonly string[], at: number): boolean {
+  let before: readonly string[];
+  if (at === 0) {
+    if (!segment.length || !segment[segment.length - 1].endsWith("$")) return false;
+    before = segment.slice(0, -1);
+  } else if (chars[at - 1] === "<" || chars[at - 1] === ">") {
+    before = segment;
+  } else {
+    return false;
+  }
+  return hasProgram(before);
+}
+
+/**
+ * `tracking_guard._has_program`: a program past env assignments, shell
+ * keywords, redirections and their targets, wrappers (each option taken to
+ * carry a value) and `uv run`, that is not a shell nor in `RUNS_ITS_ARGUMENTS`.
+ */
+function hasProgram(words: readonly string[]): boolean {
+  let index = 0;
+  while (index < words.length) {
+    const word = words[index];
+    const name = basename(word);
+    if (word.includes("=") || SHELL_KEYWORDS.has(word)) {
+      index += 1; // an assignment (`X=1`, `X+=1`, `a[0]=1`) or a keyword
+    } else if (REDIRECTIONS.has(word)) {
+      index += 2;
+    } else if (FD_WORD.test(word) && index + 1 < words.length && REDIRECTIONS.has(words[index + 1])) {
+      index += 1; // `2>err`: the descriptor
+    } else if (WRAPPERS.has(name)) {
+      index += 1;
+      while (index < words.length && words[index].startsWith("-")) {
+        index += words[index].includes("=") ? 1 : 2;
+      }
+      if (name === "timeout") index += 1; // its duration
+    } else if (name === "uv" && words[index + 1] === "run") {
+      index += 2;
+      while (index < words.length && words[index].startsWith("-")) {
+        index += UV_VALUE_OPTS.has(words[index]) ? 2 : 1;
+      }
+    } else {
+      return !RUNS_ITS_ARGUMENTS.has(name) && !SHELLS.has(name);
+    }
+  }
+  return false;
+}
+
 function basename(word: string): string {
   return word.slice(word.lastIndexOf("/") + 1);
 }
@@ -687,10 +802,12 @@ export function probeInvocations(command: string, depth = 0): string[][] {
     let index = 0;
     while (index < tokens.length) {
       const word = tokens[index];
-      if (ENV_ASSIGNMENT.test(word)) {
+      if (ENV_ASSIGNMENT.test(word) || SHELL_KEYWORDS.has(word)) {
         index += 1;
       } else if (REDIRECTIONS.has(word)) {
         index += 2; // a leading redirection and its file
+      } else if (FD_WORD.test(word) && index + 1 < tokens.length && REDIRECTIONS.has(tokens[index + 1])) {
+        index += 1; // `2>&1`: the descriptor
       } else if (WRAPPERS.has(basename(word))) {
         const wrapper = basename(word);
         index += 1;
