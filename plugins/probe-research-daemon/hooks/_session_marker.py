@@ -1284,8 +1284,10 @@ ROOT_VALUE_OPTIONS = frozenset({"--base-url", "--spool-dir"})
 HELP_FLAG = "--help"
 
 #: Groups whose whole job is READING research content. Refused only under `off`.
+#: `docs` reads Probe's own docs, not the team's record: a read so that `off`
+#: refuses it as it refuses `paper find`.
 READ_GROUPS = frozenset(
-    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance"}
+    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance", "docs"}
 )
 
 #: Commands inside a `READ_GROUPS` group that record rather than print:
@@ -1458,7 +1460,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: (`is_inline`) the guard refuses only `RESEARCHER_SWITCH`.
 #: `paper find` reads the research literature, an outside index, not the team's
 #: records, so the agent runs it itself (Richard 2026-10-12: "just the tools
-#: where it makes sense for the agent to call it directly"). `feedback send`
+#: where it makes sense for the agent to call it directly"). `docs` searches
+#: Probe's own docs, an outside source too and not the team's records: the same
+#: rule, and the only way this profile reaches them (it has no MCP). `feedback send`
 #: holds feedback for the Probe team as a question for the researcher
 #: (`probe.feedback`); nothing leaves without their yes. `approvals` lists the
 #: questions the daemon holds for the researcher: in an agent's shell the CLI
@@ -1495,7 +1499,7 @@ def daemon_allows_agent(matched: str) -> bool:
 #: person and labels it as from an agent session, never as the researcher.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "session send", "ignore check", "run expect", "doctor", "paper find",
-     "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
+     "docs", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
      "daemon status", "whoami", "context list", "wandb discover", "wandb key status",
      "update", "status", "flush", "service status", "service start", "service stop", "service check-now",
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",

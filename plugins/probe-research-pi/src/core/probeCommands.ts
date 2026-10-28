@@ -134,7 +134,7 @@ export const ProbeKind = {
 export type ProbeKindValue = (typeof ProbeKind)[keyof typeof ProbeKind];
 
 /** `session_marker.READ_GROUPS`. */
-export const READ_GROUPS: ReadonlySet<string> = new Set(["metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance"]);
+export const READ_GROUPS: ReadonlySet<string> = new Set(["metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance", "docs"]);
 
 /** `session_marker.READ_GROUP_WRITES`: the commands inside a read group that record. */
 export const READ_GROUP_WRITES: ReadonlySet<string> = new Set(["metrics backfill", "shared add", "shared share", "shared unshare"]);
@@ -178,6 +178,7 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "run expect",
   "doctor",
   "paper find",
+  "docs",
   "feedback send",
   "approvals",
   "outbox status",

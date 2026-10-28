@@ -199,6 +199,7 @@ run name, external id), then check where it actually wrote:
 | a flat loop repeating phases (step 12 is not inside step 11) | metrics, one series per phase |
 | nested work of varying structure (trial -> agent turns -> verifier) | spans |
 | one value per step | `probe.log({...}, step=i)` |
+| one final number (test accuracy) | `probe.log({"test/acc": acc})` once - shows as a single number, not a chart |
 | a value per sample | LABELS, never dimensions - per-sample ids shatter one series into hundreds of one-point tiles. Labeled points NEVER plot, so the curve needs a second, unlabeled key |
 
 A score of a training run's checkpoint is a metric on that run at the
