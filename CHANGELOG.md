@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.342.6
+
 - Fix saving daemon reasoning summaries with empty Claude Code settings and single-quoted Codex setting keys. Verify the requested value for every configured agent and name any agent whose save failed.
 
 ## 0.342.5
