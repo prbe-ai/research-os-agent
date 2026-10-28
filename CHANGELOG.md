@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.342.0
+
 - **Projects are flat: a phase of a bigger effort is its own project linked `--part-of` it, not a subproject.** `probe project create SLUG --kind K --part-of P` (repeatable) sends `part_of` links and, without `--workspace`, lets the server file the project beside its first target; `probe project list --part-of P` lists P's parts in every workspace; `probe project reference add A --to B --part-of` links an existing project (a plain add still records a reference). The old spellings keep working, hidden: `create --parent` and `list --parent` send `part_of`, `move --parent` / `--top-level` send what they always sent, and `delete --recursive` is kept: a `part_of` link never takes a project with it, but the flag still deletes the projects filed under it before part_of links, and its prompt says so. The SDK takes `create_project(part_of=[...])`, `list_projects(part_of=...)` (refusing a backend that ignores the filter) and `add_project_reference(..., relation="part_of")`; `parent_project_id` still works. The MCP project card names what a project is `part_of` and its `parts` (names and ids, from the detail's `part_of_links`), and `browse` says parts, not subprojects. The always-loaded block (v52), track-work and its copies teach the link instead of nesting, and overview-page tells a recorder to cover a bigger effort's parts. The bench's fake Probe serves `part_of` links and an older client's `parent_project_id` as the server does (the target of a project's oldest `part_of` link, null in a loop; a PATCH moves that link), and its duplicate rule compares a project's `part_of` set. The tap moves to 0.10.27 for the track-work line (`tap/companion_rules.md`, `tap/companion_reference.md`).
 
 ## 0.341.0
