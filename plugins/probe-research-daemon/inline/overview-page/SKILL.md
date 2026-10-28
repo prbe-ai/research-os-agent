@@ -17,6 +17,7 @@ Older history goes below, or goes.
 - Prose carries the argument; a visual only what prose can't (a curve, a mechanism, a few final scores).
 - Results tables (and an experiment's results charts) go in its Metrics center through `probe visuals set` (`overview-visuals`), not the page.
 - Skip a question the evidence can't answer, in one line.
+- A bigger effort's page covers its parts: its card lists `parts` (a part's lists `part_of`); read each with `entity`.
 - About 300 words of visible text.
 
 # A person's own blocks

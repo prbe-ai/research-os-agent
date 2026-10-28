@@ -17,7 +17,7 @@ Lookup only; judgment is in the skill.
 ## 1. ENTITY COMMANDS
 
 ```
-probe project create SLUG --kind K [--parent P] [--tag T] | list | get | use | set | move | delete
+probe project create SLUG --kind K [--part-of P] [--tag T] | list | get | use | set | move | delete
 probe experiment create SLUG --project P --question "..." | set [--question|--conclusion] | freeze --label L | delete | edges
 probe experiment fork SRC NEW --question "..." | inherited EXP [--runs]
 probe exec [--project P | --experiment E] [--parent RUN --relation R] -- CMD
@@ -28,7 +28,7 @@ probe workspace create SLUG [--name] [--use] | list | get | rename | use | delet
 probe shared list | download | delete
 probe edge add --source TYPE:REF --relation R --target TYPE:REF --reason "..." [--evidence EVENT_ID] | remove EDGE_ID
 probe run inputs RUN | upstream RUN [--depth N]
-probe project reference add --to PROJECT | remove
+probe project reference add --to PROJECT [--part-of] | remove
 probe project code attach OWNER/REPO | detach | list
 ```
 

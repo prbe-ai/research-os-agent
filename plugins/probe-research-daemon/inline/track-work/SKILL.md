@@ -76,7 +76,7 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 | `general` | anything else |
 | `experiment` | one question (`--question`) under one of the above; holds runs; its answer is `--conclusion` |
 
-- A phase of a bigger effort is a SUBPROJECT of it, never a new top-level sibling: `--parent <project>`. Related but separate: `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
+- Projects are flat. A phase of a bigger effort is its own project linked `--part-of` it (`probe project create SLUG --kind K --part-of P`); related-but-separate work is `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
 - No question: a project-direct run. `freeze` pins an experiment's runs.
 - No headline metric yet? Choose one from the code and runs, set it (`probe project set P --metric KEY --goal max|min`), and tell the researcher in one line.
 - A project's description comes from its summary's first line.
