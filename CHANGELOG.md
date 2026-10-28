@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`probe project delete --recursive` says what it does: nothing.** Projects are flat, so the flag is accepted and changes nothing; its help and confirmation prompt say the projects linked to the project stay, instead of warning that filed projects go with it.
+- **Project cards (MCP) name parts as parts**: no `parent_project_id` (one projected link of the many the card's `part_of` names) and the count of its parts as `part_count`, not `subproject_count`. `probe project contributors` and the SDK's contributor help no longer describe credit through another project (every credit is the project's own).
+
 ## 0.342.2
 
 - **A `probe` word after a `$(...)` argument is no longer read as the Probe CLI.** The plugin's shell guard (and pi's port of it) ended a command at the `)` of every substitution, so in `harness --out $(mktemp -d) probe PATH` the words `probe PATH` looked like their own command and the Bash call could be refused. A `$(...)`, `<(...)` or `>(...)` among a command's arguments now resumes that command at its `)`; one in the program's place (`$(which probe) run start`, `X=$(...) probe ...`), one where a wrapper's command goes or among the arguments of a program that runs them as a command (`nohup $(...) probe ...`, `eval`, `sudo`, `xargs`, `uv run`, a shell), a line with a `case` statement or a backtick, and a `probe` command inside a substitution are read as before. The guard also now finds `probe` behind a shell keyword or a leading `2>&1` or a `{fd}` descriptor (`if ...; then probe notes create x; fi`, `{ probe ...; }`), which it missed before.
