@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.342.1
+
 - **A folder import's agents no longer write Claude Code memories into your `~/.claude`.** Claude Code's auto memory let an import's own classifier, notes and record sessions save notes about your folder under `~/.claude/projects/<import work dir>/memory/`. Every Claude the import launches now runs with `autoMemoryEnabled: false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (checked live on Claude Code 2.1.296: with either one, the session's prompt carries no memory directory; with neither, it does).
 
 ## 0.342.0
