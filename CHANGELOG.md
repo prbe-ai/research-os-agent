@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.341.0
+
 - **`probe docs "<question>"` reads Probe's own docs** (docs.prbe.ai), signed in or not, and is allowed in the daemon profile, which has no MCP (an outside source, like `paper find`). Its managed block names it in one sentence. In MCP sessions the same docs come through `search` with `search_in=["docs"]`.
 - **`instrument-code`: one final number is logged once** (`probe.log({"test/acc": acc})`, a single-number tile), the rule `track-work` already had; agents had been searching for it.
 
