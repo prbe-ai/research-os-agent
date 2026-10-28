@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe job bootstrap` (hidden):** the top process of a compute-router job. Restores the run's code tree strictly (exits 70 naming any missing file), downloads sha256-checked inputs, `uv pip sync --no-build`s the lockfile into the root-owned venv, preflights imports and GPUs, runs the command as `probe-job` with the cloud metadata server dropped for that uid (fails closed without `iptables`), uploads complete checkpoints during the run, resumes from the latest complete checkpoint on a restart, drains the outbox against an upload deadline, and records its verdict at `foreign_keys.probe_job`.
+
 ## 0.342.6
 
 - Fix saving daemon reasoning summaries with empty Claude Code settings and single-quoted Codex setting keys. Verify the requested value for every configured agent and name any agent whose save failed.
@@ -10,7 +12,6 @@
 
 - **Making a project part of a bigger one updates the bigger one's page too.** write-summary (and its plugin and pi copies) adds: "Creating or linking a project `--part-of` another changes that one too: update its page so it names the new part." Before, the writer wrote the new part's page and left the umbrella's as it was (bench, a phase-2 session under an existing umbrella: 2 of 2 runs).
 - **The bench's fake Probe serves a browse project's `part_of`** (evals only; nothing ships). Its browse nodes carried the old tree's `parent_project_id` and `subproject_count` but no `part_of`, so a benched writer saw `part_of: null` where the server serves the projects it is part of, oldest link first. A part listed under a `project:` scope now reads that project as its `parent_project_id`, as the server's `?parent_id=` does.
-
 
 ## 0.342.4
 
