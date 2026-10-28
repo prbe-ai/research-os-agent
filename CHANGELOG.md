@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.342.5
+
 - **Making a project part of a bigger one updates the bigger one's page too.** write-summary (and its plugin and pi copies) adds: "Creating or linking a project `--part-of` another changes that one too: update its page so it names the new part." Before, the writer wrote the new part's page and left the umbrella's as it was (bench, a phase-2 session under an existing umbrella: 2 of 2 runs).
 - **The bench's fake Probe serves a browse project's `part_of`** (evals only; nothing ships). Its browse nodes carried the old tree's `parent_project_id` and `subproject_count` but no `part_of`, so a benched writer saw `part_of: null` where the server serves the projects it is part of, oldest link first. A part listed under a `project:` scope now reads that project as its `parent_project_id`, as the server's `?parent_id=` does.
 
