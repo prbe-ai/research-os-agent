@@ -1177,6 +1177,9 @@ WRITE_GROUPS = frozenset(
         # `visuals set` record; `summary checkout` and `visuals options` read.
         "summary",
         "visuals",
+        # GPU jobs (compute router; hidden): `job submit` opens a run and spends the
+        # team's money, `job cancel` stops one; `job status|logs` read.
+        "job",
     }
 )
 
@@ -1206,6 +1209,7 @@ READ_VERBS = frozenset(
         "list",
         "get",
         "status",
+        "logs",
         "versions",
         "cat",
         "diff",
