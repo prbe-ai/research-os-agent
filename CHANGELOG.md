@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.340.0
+
 - **A folder import creates its runs unnamed and charts their results.** An import named each run after its folder, which locks the name for good: nothing could rename Tokenless's 1,032 imported runs, 1,008 of them hex attempt ids like `bre5b5b2d7-33c647-…-a1` (2026-10-26). Runs are now created without a name (the folder stays in `metadata.backfill.relative_path`) and are titled like any unnamed run; a run an older CLI named is still found by its folder and keeps its name. Each number read from a run's result files is also sent as a one-point series stamped with that file's time, so it draws a chart and a key-metric tile (0 of those 1,032 runs had one); sending it again stores nothing, and a changed result adds its new value at its new time. `backfill.summary` gains `metric_points` and `metric_points_failed`.
 - **The import's classifier is given track-work's own lines on what an experiment and a run are, quoted, and the folders that look like runs.** Its own one-line rule ("a folder of one run's output is a run") made 1,008 attempt folders runs and left 47 real `runs/<name>/` folders as loose files. It now reads track-work's lines ("A sweep is an experiment, not a project.", "per-item detail -> artifact, never a metric", ...) and a list of folders holding a config or manifest beside a result or log file; which of them are runs is still its call.
 - **An imported folder's experiments and runs are planned under a structure version.** Raising it re-plans every imported folder once on its next import (files are moved, never uploaded again); today's imports stay as they are. A re-import that names an experiment's folder again, under another slug, reuses that experiment instead of making a second.
