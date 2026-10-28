@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.342.3
+
 - **`probe project delete --recursive` says what it does: nothing.** Projects are flat, so the flag is accepted and changes nothing; its help and confirmation prompt say the projects linked to the project stay, instead of warning that filed projects go with it.
 - **Project cards (MCP) name parts as parts**: no `parent_project_id` (one projected link of the many the card's `part_of` names) and the count of its parts as `part_count`, not `subproject_count`. `probe project contributors` and the SDK's contributor help no longer describe credit through another project (every credit is the project's own).
 
