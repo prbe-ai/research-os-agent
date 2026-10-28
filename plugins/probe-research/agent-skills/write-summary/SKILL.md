@@ -9,6 +9,7 @@ Its draft is checked out for you when the work first lands on one (the path is p
 you change, edit it in place, then `probe summary push` with the same flag; edits add up, so one push
 when you are done is enough. Write the first one when you create it; then update on a result, a
 decision or a change of direction.
+Creating or linking a project `--part-of` another changes that one too: update its page so it names the new part.
 A `.md` draft (an older CLI) takes Markdown, never html.
 
 Before you edit a page, read `overview-page/SKILL.md` (what the page says and in what order) and
