@@ -796,9 +796,56 @@ function basename(word: string): string {
   return word.slice(word.lastIndexOf("/") + 1);
 }
 
-/** `tracking_guard._probe_invocations`: the args after `probe`, for every invocation in a shell line. */
+/**
+ * `tracking_guard._quotes_a_redirection`: does `command` hold a `<` or `>` the shell takes as text
+ * (quoted or escaped)? The tokens have lost their quotes, so such a `'>'` would read as a redirection.
+ */
+export function quotesARedirection(command: string): boolean {
+  let quote = "";
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === "\\" && quote !== "'") {
+      if (command[index + 1] === "<" || command[index + 1] === ">") return true;
+      index += 1;
+    } else if (quote) {
+      if (char === quote) quote = "";
+      else if (char === "<" || char === ">") return true;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    }
+  }
+  return false;
+}
+
+/**
+ * `tracking_guard._without_trailing_redirections`: `args` less the redirections that END the
+ * command, each with its file and its descriptor (`probe --version 2>&1` is `--version`). Only
+ * that trailing run: one between command words stays a word, and one whose file is an operator ends nothing.
+ * A line with a quoted or escaped `<`/`>` (`quotesARedirection`) drops nothing.
+ */
+export function withoutTrailingRedirections(args: readonly string[]): string[] {
+  let end = args.length;
+  while (
+    end >= 2 &&
+    REDIRECTIONS.has(args[end - 2]) &&
+    args[end - 1] !== "" &&
+    ![...args[end - 1]].every((char) => SHLEX_PUNCTUATION.has(char))
+  ) {
+    end -= 2;
+    // `2>&1`: the descriptor, unless it is the file of the redirection before it (`2>&1 >log`).
+    if (end > 0 && FD_WORD.test(args[end - 1]) && !(end >= 2 && REDIRECTIONS.has(args[end - 2]))) end -= 1;
+  }
+  return args.slice(0, end);
+}
+
+/**
+ * `tracking_guard._probe_invocations`: the args after `probe`, for every invocation in a shell
+ * line, without the redirections that end it (`withoutTrailingRedirections`).
+ */
 export function probeInvocations(command: string, depth = 0): string[][] {
   const found: string[][] = [];
+  const quoted = quotesARedirection(stripHeredocs(command).replaceAll("\\\n", ""));
+  const trim = (args: string[]): string[] => (quoted ? args : withoutTrailingRedirections(args));
   for (const tokens of segments(command)) {
     let index = 0;
     while (index < tokens.length) {
@@ -823,9 +870,9 @@ export function probeInvocations(command: string, depth = 0): string[][] {
     if (index >= tokens.length) continue;
     const head = basename(tokens[index]);
     if (head === "probe") {
-      found.push(tokens.slice(index + 1));
+      found.push(trim(tokens.slice(index + 1)));
     } else if (PYTHONS.test(head) && tokens[index + 1] === "-m" && index + 2 < tokens.length && PROBE_MODULES.has(tokens[index + 2])) {
-      found.push(tokens.slice(index + 3));
+      found.push(trim(tokens.slice(index + 3)));
     } else if (SHELLS.has(head) && depth < 2 && tokens.indexOf("-c", index + 1) >= 0) {
       const at = tokens.indexOf("-c", index + 1);
       if (at + 1 < tokens.length) found.push(...probeInvocations(tokens[at + 1], depth + 1));

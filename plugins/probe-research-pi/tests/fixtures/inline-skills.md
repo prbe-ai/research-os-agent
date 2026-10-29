@@ -98,6 +98,7 @@ Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
 - When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
+    - A dead end (its approach dropped, or shown not to pan out): also `probe experiment set EXP --dead-end "<why, with the numbers>"`; `--clear-dead-end` when work on it resumes. It still ranks.
 - A better experiment to use than the pick? Set it (`probe project set P --best EXP --reason "..."`) and tell the researcher in one line.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.

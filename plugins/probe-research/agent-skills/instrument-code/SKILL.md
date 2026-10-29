@@ -338,7 +338,9 @@ exec` does the same for a Python child. Nothing to add - but know its edges:
 - It sees `open`, `pathlib`, numpy, pandas, `torch.load`, PIL, pickle, and
   `pyarrow.parquet`, `pyarrow.memory_map`, `h5py`, `safetensors`. It does NOT
   see other readers that open files from C - a `pyarrow.dataset` read directly,
-  feather, sqlite. For those, say it yourself:
+  feather, sqlite. For those, say it yourself in the script:
+  `run.use_dataset("dataset:NAME@V")` or `run.use_checkpoint("checkpoint:RUN@best")`;
+  for an artifact,
   `probe edge add --source run:$RUN --target artifact:$ID --relation consumes`
 - `Client.run(...)` handles record only with `capture_reads=True`
 - Opt out: `probe.init(capture_reads=False)` or `PROBE_CAPTURE_READS=0` (reads
@@ -346,7 +348,9 @@ exec` does the same for a Python child. Nothing to add - but know its edges:
   alone with `capture_outputs=False`, `PROBE_CAPTURE_OUTPUTS=0` or
   `PROBE_CAPTURE_WRITES=0`
 - A read is evidence, not a link. A wrong data link: `probe edge remove ID`,
-  then `probe dataset use` / `probe checkpoint use`
+  then `run.use_dataset` / `run.use_checkpoint`
+- Where the Probe daemon records, `probe edge`, `dataset use` and `checkpoint
+  use` are refused: ask its writer, `probe ask --writer "<the link or fix>"`
 
 ## RELAUNCHING A RUN:
 

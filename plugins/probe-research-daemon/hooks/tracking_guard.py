@@ -269,9 +269,11 @@ _SEPARATOR_CHARS = frozenset(";|&()\n")
 #: cut as separators before, which hid the command words after them
 #: (`probe project code &>/dev/null attach`). They stay in the segment as words,
 #: so a redirection BETWEEN command words fails closed as an unknown verb; only a
-#: LEADING one is skipped with its file (`>/dev/null probe project create x`).
-#: Never dropped mid-segment: shlex has already removed quotes, so a quoted `'>'`
-#: looks the same, and dropping "its file" would swallow a `;` or a `<(`.
+#: LEADING one is skipped with its file (`>/dev/null probe project create x`), and
+#: a TRAILING run with their files (`probe --version 2>&1`,
+#: `_without_trailing_redirections`). Never dropped mid-segment: shlex has
+#: already removed quotes, so a quoted `'>'` looks the same, and dropping "its
+#: file" would swallow a `;` or a `<(`.
 _REDIRECTIONS = frozenset({">", ">>", "<", "<>", ">|", "&>", "&>>", ">&", "<&", "<<", "<<<"})
 #: What may precede a `#` that starts a shell comment: a `#` inside a word
 #: (`a#b`, `$#`) is text.
@@ -672,11 +674,57 @@ _PYTHONS = re.compile(r"^python(\d+(\.\d+)?)?$")
 _PROBE_MODULES = frozenset({"probe", "probe.cli", "probe.cli.main"})
 
 
+def _quotes_a_redirection(command: str) -> bool:
+    """Does `command` hold a `<` or `>` the shell takes as text (quoted or
+    escaped)? shlex has removed the quotes by the time the words are read, so
+    `probe --spool-dir '>' logout` would look like `--spool-dir` plus a
+    redirection to a file `logout`. Quotes are read as shlex reads them."""
+    quote, index = "", 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'":
+            if command[index + 1 : index + 2] in ("<", ">"):
+                return True
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            elif char in "<>":
+                return True
+        elif char in "'\"":
+            quote = char
+        index += 1
+    return False
+
+
+def _without_trailing_redirections(args: "list[str]") -> "list[str]":
+    """`args` less the redirections that END the command, each with its file
+    and the descriptor written before it: `probe --version 2>&1` is
+    `--version`, and `... --yes > f 2>&1` keeps `--yes` (issue 3622: `2` read
+    as a command word). Only that trailing run: a redirection between command
+    words stays a word and fails closed (`_REDIRECTIONS`), and one whose file
+    is itself an operator (`> )`) ends nothing. A line with a quoted or escaped
+    `<`/`>` (`_quotes_a_redirection`) drops nothing: its words cannot be told
+    from real redirections."""
+    end = len(args)
+    while (end >= 2 and args[end - 2] in _REDIRECTIONS and args[end - 1]
+           and not set(args[end - 1]) <= set(_OPERATOR_CHARS)):
+        end -= 2
+        # `2>&1`: the descriptor -- unless it is the file of the redirection
+        # before it (`2>&1 >log`: that `1` is `>&`'s).
+        if end and _FD_WORD.fullmatch(args[end - 1]) and not (end >= 2 and args[end - 2] in _REDIRECTIONS):
+            end -= 1
+    return args[:end]
+
+
 def _probe_invocations(command: str, _depth: int = 0):
     """The args after `probe`, for every `probe` invocation in a shell line --
     behind env assignments, a shell keyword (`then`, `do`, `{`, `!`), a leading
     redirection (`>out`, `2>&1`), a wrapper (`command`, `env`, `nohup`,
-    `timeout 30`, ...), as `python -m probe.cli`, or inside `bash -c "..."`."""
+    `timeout 30`, ...), as `python -m probe.cli`, or inside `bash -c "..."`;
+    without the redirections that end it (`_without_trailing_redirections`)."""
+    quoted = _quotes_a_redirection(_strip_heredocs(command).replace("\\\n", ""))
     for tokens in _segments(command):
         index = 0
         while index < len(tokens):
@@ -700,10 +748,12 @@ def _probe_invocations(command: str, _depth: int = 0):
             continue
         head = os.path.basename(tokens[index])
         if head == "probe":
-            yield tokens[index + 1 :]
+            args = tokens[index + 1 :]
+            yield args if quoted else _without_trailing_redirections(args)
         elif (_PYTHONS.match(head) and tokens[index + 1 : index + 2] == ["-m"]
               and tokens[index + 2 : index + 3] and tokens[index + 2] in _PROBE_MODULES):
-            yield tokens[index + 3 :]
+            args = tokens[index + 3 :]
+            yield args if quoted else _without_trailing_redirections(args)
         elif head in _SHELLS and _depth < 2 and "-c" in tokens[index + 1 :]:
             at = tokens.index("-c", index + 1)
             if at + 1 < len(tokens):

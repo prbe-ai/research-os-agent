@@ -20,7 +20,9 @@ To see where it landed, run `probe session status`.
 
 `/probe inline` is typed by the researcher only. The daemon stops, and you read
 and write Probe yourself, recording by the two skills the notice names; any
-other `/probe` move hands Probe back to the daemon.
+other `/probe` move hands Probe back to the daemon. A session another program
+launched cannot start inline (no environment variable sets it): once it has
+started, the researcher runs `probe session state inline --session <id>` in a terminal.
 
 If the team's free daemon allowance runs out, Probe automatically hands this
 session to inline mode and tells you why. Record and read by the inline notice;

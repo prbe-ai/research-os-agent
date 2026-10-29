@@ -2540,8 +2540,11 @@ def _drop_source(session_id: str) -> None:
 # read it as recording anyway, so no new byte. The marker `<sid>.inline` is what
 # makes a `full` inline: a `full` without one (an older CLI's `track`) is NOT
 # inline and opens nothing.
-# Read-only inline keeps the existing `read-only` state and adds `mode` to the
-# marker. Every write gate therefore continues refusing writes in that state.
+# The researcher's `/probe inline` (`switch_to_inline`) always stores `full`,
+# from any state: typed in a read-only session it hands the agent writes too, by
+# design (the researcher chose it). Only the budget handoff (`inline_on_budget`)
+# keeps a read-only session read-only: it stores `read-only` with `mode` in the
+# marker, so every write gate keeps refusing writes there.
 #
 #     <sid>.inline      {"from": "daemon" | "read-only" | "off", "since": <epoch s>}
 #                       (+ "mode": "full" | "read-only", "reason": "budget_exhausted"
@@ -3442,19 +3445,23 @@ def default_tracking(config: dict | None = None) -> bool:
     return DEFAULT_TRACKING if value is None else value
 
 
-def state_env_override() -> "str | None":
+def state_env_override(environ: "dict[str, str] | None" = None) -> "str | None":
     """The RECOGNIZED `PROBE_SESSION_TRACKING` value as a state, or None.
 
     Same variable as the boolean override, widened. Keeping one variable matters
     more than the tidiness of a second: a machine that exported the old name and
     a machine that exported a new one would disagree about the same setting, and
     nothing would say which was winning.
+
+    `environ`: another environment to read (`harness_launch_environ`), else this
+    process's own.
     """
-    explicit = normalize_state(os.environ.get("PROBE_SESSION_STATE"))
+    env = os.environ if environ is None else environ
+    explicit = normalize_state(env.get("PROBE_SESSION_STATE"))
     if explicit is not None:
         return explicit
     # The old variable, read as what it meant when it was the only one.
-    return _legacy_state_from_tracking(os.environ.get("PROBE_SESSION_TRACKING"))
+    return _legacy_state_from_tracking(env.get("PROBE_SESSION_TRACKING"))
 
 
 def _legacy_state_from_tracking(value: object) -> "str | None":
@@ -3523,11 +3530,14 @@ def resolve_state_default(
     config: dict | None = None,
     *,
     errors: list[str] | None = None,
+    environ: "dict[str, str] | None" = None,
 ) -> tuple[str, str]:
     """The effective new-session STATE and its diagnostic source: the
     environment, then the machine file, then shipped -- the same ladder as
-    `resolve_tracking_default`. `cwd` is unused since folder defaults retired."""
-    override = state_env_override()
+    `resolve_tracking_default`. `cwd` is unused since folder defaults retired.
+    `environ`: the environment to read instead of this process's
+    (`state_env_override`)."""
+    override = state_env_override(environ)
     if override is not None:
         return override, "environment"
     data = _read_config() if config is None else config
@@ -4355,6 +4365,33 @@ def process_environ(pid: int) -> "dict[str, str] | None":
         if sep:
             out[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
     return out
+
+
+def harness_launch_environ(
+    title: str, pid: "int | None" = None, stop_titles: "tuple[str, ...] | list[str]" = ()
+) -> "dict[str, str] | None":
+    """The environment the nearest ancestor titled `title` (a harness's binary)
+    was started with, or None. A harness may filter what its hooks inherit
+    (Codex's `shell_environment_policy` drops `PROBE_SESSION_STATE`, issue
+    3620); its own process still has what the researcher launched it with.
+    The walk stops at an ancestor titled one of `stop_titles` (another coding
+    agent, nearer than one titled `title`: whatever is above it launched that
+    agent, not this session), and passes a match it cannot read (the wrapper
+    above it was started with the same). Linux /proc only: elsewhere the walk
+    would cost a `ps` and read nothing. Never raises."""
+    if not title or not os.path.isdir("/proc/self"):
+        return None
+    try:
+        for ancestor, _start, name in _ancestors(pid):
+            if _titled(name, title):
+                environ = process_environ(ancestor)
+                if environ is not None:
+                    return environ
+            elif any(_titled(name, other) for other in stop_titles):
+                return None
+    except Exception:  # noqa: BLE001 -- a hook must never break
+        return None
+    return None
 
 
 def harness_process(

@@ -394,7 +394,9 @@ def _seed_tracking_signal() -> None:
     resume or post-compact start re-runs it harmlessly. Fail-soft: a seed that
     cannot be written leaves the file absent, which every reader now resolves
     against the same default anyway -- the seed makes the state explicit, it is
-    not what makes it correct.
+    not what makes it correct. One exception: the state a Codex session was
+    launched with (`_launch_environ`) reaches it only through this seed, so an
+    unwritten seed leaves such a session on the machine default.
     """
     session_id = os.environ.get(SESSION_ID_ENV) or ""
     if not session_id:
@@ -411,7 +413,7 @@ def _seed_tracking_signal() -> None:
         if _session_marker.session_state(session_id) is not None:
             return
         cwd = os.environ.get(SESSION_CWD_ENV) or None
-        state, source = _session_marker.resolve_state_default(cwd)
+        state, source = _session_marker.resolve_state_default(cwd, environ=_launch_environ())
         # `on` is stored by who records (the wizard's "Who records", `seed_state`):
         # `daemon` in the lean plugin's sessions, whose agent has nothing to
         # record with, and `full` everywhere else -- including a default still
@@ -425,6 +427,32 @@ def _seed_tracking_signal() -> None:
         )
     except Exception:
         pass
+
+
+#: The harness whose hooks do not get the variables it was started with: Codex
+#: applies its `shell_environment_policy` to them (issue 3620).
+HOOK_ENV_FILTERED = "codex"  # harness-literal-ok: only Codex filters its hooks' environment (issue 3620)
+
+
+def _launch_environ() -> "dict | None":
+    """The environment the Codex process itself was started with, when this
+    hook runs under Codex and its own environment has no state override; None
+    (read this process's own) otherwise. Codex's `shell_environment_policy`
+    drops `PROBE_SESSION_STATE` from what its hooks inherit (issue 3620), so a
+    session launched with it set seeded the machine default instead. Every other
+    harness passes its environment to its hooks whole. Linux only
+    (`harness_launch_environ`); elsewhere `probe doctor` says how to pass it."""
+    if _session_marker.state_env_override() is not None:
+        return None
+    try:
+        hooks = _hook_harness()
+        harness = hooks.current()
+        if harness.id != HOOK_ENV_FILTERED or not harness.binary:
+            return None
+        others = tuple(h.binary for h in hooks.registry().all() if h.binary and h.binary != harness.binary)
+    except Exception:
+        return None
+    return _session_marker.harness_launch_environ(harness.binary, stop_titles=others)
 
 
 def _probe_state() -> str:
@@ -733,6 +761,54 @@ def _outbox_dead_letters() -> int:
         return 0
 
 
+#: Which dead letters a session start told of, per outbox and per audience:
+#: `{"<outbox dir>": {"<audience>": {"names": ["<op file>", ...], "at": <epoch s>}}}`
+#: under the state folder.
+DEAD_LETTERS_TOLD_FILE = "outbox-dead-letters-told.json"
+#: Letters already told are told again this often while they stay stuck: a
+#: telling can reach nobody (a harness that drops the channel, a headless start,
+#: a hook cut short), and a retried letter fails again under its old name.
+DEAD_LETTERS_RETELL_S = 86400
+#: Who a session start tells: the agent that repairs the letters
+#: (`OUTBOX_REPAIR_CONTEXT`), an agent that may only report them
+#: (`OUTBOX_REPORT_ONLY_CONTEXT`), or the researcher (the daemon profile's
+#: line). Telling one never stands in for telling another.
+TELL_REPAIR, TELL_REPORT, TELL_RESEARCHER = "repair", "report", "researcher"
+
+
+def _untold_dead_letters(audience: str, now: "float | None" = None) -> int:
+    """`_outbox_dead_letters`, only when `audience` has not been told of them
+    (one is new since the last telling, or that telling is
+    DEAD_LETTERS_RETELL_S old), else 0; records what it tells. A letter that
+    can never deliver (a stale epoch, a 404) was announced at every session
+    start (issue 3629); `probe doctor` and `probe outbox status` keep counting
+    it. A record that cannot be read or written tells, as before."""
+    failed = _outbox_dead_letters()
+    if not failed:
+        return 0
+    now = time.time() if now is None else now
+    try:
+        outbox = str(_outbox_dir())
+        names = sorted(p.name for p in (Path(outbox) / "failed").glob("*.json"))
+        path = version_policy.state_dir() / DEAD_LETTERS_TOLD_FILE
+        try:
+            told = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            told = {}
+        told = told if isinstance(told, dict) else {}
+        tellings = told.get(outbox) if isinstance(told.get(outbox), dict) else {}
+        last = tellings.get(audience) if isinstance(tellings.get(audience), dict) else {}
+        seen = last.get("names") if isinstance(last.get("names"), list) else []
+        at = last.get("at") if isinstance(last.get("at"), (int, float)) else 0
+        if set(names) <= set(seen) and 0 <= now - at < DEAD_LETTERS_RETELL_S:
+            return 0
+        version_policy.atomic_write_json(
+            path, {**told, outbox: {**tellings, audience: {"names": names, "at": int(now)}}})
+    except Exception:
+        pass
+    return failed
+
+
 #: Why the maintenance spawn carries NO `outbox retry`/`outbox drain`, though
 #: the first draft had both and they look like the obvious automation
 #: (adversarial review, findings 1/2/6/7):
@@ -785,8 +861,8 @@ OUTBOX_REPORT_ONLY_CONTEXT = (
 
 
 def _outbox_context(tracking_off: bool) -> str | None:
-    """The repair prompt, the report-only variant, or None when nothing is stuck."""
-    failed = _outbox_dead_letters()
+    """The repair prompt, the report-only variant, or None when nothing new is stuck."""
+    failed = _untold_dead_letters(TELL_REPORT if tracking_off else TELL_REPAIR)
     if not failed:
         return None
     template = OUTBOX_REPORT_ONLY_CONTEXT if tracking_off else OUTBOX_REPAIR_CONTEXT
@@ -990,7 +1066,7 @@ DAEMON_STOPPED_LINE = "Probe daemon stopped: {reason}. Recording and reads resum
 
 def _profile_items(stale_cli: bool = False) -> str:
     items: list[str] = []
-    failed = _outbox_dead_letters()
+    failed = _untold_dead_letters(TELL_RESEARCHER)
     if failed:
         items.append(f"{failed} writes stuck in the outbox")
     if stale_cli:

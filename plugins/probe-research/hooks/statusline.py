@@ -139,6 +139,10 @@ def segment(payload: dict) -> str:
             tracking=marker.state_allows_writes(switch),
             color=_color(),
             session_state=switch,
+            # Kimi's footer before its first message (no session yet): the worker
+            # has not started, so it is STARTING when it can start at all, as
+            # below; never `daemon degraded` (issue 3619).
+            daemon_live=marker.companion_key_held(config),
             daemon=marker.daemon_session("", agent),
         )
 
