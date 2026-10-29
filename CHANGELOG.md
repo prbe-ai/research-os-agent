@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Queued uploads of a run go up together: the outbox sends the uploads at the head of each run's queue (up to 32 at a time, 8 bodies in flight, `PROBE_UPLOAD_WORKERS` to change it) with one presign and one confirm request per 16 files instead of one of each per file (presigned links are short-lived, so a request presigns only what is sent right after it). A presigned PUT the store refuses (an expired link) is presigned once more before it fails. The window asks for links straight to object storage (`X-Probe-Direct-Upload: 1`) where the server grants them; a machine that cannot reach the storage host (or is refused there) sends those files through the API's relay instead, and stops asking for the rest of the process. Order is kept where it means something: an upload never goes ahead of an earlier write of its run other than a metric point, two versions of a file land in the order they were queued, and the run's close still waits. A server without the many-file routes gets the same files one request each, in parallel.
+
 ## 0.342.8
 
 - Refresh the bundled command index after the desktop workspace-save fix, so the daemon can use it immediately without rebuilding it on first use. The release gate now checks its source fingerprint.
