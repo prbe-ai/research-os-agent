@@ -14,7 +14,7 @@ Never type a number. Name what to show; the server reads the values. `probe visu
 - Copy keys, paths and run ids verbatim from `probe visuals options`.
 - A measure: `metric` (`key`, `reduce`: last, min, max, mean, sum, count), `summary` or `config` (`path`), or `run` (`field`: name, status).
 - `runs`: `"all"` or this entity's run ids. `sort` + `limit` keep the top N.
-- An experiment's results tables and charts all go here, none on its page. A project's tables go here; its charts stay on its page. `[]` only when there is nothing to show yet, or one number the page can say.
+- An experiment's results tables and charts go here, in its Metrics center; its page may also show them its own way. A project's tables go here. `[]` only when there is nothing to show yet, or one number the page can say.
 
 # Kinds
 

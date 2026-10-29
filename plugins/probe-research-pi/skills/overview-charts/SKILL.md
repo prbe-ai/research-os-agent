@@ -1,24 +1,20 @@
 ---
 name: overview-charts
-description: When to chart what a run recorded, and how to frame the chart on the point it makes; you declare a series, the host draws it. Load when an entity has metrics.
+description: Which charts a page draws and how to frame each on the point it makes. Load when an entity has metrics.
 ---
 
-Never type a data point. Declare a series; the host injects the real points.
+Every visual makes one point, said in one sentence beside it.
 
-```html
-<div id="chart-loss" class="ov-chart" style="height:280px"></div>
-<script>PROBE.lineChart('chart-loss', 'loss', {title: 'Validation loss', yName: 'val/loss'})</script>
-```
+- A curve over steps (loss, reward, accuracy over training): declare its series and draw it; never type its points.
+- Results across runs (a score per setting, a sweep grid, seeds): draw your own chart from the numbers the runs report (`probe run get`, the entity card), 3 significant figures: bars for one score across settings, a heatmap for a two-setting grid, points with their spread for seeds. Label each mark with its run or setting.
+- One number: say it. Two or three: a small table.
+- How parts fit (a pipeline, two arms): a diagram (`artifact-diagramming`).
+- A flat, single-point or broken series: leave it out and say so in one line.
+- Charts, tables and labels follow `artifact-design`: one scale per chart, every label a value the chart reaches.
 
-- Copy the metric key and run ids verbatim from the `.chartable.json` file the checkout names. One container and one call per series. Options: `title`, `yName`, `xName`, `smooth`, `log`.
-- Chart: a shape over steps (`point_count` 2 or more); two or three runs of one key compared; a crashed-and-resumed run as one line.
-- Don't chart: one number (say it), a key with `point_count` 1 in every run, such as a final or test score (a small table), numbers from notes rather than logged metrics (a small table, never a plot drawn by hand), how parts fit (a diagram: `artifact-diagramming`), a flat series.
-- An experiment's results charts go in its Metrics center (`overview-visuals`), not here; a training curve over steps (loss, learning rate, reward) stays here.
-- One sentence per chart says what it shows.
+# Frame a curve on its sentence
 
-# Frame the chart on its sentence
-
-A chart shows whole runs unless its entry says otherwise. When the sentence beside it is about something narrower, set the entry to show that:
+A declared curve shows whole runs unless its entry says otherwise. When the sentence beside it is about something narrower, set the entry to show that:
 
 - A moment (a spike, a divergence, a crash, the last stretch): zoom with `x_min` / `x_max` around it. Whole steps on a step axis; on `wall_clock`, ISO times inside the run's `first_time`-`last_time`, and the entry names its `kind`.
 - Keys read together (train and val loss, reward and KL): one chart, the extra keys in `metrics`.
@@ -26,3 +22,4 @@ A chart shows whole runs unless its entry says otherwise. When the sentence besi
 - Evals at a few steps the runs share, such as one per epoch: `chart`: `bar`.
 - An early spike that flattens the rest: `y_min` / `y_max`, or `log`.
 - At most 16 lines per chart (runs x keys, plus the computed line per run), and 8 computed lines per page.
+- More curves than 6 declarations hold: chart the ones that carry the point and say what was left out.

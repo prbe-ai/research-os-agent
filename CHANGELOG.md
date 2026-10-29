@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **The daemon writes Summary pages as custom Claude artifacts.** `write-summary` now asks for an ELI10 TL;DR on top (one sentence, up to 3 bullets), a diagram wherever it makes a comparison or a pipeline clearer and a chart wherever a run logged a curve or runs can be compared, a rewrite of the top on each update instead of another paragraph, and a project page that sums up its parts. `overview-page` names the treatment (a research memo) and the order the page skills win in; `overview-contract` and `overview-charts` teach the page's own code inside its `<figure>`, pinned libraries, `PROBE.series('<id>')` for logged curves and charts drawn from run results; `artifact-design` is checked against today's Claude Code skill and fitted to the light, untitled Summary pane. The daemon puts the five page skills whole into the writer's conversation once, so even a new experiment's first page is written with them (it read `artifact-design` in 2 of 53 sessions that pushed a page when they were a read away). Libraries are Chart.js, d3 and echarts, which draw under the frame's CSP without `eval`. `evals/companion/render.py` renders pages in the dashboard's real frame and counts what drew.
 
 ## 0.343.1
 

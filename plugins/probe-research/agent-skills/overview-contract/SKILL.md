@@ -1,37 +1,34 @@
 ---
 name: overview-contract
-description: The page's HTML, CSS and chart rules; a linter refuses a page that breaks one. Load before editing a page.
+description: The page's HTML, CSS and script rules; push refuses a page that breaks one. Load before editing a page.
 ---
 
-A linter checks every rule here; `probe summary push` hands the fault back.
+`probe summary push` checks every rule here and hands the fault back.
 
 # Shape
 
-- One `<style>`, then `<article class="ov-page">...</article>`, then any `<script>`. No doctype, html, head, body, meta, base, iframe, form, input, button, audio or video.
-- No title or masthead: no `<h1>`, `<header>` or `<hgroup>`, and no heading or styled name first. Open with prose; `<h2>` / `<h3>` head later sections.
+- Any `<style>`, then `<article class="ov-page">...</article>`. No doctype, html, head, body, meta, base, iframe, form, input, button, audio or video. No HTML comments (`<!-- -->`, except the kept markers) and no `@layer`; comment CSS with `/* */`.
+- No title or masthead: no `<h1>`, `<header>` or `<hgroup>`, and no heading first. Open with the TL;DR; `<h2>` / `<h3>` head later sections.
 - No generated-at line or model name.
 
 # A person's text: `<!-- kept: hN -->` ... `<!-- /kept -->`
 
 - Every marker stays, in order; the server puts the person's words back in its place.
-- Never write inside one, or add `data-owner`, `data-strength` or `data-origin`.
+- Never write inside one, add `data-owner`, `data-strength` or `data-origin`, or touch one from a script. Keep their block out of a figure with code and out of a filled card.
 
-# Sandbox
+# Script
 
-- Styles inline; the only script is the chart calls below, and a page loads no library. No `on*` handlers, no `javascript:` URLs. Fonts from fonts.googleapis.com / fonts.gstatic.com. Images as `data:` URIs; diagrams as inline `<svg>`.
-- No fetch, XMLHttpRequest, WebSocket, form, window.open or navigation. No `@import`; `url()` only for `data:` or fonts.gstatic.com.
-- Links: `href="#section"` only. A person's marked element may keep their own https link; you never write one.
+- Code goes in a `<script>` inside the `<figure>` it draws: its container, its library and its code together. A `<script>` takes no attribute but `src`. Attach handlers with `addEventListener` (click, hover), never `on*` attributes or `javascript:` URLs.
+- Libraries only a pinned build from cdnjs, Chart.js, d3 or echarts: `https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js`, `https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js`, `https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js`.
+- The page reaches nothing: no fetch, XMLHttpRequest, WebSocket, WebRTC, `import()`, postMessage, cookies, navigation, window.open, top or parent, no field a person types into (input, textarea, contenteditable) and no key listeners.
 
-# Look: the host is light and owns the frame
+# Look
 
-- Nothing on `.ov-page`, `html` or `body` (background, padding, margin, width, max-width, font-size, line-height). Scope every rule under `.ov-page`.
-- Headings at most one step above 14px. No background, border or shadow on tiles, chart or table wrappers, cards or lists. Keep table row lines, status badges and a diagram's meaningful strokes and fills.
-- Colors and fonts only from the host tokens, as `var(--ov-fg)`: `--ov-bg`, `--ov-surface`, `--ov-surface-2`, `--ov-fg`, `--ov-muted`, `--ov-line`, `--ov-accent`, `--ov-good`, `--ov-warn`, `--ov-bad`, `--ov-info`, `--ov-font`, `--ov-mono`. Set `.ov-page { --ov-accent: <hex>; }` once; one other literal hex only for a diagram's key element.
-- No `prefers-color-scheme` query.
+- The frame is light only and sizes the page's box; inside it the design is yours (`artifact-design`). Style your own classes under `.ov-page`; leave `html`, `body` and the article's own box to the host. Host tokens: `--ov-bg`, `--ov-surface`, `--ov-surface-2`, `--ov-fg`, `--ov-muted`, `--ov-line`, `--ov-accent`, `--ov-good`, `--ov-warn`, `--ov-bad`, `--ov-info`, `--ov-font`, `--ov-mono`. No `prefers-color-scheme`.
+- Fonts from fonts.googleapis.com / fonts.gstatic.com; images as `data:` URIs; links `href="#section"` only.
 
-# Charts: the host draws them (`overview-charts` says when)
+# Charts
 
-- Declare the series in the `<script type="application/json" data-probe-series>[...]</script>` block at the top of the draft: a list of entries (`id`, `metric`, `run_ids`, `kind`, `x_axis`, `title`; optional `metrics`, `expression`, `label`, `chart`, `x_min`, `x_max`, `y_min`, `y_max`), keys and run ids copied from the `.chartable.json` file the checkout names. At most 6 sets; `[]` when the page has no chart.
-- Per declared series, one container and one call, nothing else: `<div id="chart-loss" class="ov-chart" style="height:280px"></div><script>PROBE.lineChart('chart-loss', 'loss', {title: 'Validation loss', yName: 'val/loss'})</script>`
-- A declared series with no call, or whose min equals max, is a fault.
-- No chart of your own: no library, no `<canvas>`, no data plotted by hand in `<svg>`; the dashboard draws every chart. A number with no logged series goes in a table or a sentence. `artifact-design`'s chart guidance is for diagrams only.
+- Declare every logged series the page draws in the `<script type="application/json" data-probe-series>[...]</script>` block at the top of the draft: entries (`id`, `metric`, `run_ids`, `kind`, `x_axis`, `title`; optional `metrics`, `expression`, `label`, `chart`, `x_min`, `x_max`, `y_min`, `y_max`), keys and run ids copied from the `.chartable.json` file the checkout names. At most 6; `[]` when none.
+- Draw each one, by its literal id: in your figure's code, `PROBE.series('loss')` returns `{metric, title, x_axis, runs: [{run_id, name, metric, points: [[x, y], ...], missing}]}`, one entry per run and key (a computed line has a `label`; x is the step, or epoch ms on `wall_clock`); skip an entry whose `points` is empty. Or with the dashboard's own chart: `<div id="chart-loss" class="ov-chart" style="height:280px"></div><script>PROBE.lineChart('chart-loss', 'loss', {title: 'Validation loss'})</script>`.
+- A declared series nobody draws is a fault. Numbers that no run logged as a series: type them, copied from Probe reads this run.

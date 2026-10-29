@@ -18,10 +18,10 @@ Draw as the engineer who has to live with the decision, not as a decorator: a di
 
 ## Inline SVG mechanics
 
-These mechanics apply where the page renders inline SVG natively (HTML pages); a markdown-rendered page draws its diagrams in whatever fence that lane's renderer supports, and the skill that owns the lane says which. Hand-author inline `<svg>` with native shapes (`rect`, `circle`, `line`, `polyline`, `path`) and `<text>` - no libraries, no runtime, no external images.
+Hand-author inline `<svg>` with native shapes (`rect`, `circle`, `line`, `polyline`, `path`) and `<text>` - no libraries, no runtime, no external images.
 
 - **Size by `viewBox`.** Set `viewBox="0 0 W H"` and let CSS scale it (`max-width: 100%; height: auto`); choose W and H for the content, not a preset. Wide flows read left-to-right; layered stacks read top-to-bottom.
-- **Theme with `currentColor`.** Strokes, text, and arrowheads in `currentColor` inherit the page's foreground in light and dark themes alike; reserve a literal hue for the one element that carries meaning (the option leaned toward, the hop under discussion), and make sure it reads on both grounds.
+- **Theme with `currentColor`.** Strokes, text, and arrowheads in `currentColor` inherit the page's foreground; reserve a literal hue for the one element that carries meaning (the option leaned toward, the hop under discussion), and make sure it reads on the light ground.
 - **Arrowheads are markers or polygons.** A `<defs><marker>` referenced by `marker-end="url(#arrow)"` (fragment-internal id) or a small `<polygon>` at the line's end - never an image.
 - **Keep text legible.** Roughly 11-13px at the drawn scale, `text-anchor` for alignment, short labels (a word or three); explanatory sentences belong in the caption below the figure, not in the drawing.
 - **Align to a grid.** Shared baselines and even gaps are most of what makes a hand diagram read as deliberate; eyeballed offsets read as noise.
