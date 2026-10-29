@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.342.8
+
 - Refresh the bundled command index after the desktop workspace-save fix, so the daemon can use it immediately without rebuilding it on first use. The release gate now checks its source fingerprint.
 
 ## 0.342.7
