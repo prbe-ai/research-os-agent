@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.346.1
+
 - **A project's Summary page weighs its parts by the work in them, not by which came last.** The page skills told a writer to rewrite the top around the newest result, so a project that is mostly supervised fine-tuning read as all RL once an RL experiment ran (Willow: 8 of 90 experiment runs are RL, the page led with RL). `write-summary` and `overview-page` now say a project's top is what the project has produced and where each main line of work stands, each part given room by its runs and weeks.
 
 ## 0.346.0
