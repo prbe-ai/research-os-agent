@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.346.0
+
 - **`probe summary push` refuses a page Probe's credential scrubber would rewrite, instead of storing it broken.** A figure's code naming a variable like `passSig = [false, ...]` was rewritten to `passSig=<redacted>, ...` on the way, the chart threw, and push still said pushed; push now writes nothing and names the text near the change, as `summary edit` already did. The page skills now say how to load a font (`<link>`, `@import` is refused), that counts stay exact, the chart caps and `PROBE.lineChart` options, where a project's experiments and a whole conclusion are read, and that a table never stands in for a chart. `evals/companion/render.py` no longer counts an icon-sized svg (a legend swatch) as a blank visual. pi's guard allows `probe session owed` under the daemon profile, as the other harnesses' guard has since 0.345.0 (its end-of-turn check was refused there).
 
 ## 0.345.1
