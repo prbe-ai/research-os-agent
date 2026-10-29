@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe ask --writer` takes requests up to 16,000 characters** (was 4,000), enough for a phase handover or a branch's conclusion. The worker's marker now names the longest request it takes whole (`request_chars`); a request longer than a running older worker would keep is refused with that worker's limit instead of being cut.
+
 ## 0.346.1
 
 - **A project's Summary page weighs its parts by the work in them, not by which came last.** The page skills told a writer to rewrite the top around the newest result, so a project that is mostly supervised fine-tuning read as all RL once an RL experiment ran (Willow: 8 of 90 experiment runs are RL, the page led with RL). `write-summary` and `overview-page` now say a project's top is what the project has produced and where each main line of work stands, each part given room by its runs and weeks.
