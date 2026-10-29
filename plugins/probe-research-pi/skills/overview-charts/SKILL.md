@@ -10,7 +10,7 @@ Every visual makes one point, said in one sentence beside it.
 - One number: say it. Two or three: a small table.
 - How parts fit (a pipeline, two arms): a diagram (`artifact-diagramming`).
 - A flat, single-point or broken series: leave it out and say so in one line.
-- Charts, tables and labels follow `artifact-design`: one scale per chart, every label a value the chart reaches.
+- Charts, tables and labels follow `artifact-design`: one scale per chart, every label a value the chart reaches (a tick step its labels print exactly: Chart.js shows `stepSize: 0.25` as 0.3).
 
 # Frame a curve on its sentence
 
@@ -18,8 +18,8 @@ A declared curve shows whole runs unless its entry says otherwise. When the sent
 
 - A moment (a spike, a divergence, a crash, the last stretch): zoom with `x_min` / `x_max` around it. Whole steps on a step axis; on `wall_clock`, ISO times inside the run's `first_time`-`last_time`, and the entry names its `kind`.
 - Keys read together (train and val loss, reward and KL): one chart, the extra keys in `metrics`.
-- A ratio, gap or running total no run logged: a computed line per run, `expression` + `label`, as JSON text. Each `series` leaf names a `kind` and `key` from that file: `{"op":"binary","fn":"sub","left":{"op":"series","kind":"eval","key":"loss"},"right":{"op":"series","kind":"train","key":"loss"}}`. Other ops: `const` (`value`), `unary` (`log`, `abs`, ...), `smooth` (`ema`/`sma`), `scan` (`cumsum`, `delta`), `window` (`mean`, `max`, ...); other `binary` fns: `add`, `mul`, `div`.
+- A ratio, gap or running total no run logged: a computed line per run, `expression` + `label`, as JSON text. Each `series` leaf names a `kind` and `key` from that file: `{"op":"binary","fn":"sub","left":{"op":"series","kind":"eval","key":"loss"},"right":{"op":"series","kind":"train","key":"loss"}}`. Other ops: `const` (`value`), `unary` (`log`, `abs`, ...), `smooth` (`ema` with `factor` 0-1, `sma` with `window` steps), `scan` (`cumsum`, `delta`), `window` (`mean`, `max`, ...); other `binary` fns: `add`, `mul`, `div`.
 - Evals at a few steps the runs share, such as one per epoch: `chart`: `bar`.
-- An early spike that flattens the rest: `y_min` / `y_max`, or `log`.
+- An early spike that flattens the rest: `y_min` / `y_max` on the entry, or `{log: true}` in `PROBE.lineChart`'s options.
 - At most 16 lines per chart (runs x keys, plus the computed line per run), and 8 computed lines per page.
 - More curves than 6 declarations hold: chart the ones that carry the point and say what was left out.

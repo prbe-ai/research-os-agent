@@ -18,7 +18,7 @@ Older history goes below, or goes.
 - No title, dek or byline (the dashboard prints them). Headings state claims.
 - The structure follows the latest data: a section or table that fit an earlier stage gets rewritten, not kept.
 - Skip a question the evidence can't answer, in one line.
-- A bigger effort's page covers its parts: its card lists `parts` (a part's lists `part_of`); read each with `entity`.
+- A bigger effort's page covers its parts: its card lists `parts` (a part's lists `part_of`), `probe experiment list --project P` its experiments; read each with `entity` (`record` holds a conclusion whole; the card cuts it).
 
 Where these skills disagree, write-summary and this one (what to say) win, then `overview-contract` (what the frame allows), then `artifact-design` (the look).
 

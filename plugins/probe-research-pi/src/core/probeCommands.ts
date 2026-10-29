@@ -217,6 +217,7 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "feedback flush",
   "capy sync",
   "capy disconnect",
+  "session owed",
 ]);
 
 /**

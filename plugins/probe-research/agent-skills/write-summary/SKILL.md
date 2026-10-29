@@ -18,13 +18,15 @@ unless they are already shown to you whole.
 - Top: a TL;DR a smart 10-year-old could follow - one sentence on what it is, then up to 3 one-line
   bullets on where it stands, numbers kept.
 - Show, don't tell: a diagram wherever it makes a comparison or a pipeline clearer, and a chart wherever
-  a run logged a curve or a comparison holds more than three numbers. One sentence per visual says what it shows.
+  a run logged a curve or a comparison holds more than three numbers; a table never stands in for that
+  chart. One sentence per visual says what it shows.
 - Each update rewrites the top around the newest result and replaces the old status; never add a
   paragraph under it. A section that no longer fits is rewritten or cut.
-- A project page sums up its parts: change your part's line there, and its TL;DR only when the
-  project's answer moved. The detail goes on the experiment's page.
+- A project page sums up its parts, charting its experiments' answers side by side: change your part's
+  line there, and its TL;DR only when the project's answer moved. The detail goes on the experiment's page.
 
-Fix whatever newer work made wrong. Numbers from Probe, 3 significant figures. Leave
+Fix whatever newer work made wrong. Numbers from Probe: measurements to 3 significant figures, counts
+(steps, runs, rows) exact, a p-value as Probe gives it. Leave
 `<!-- kept: ... -->` blocks alone.
 
 Who did what, or why: `probe mcp call entity '{"refs": ["<kind>:<slug>"], "view": "sessions"}'` (or `"summary_history"`).
