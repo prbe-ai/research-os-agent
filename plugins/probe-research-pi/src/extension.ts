@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentActivityOutcome, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { newAskerState, QuestionAsker, feedbackUnsent, spawnFeedbackFlush, type ApprovalsDeps, type AskerState } from "./core/approvals.js";
@@ -34,9 +34,11 @@ import {
   forgetInlineShown,
   inlineNotice,
   inlineNoticeDue,
+  inlineSkillsText,
   localCliVersion,
   markInlineShown,
 } from "./inlineNotice.js";
+import { agentOwes, owedSendBack } from "./owed.js";
 import {
   finishHostedSession,
   HOSTED_FINISH_WAIT_S,
@@ -112,6 +114,9 @@ import {
 
 /** Why pi tears an extension runtime down (`SessionShutdownEvent.reason`), the ones this file tells apart. */
 const ShutdownReason = { Quit: "quit", Reload: "reload" } as const satisfies Record<string, SessionShutdownEvent["reason"]>;
+
+/** How a run ended (`AgentBeforeSettleEvent.outcome`), the one this file acts on. */
+const ActivityOutcome = { Completed: "completed" } as const satisfies Record<string, AgentActivityOutcome>;
 
 // ---------------------------------------------------------------------------
 // The state that outlives this version
@@ -1119,6 +1124,9 @@ export function prepareExtension(env: ImplEnv): Candidate {
       if (sessionId && since !== null) {
         const cli = await localCliVersion({ execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env });
         notice = inlineNotice(resourceRoot, cliHasInlineBridge(cli), sessionId);
+        // The skills it records by, whole, as the daemon's writer reads them.
+        const skills = sessionInlineReadOnly(sessionId) ? "" : inlineSkillsText(resourceRoot);
+        if (skills) notice += `\n\n${skills}`;
         markInlineShown(sessionId, since);
       }
     } else {
@@ -1288,6 +1296,25 @@ export function prepareExtension(env: ImplEnv): Candidate {
     if (hasProbePointer(process.env) && !teamItemsHidden(process.env)) spawnTeamNoteSync(realTeamNoteSyncDeps());
   };
 
+  // An inline agent that leaves a summary or a note owed is sent back, as the
+  // plugin's Stop hook does (owed.ts). At `agent_before_settle`, NOT
+  // agent_settled: pi fires that one after every run, a run the researcher
+  // stopped (Esc) and a provider error included, and a new turn there would
+  // restart an agent they just stopped. Here only a run that `completed` is
+  // continued, by pi's own boundary result.
+  const onAgentBeforeSettle: EventHandler = async (event, ctx) => {
+    if (event?.outcome !== ActivityOutcome.Completed || probeIsOff(s)) return;
+    try {
+      const sid = ctx?.sessionManager?.getSessionId();
+      if (!sid || !inDaemonProfile(s, sid) || !sessionIsInline(sid) || !agentOwes(sid)) return;
+      const text = await owedSendBack(sid, { execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env });
+      if (!text) return;
+      return { entries: [{ type: "custom_message", customType: "probe-owed", content: text, display: true }], continue: true };
+    } catch (err) {
+      logLine(`owed before settle: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   // A compaction took the inline notice out of the agent's context: the next
   // prompt tells it again (`before_agent_start`).
   const onSessionCompact: EventHandler = async (_event, ctx) => {
@@ -1428,6 +1455,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
       [ShimEvent.BeforeAgentStart]: onBeforeAgentStart,
       [ShimEvent.ToolCall]: onToolCall,
       [ShimEvent.AgentSettled]: onAgentSettled,
+      [ShimEvent.AgentBeforeSettle]: onAgentBeforeSettle,
       [ShimEvent.SessionCompact]: onSessionCompact,
       [ShimEvent.Input]: onInput,
     },

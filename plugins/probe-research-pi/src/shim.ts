@@ -88,6 +88,7 @@ export const ShimEvent = {
   BeforeAgentStart: "before_agent_start",
   ToolCall: "tool_call",
   AgentSettled: "agent_settled",
+  AgentBeforeSettle: "agent_before_settle",
   SessionCompact: "session_compact",
   Input: "input",
 } as const;

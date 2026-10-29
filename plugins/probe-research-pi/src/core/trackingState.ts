@@ -140,7 +140,8 @@ const CHILD_ENV_KEYS = [
   "PROBE_PI_TAP_PLUGIN_DIR",
 ] as const;
 
-function trackingChildEnv(env: PathEnv): PathEnv {
+/** What a `probe` child the extension starts may see: the keys above, and `PROBE_AGENT=pi`. */
+export function trackingChildEnv(env: PathEnv): PathEnv {
   const child: PathEnv = { PROBE_AGENT: "pi" };
   for (const key of CHILD_ENV_KEYS) {
     if (env[key] !== undefined) child[key] = env[key];

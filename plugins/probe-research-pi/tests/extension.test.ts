@@ -1639,6 +1639,38 @@ describe("registerExtension — the guard", () => {
     expect(await told()).toBe(true);
   });
 
+  it("sends an owing inline agent back only after a run that completed, never after Esc or an error", async () => {
+    type BeforeSettle = (event: { outcome: string }, ctx: unknown) => Promise<unknown>;
+    const { ctx, handlers } = await start("daemon");
+    setInline(ctx, 1);
+    const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+    const owedDir = join(process.env.XDG_STATE_HOME!, "probe", "owed");
+    mkdirSync(owedDir, { recursive: true });
+    writeFileSync(join(owedDir, `${sid}.json`), JSON.stringify({
+      seq: 1, items: [{ why: "note", kind: "run", ref: "r1", by: "agent", seq: 1 }], asks: {},
+    }));
+    const asked: string[][] = [];
+    const prior = execFileMock.getMockImplementation()!;
+    execFileMock.mockImplementation((command, args, options, callback) => {
+      if (args[1] === "owed") {
+        asked.push(args);
+        callback(null, "Not ended: owed.\n", "");
+        return;
+      }
+      prior(command, args, options, callback);
+    });
+    const settle = handlers.get("agent_before_settle") as unknown as BeforeSettle;
+    expect(await settle({ outcome: "aborted" }, ctx)).toBeUndefined();
+    expect(await settle({ outcome: "error" }, ctx)).toBeUndefined();
+    await handlers.get("agent_settled")!({}, ctx);
+    expect(asked).toHaveLength(0);
+    expect(await settle({ outcome: "completed" }, ctx)).toEqual({
+      entries: [{ type: "custom_message", customType: "probe-owed", content: "Not ended: owed.", display: true }],
+      continue: true,
+    });
+    expect(asked).toEqual([["session", "owed", "--send-back", "--session", sid]]);
+  });
+
   it("blocks an agent-profile session's forged answer, and nothing else", async () => {
     const { toolCall, ctx } = await start(undefined);
     const answer = join(process.env.XDG_STATE_HOME!, "probe", "approvals", "answers", "x.json");

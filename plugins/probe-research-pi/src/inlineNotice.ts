@@ -69,6 +69,37 @@ export function inlineNotice(extensionDir: string, bridge: boolean, sessionId?: 
     .replace("{reads}", reads);
 }
 
+/** `session_marker.INLINE_SKILL_FILES`' skills, in that order. */
+export const INLINE_SKILL_NAMES = ["track-work", "write-summary", "edit-notes"] as const;
+
+/**
+ * The three skills, whole, as the daemon's writer reads them (notes parity N1;
+ * `session_marker.inline_skills_text`, `bite.skills_text` for a main agent):
+ * each SKILL.md without its front matter under `# Skill: <name>`. pi has no
+ * hook-context cap, so they ride the notice in one piece (never in `read only
+ * (inline)`: they are how to record); "" when none reads.
+ */
+export function inlineSkillsText(extensionDir: string): string {
+  const out: string[] = [];
+  for (const name of INLINE_SKILL_NAMES) {
+    let text: string;
+    try {
+      text = readFileSync(join(extensionDir, "skills", name, "SKILL.md"), "utf8");
+    } catch {
+      continue;
+    }
+    if (text.startsWith("---")) {
+      const end = text.indexOf("\n---", 3);
+      if (end >= 0) {
+        const cut = text.indexOf("\n", end + 1);
+        text = cut >= 0 ? text.slice(cut + 1) : "";
+      }
+    }
+    out.push(`# Skill: ${name}\n\n${text.trim()}`);
+  }
+  return out.join("\n\n");
+}
+
 /**
  * `version_check._triplet`: (major, minor, patch) from `probe 0.220.0`, a
  * leading word and any pre-release or build suffix ignored; null if unreadable.

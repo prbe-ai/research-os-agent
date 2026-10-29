@@ -1404,8 +1404,7 @@ def _inline_notice(session_id: str = "") -> str:
     skills the agent records by (the lean plugin ships them beside `hooks/`), its
     last sentence by what the local CLI can do (`version_check.inline_notice_for`).
     Unreadable: the too-old-CLI sentence, never commands the CLI may lack."""
-    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
-    skills = [os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES]
+    skills = [os.path.join(_inline_root(), name) for name in _session_marker.INLINE_SKILL_FILES]
     marker = _session_marker.inline_marker(session_id) or {}
     options = {"read_only": marker.get("mode") == _session_marker.STATE_READ_ONLY,
                "budget": marker.get("reason") == "budget_exhausted"}
@@ -1501,12 +1500,47 @@ def _ask_parent_on_prompt(session_id: str, cwd: "str | None") -> None:
 def _announce_inline_once(hook_event: str, session_id: str) -> None:
     """Manual or trusted confirmed-quota inline is active and the
     agent has not been told about this stretch: tell it now, once, where this
-    harness lets it land (`_inline_reaches_model`). Marked told only then."""
+    harness lets it land (`_inline_reaches_model`). Marked told only then.
+    From the notice on, each event whose context reaches the model carries the
+    next part of the skills it records by, whole (`_skills_reach_model`,
+    `session_marker.next_inline_skills_part`, notes parity N1)."""
     since = _session_marker.inline_notice_due(session_id)
-    if since is None or not _inline_reaches_model(hook_event):
-        return
-    _emit_context(hook_event, _inline_notice(session_id))
-    _session_marker.mark_inline_shown(session_id, since)
+    told = since is not None and _inline_reaches_model(hook_event)
+    if since is not None and not told:
+        return  # the skills follow the notice, never come before it
+    parts = [_inline_notice(session_id)] if told else []
+    if _skills_reach_model(hook_event):
+        part = _session_marker.next_inline_skills_part(session_id, _inline_root())
+        if part:
+            parts.append(part)
+    if parts:
+        _emit_context(hook_event, "\n\n".join(parts))
+    if told:
+        _session_marker.mark_inline_shown(session_id, since)
+
+
+def _from_helper_agent(payload: dict) -> bool:
+    """A hook fired inside a helper agent (subagent), as `reads_hook.from_helper_agent`
+    tells it: Claude Code puts `agent_id` in that payload and never on the main
+    thread; a `/subagents/` transcript path is the second net."""
+    if payload.get("agent_id"):
+        return True
+    path = payload.get("transcript_path")
+    return isinstance(path, str) and "/subagents/" in path.replace("\\", "/")
+
+
+def _inline_root() -> str:
+    """This plugin's `inline/` folder: the main agent's copies of the skills
+    an inline agent records by (the lean plugin ships them beside `hooks/`)."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
+
+
+def _skills_reach_model(hook_event: str) -> bool:
+    """Does context this hook adds reach the model, for the skills' parts? The
+    notice's own event (`_inline_reaches_model`), and every PostToolUse: each
+    harness that runs these hooks shows its context to the model (Kimi's
+    unshown one is QUIET_ENV)."""
+    return _inline_reaches_model(hook_event) or (hook_event == "PostToolUse" and os.environ.get(QUIET_ENV) != "1")
 
 
 def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, session_id: str = "") -> None:
@@ -2454,7 +2488,9 @@ def main() -> None:
                     landed = _apply_direction(direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload))
             if landed:
                 _announce("PostToolUse", landed, daemon=True, session_id=session_id)
-            else:
+            elif not _from_helper_agent(payload):
+                # A subagent's context is not the agent's: what lands there
+                # (the notice, a part of the skills) would be marked sent unheard.
                 _announce_inline_once("PostToolUse", session_id)
         return
     if hook_event == "UserPromptSubmit":

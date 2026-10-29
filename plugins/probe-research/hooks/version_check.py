@@ -923,7 +923,9 @@ def _inline_reminder() -> str | None:
     (`/probe inline`): the notice, now -- Claude Code's auto-compaction carries
     the turn on with no new prompt -- naming this plugin's `inline/` copies of
     the skills. Re-armed too (not marked told): where SessionStart context does
-    not land, the guard tells it at the next chance (`_announce_inline_once`)."""
+    not land, the guard tells it at the next chance (`_announce_inline_once`).
+    The first part of the skills rides with it (notes parity N1); the guard
+    sends the rest."""
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
     if os.environ.get(SESSION_SOURCE_ENV) not in (COMPACT_SOURCE, RESUME_SOURCE):
@@ -933,7 +935,9 @@ def _inline_reminder() -> str | None:
         return None
     _session_marker.forget_inline_shown(sid)
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
-    return inline_notice_for(*(os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES))
+    notice = inline_notice_for(*(os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES))
+    part = _session_marker.next_inline_skills_part(sid, root)
+    return f"{notice}\n\n{part}" if part else notice
 
 
 def _daemon_profile_excluded() -> str | None:

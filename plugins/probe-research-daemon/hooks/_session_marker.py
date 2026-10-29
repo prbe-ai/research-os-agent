@@ -1497,6 +1497,8 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `session send` messages one of the researcher's own sessions (an orchestrator
 #: steering its workers, G7): the server takes it only for a session of the same
 #: person and labels it as from an agent session, never as the researcher.
+#: `session owed` reads the session's own owed ledger (notes parity N3); the
+#: plugin's end-of-turn hook runs it, and the agent may too.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "session send", "ignore check", "run expect", "doctor", "paper find",
      "docs", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
@@ -1505,7 +1507,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
-     "file preview", "feedback flush", "capy sync", "capy disconnect"}
+     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
@@ -2613,8 +2615,10 @@ class _StateLock:
     write the files directly; this orders Probe's own writers. No flock
     provider (`_fcntl`) or no lock file: unlocked, as every move was before."""
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, path: "Path | None" = None) -> None:
         self.session_id = session_id
+        #: Another file to lock instead (one small record of the session's own).
+        self.path = path
         self.fd: "int | None" = None
 
     def __enter__(self) -> "_StateLock":
@@ -2622,7 +2626,7 @@ class _StateLock:
         if module is None:
             return self
         try:
-            path = _state_lock_path(self.session_id)
+            path = self.path or _state_lock_path(self.session_id)
             path.parent.mkdir(parents=True, exist_ok=True)
             self.fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
             module.flock(self.fd, module.LOCK_EX)
@@ -2884,12 +2888,172 @@ def mark_inline_shown(session_id: str, since: float) -> None:
 
 
 def forget_inline_shown(session_id: str) -> None:
-    """A compaction or resume took the notice out of the agent's context: the
-    next chance tells it again."""
+    """A compaction or resume took the notice, and the skills sent after it,
+    out of the agent's context: the next chance tells it again."""
+    for path in (_inline_shown_path(session_id), _inline_skills_path(session_id)):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# THE SKILLS, WHOLE (notes parity N1, 2026-10-28)
+# ---------------------------------------------------------------------------
+#
+# The daemon's writer reads the three skills it records by whole in every run
+# (`daemon/bite.py` SHARED_SKILLS); an inline agent was only told where they
+# are, and one read track-work and never edit-notes. So an inline agent gets
+# the same text the daemon's loader renders for a main agent
+# (`bite.skills_text(SHARED_SKILLS, reader="main-agent")`), from the plugin's
+# `inline/` copies. Claude Code saves hook context over 10,000 characters to a
+# file and shows 2,000 of it, and Codex any over ~2,500 tokens, so it goes in
+# parts of at most INLINE_SKILLS_PART_CHARS, one per hook event that reaches the
+# model, from the inline notice on. `<sid>.inline-skills` holds
+# `{"since": <the stretch's since>, "next": <part>, "of": <parts>}`; a new stretch, a
+# compaction or a resume starts again at part 1 (`forget_inline_shown`).
+# Never in `read only (inline)`: the skills are how to record.
+
+INLINE_SKILLS_SUFFIX = ".inline-skills"
+INLINE_SKILLS_PART_CHARS = 7_000
+INLINE_SKILLS_PART = "Probe skills you record by (part {n} of {of}{more}):\n\n{text}"
+
+
+def _inline_skills_path(session_id: str) -> Path:
+    return state_path(session_id).with_suffix(INLINE_SKILLS_SUFFIX)
+
+
+def _skill_body(text: str) -> str:
+    """A SKILL.md without its front matter (`skill_versions.split_front_matter`)."""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end >= 0:
+            cut = text.find("\n", end + 1)
+            text = text[cut + 1:] if cut >= 0 else ""
+    return text.strip()
+
+
+def inline_skills_text(root: "str | Path") -> str:
+    """The skills in INLINE_SKILL_FILES under `root`, as the daemon's loader
+    joins them (`bite.skills_text`); "" when none can be read."""
+    out = []
+    for name in INLINE_SKILL_FILES:
+        try:
+            text = (Path(root) / name).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        out.append(f"# Skill: {name.split('/', 1)[0]}\n\n{_skill_body(text)}")
+    return "\n\n".join(out)
+
+
+def split_parts(text: str, limit: int = INLINE_SKILLS_PART_CHARS) -> "list[str]":
+    """`text` in pieces of at most `limit` characters that join back into it,
+    cut before a heading where one fits, else at a blank line, else at a line."""
+    parts: "list[str]" = []
+    while len(text) > limit:
+        window = text[: limit + 1]
+        cut = max(window.rfind("\n#"), 0) or max(window.rfind("\n\n"), 0) or max(window.rfind("\n"), 0)
+        if cut <= limit // 4:
+            cut = max(window.rfind("\n\n"), window.rfind("\n"))
+        cut = cut + 1 if cut > 0 else limit
+        parts.append(text[:cut])
+        text = text[cut:]
+    if text:
+        parts.append(text)
+    return parts
+
+
+def next_inline_skills_part(session_id: str, root: "str | Path") -> "str | None":
+    """The next part of the skills for a full inline session (`is_inline`, not
+    read-only), wrapped in INLINE_SKILLS_PART, and marked sent; None when every
+    part went or there is none."""
+    marker = _open_marker(session_id)
+    if marker is None or marker.get("mode", STATE_FULL) != STATE_FULL:
+        return None
+    path = _inline_skills_path(session_id)
+    # Locked: parallel tool calls each run this hook, and both reading part 2
+    # as next would send it twice.
+    with _StateLock(session_id, path.with_suffix(INLINE_SKILLS_SUFFIX + "-lock")):
+        try:
+            sent = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            sent = {}
+        if not (isinstance(sent, dict) and sent.get("since") == marker["since"]):
+            sent = {}
+        index, total = sent.get("next"), sent.get("of")
+        index = index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else 0
+        if isinstance(total, int) and index >= total:
+            return None  # all sent: the skill files are not read again
+        parts = split_parts(inline_skills_text(root))
+        if index >= len(parts):
+            return None
+        if not _publish_atomically(path, json.dumps({"since": marker["since"], "next": index + 1,
+                                                     "of": len(parts)}) + "\n"):
+            return None
+    more = ", the rest comes with your next steps" if index + 1 < len(parts) else ""
+    return INLINE_SKILLS_PART.format(n=index + 1, of=len(parts), more=more, text=parts[index].strip("\n"))
+
+
+# ---------------------------------------------------------------------------
+# WHAT THE SESSION OWES (notes parity N3)
+# ---------------------------------------------------------------------------
+#
+# The CLI keeps it (`probe.cli.owed`); the end-of-turn hooks read only whether
+# the agent's own items are there before asking the CLI (`probe session owed
+# --send-back`). Only a CLI that has that command writes the file.
+
+OWED_DIRNAME = "owed"
+#: How many times an inline agent is sent back for one item, per session (`owed.MAX_ASKS`).
+OWED_MAX_ASKS = 2
+#: Where a summary checkout or push leaves the team's summaries mode
+#: (`summary_cli.MODE_FILE`, `{"mode", "at", "server"}`), and how long it stands.
+SUMMARIES_MODE_FILE = ("summaries", "mode.json")
+SUMMARIES_MODE_TTL_S = 24 * 3600
+
+
+def owed_path(session_id: str) -> Path:
+    return state_dir() / OWED_DIRNAME / f"{session_id}.json"
+
+
+def seen_recorder_mode() -> bool:
+    """Did this machine last see the team's summaries in recorder mode, within
+    the TTL? (Any server: `summary_cli.seen_mode` also matches the server.)"""
     try:
-        _inline_shown_path(session_id).unlink()
-    except OSError:
-        pass
+        seen = json.loads(state_dir().joinpath(*SUMMARIES_MODE_FILE).read_text(encoding="utf-8"))
+        return (isinstance(seen, dict) and seen.get("mode") == "recorder"
+                and time.time() - float(seen.get("at") or 0) < SUMMARIES_MODE_TTL_S)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def agent_owes(session_id: str) -> bool:
+    """Could `probe session owed --send-back` say anything now? An item of the
+    agent's own (not the daemon's) asked about fewer than OWED_MAX_ASKS times,
+    a summary only while recorder mode was seen: an exhausted ledger starts no
+    CLI at the end of every turn."""
+    if not valid_session_id(session_id):
+        return False
+    try:
+        data = json.loads(owed_path(session_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    items = data.get("items") if isinstance(data, dict) else None
+    asks = data.get("asks") if isinstance(data, dict) and isinstance(data.get("asks"), dict) else {}
+    if not isinstance(items, list):
+        return False
+    recorder = None
+    for item in items:
+        if not (isinstance(item, dict) and item.get("by") == "agent"):
+            continue
+        count = asks.get(f"{item.get('why')} {item.get('kind')} {item.get('ref')}", 0)
+        if isinstance(count, int) and count >= OWED_MAX_ASKS:
+            continue
+        if item.get("why") == "summary":
+            recorder = seen_recorder_mode() if recorder is None else recorder
+            if not recorder:
+                continue
+        return True
+    return False
 
 
 def set_session_state_if_absent(
