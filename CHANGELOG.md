@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.343.1
+
 - A run's queued uploads upload faster (prod, 60 x 5 KB on one run: 1.34 files/s on 0.343.0, 3.67 now). Every upload at the head of a run's queue enters the parallel window, including those queued behind the run's first writes, which 0.343.0 sent one by one; the window's many-file presigns go 8 files a request, 4 requests in flight. Run uploads ask for links straight to object storage (`X-Probe-Direct-Upload: 1`) where the server grants them; a machine that cannot reach the storage host (DNS, TLS, connect, or a refusal there) sends those files through the API's relay and stops asking for the rest of the process. `PROBE_UPLOAD_MANY=0` sends each file on its own worker instead of through the many-file routes.
 
 ## 0.343.0
