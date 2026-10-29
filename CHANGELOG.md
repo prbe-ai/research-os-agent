@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.351.0
 - **The Probe daemon's writer gets the new runs with the message that names them** (swarm friction T18). It spent a model round on `probe run get` for most new runs (802 such reads in one box's daemon stores). Now the runs a writer message's run events name -- up to 5, the ones it shows first, then the rest -- are read in the daemon host before it is sent (all at once, at most 10 s, never a process), and one block closes the message: some fields of each run (`id`, `slug`, `name`, `description` and their locks, `status`, project, experiment, group, parent, `tags`, `summary_metrics`, `counts`), one compact JSON line each as `probe run get` prints it, scrubbed like every read the writer sees, cut past 1,000 characters (free text last, so a cut never takes a lock or a filing field). A read that fails, runs out of time or answers another run is left out unsaid; a message with no run events reads nothing; Probe refusing the key, or the lease going elsewhere, while the runs are read ends that writer run before any model call, as it would after a `probe` command. The block is only appended, so a conversation's cached prefix is unchanged. Replayed over that box's daemon stores, it would have answered 335 of the writer's 802 `run get` calls in the same message (36 of 84 in the swarm orchestrator's). These reads are counted apart (`prefetched` in the session's `probe_reads`) and each writer run's trace says how many it showed (`runs_read`). A run event's text now names its `run_id` first, so the 900-character cut never takes it.
 
 ## 0.350.1
