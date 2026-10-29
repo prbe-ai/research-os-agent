@@ -4,6 +4,7 @@
 - Add the hidden `probe job submit|status|logs|cancel` (compute router; staff-only): `submit` opens the job's run the way `probe exec` hands a job off, sends the GPU spec to the server, and waits until the job runs or fails, printing each state change and exiting non-zero with the cause and fix (`--detach` returns at once; a job over a team approval limit prints the run page). `probe exec` now recognises `sky launch` and `sky jobs launch` as hand-offs. The plugin's vendored `_session_marker.py` copy is re-synced (the `job` write group; no hook behaviour changes).
 
 - **`probe job bootstrap` (hidden):** the top process of a compute-router job. Restores the run's code tree strictly (exits 70 naming any missing file), downloads sha256-checked inputs, `uv pip sync --no-build`s the lockfile into the root-owned venv, preflights imports and GPUs, runs the command as `probe-job` with the cloud metadata server dropped for that uid (fails closed without `iptables`), uploads complete checkpoints during the run, resumes from the latest complete checkpoint on a restart, drains the outbox against an upload deadline, and records its verdict at `foreign_keys.probe_job`.
+- `probe job submit` tells Probe when it printed a failed job itself (`POST /v1/compute/jobs/{id}/seen`), so a failure it already showed is not also pushed into the agent's session.
 
 ## 0.342.6
 
