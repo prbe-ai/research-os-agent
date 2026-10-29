@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Wait up to one minute for an ongoing setup or update before saving or creating the desktop app's default workspace. Recheck the account after waiting and save once; a setup that stays busy still leaves the choice unchanged.
+
 - **Reverted the compute router's client changes** (#3579, #3596, #3598, #3600, #3605, #3606): the shared upload classifier released in 0.342.4 is withdrawn, the per-file upload caps (`AUTO_UPLOAD_MAX_BYTES`, the 64 MB pointer rule, `artifact_auto_multipart`) are back as before, and the hidden `probe job` commands are gone. The feature is shelved (2026-10-29).
 
 ## 0.342.6
