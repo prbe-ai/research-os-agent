@@ -548,6 +548,150 @@ describe("registerExtension — the footer's third state", () => {
     );
   });
 
+  // #3619: the footer read capture once, right after the spawn, while the Probe
+  // service's recorder had not claimed the session yet (~2 s later), and said
+  // "not capturing" of a captured session.
+  const NOT_RECORDING = { running: false, pid: null, reason: "not recording" };
+  const RUNNING = { running: true, pid: null, reason: "running" };
+
+  /** `probe session initialize`'s answers, by session (the last one repeats);
+   * `hold(sid, n)`: that session's n-th read waits for `release()`. Every
+   * other CLI call keeps the suite's default. */
+  function initializeReads(answers: Record<string, { capture: typeof RUNNING; state?: string }[]>) {
+    const calls: string[] = [];
+    const held: (() => void)[] = [];
+    let holdAt: [string, number] | null = null;
+    const original = execFileMock.getMockImplementation()!;
+    execFileMock.mockImplementation((command, args, options, callback) => {
+      if (args[0] !== "session" || args[1] !== "initialize") return original(command, args, options, callback);
+      const sid = args[args.indexOf("--session") + 1];
+      calls.push(sid);
+      const n = calls.filter((c) => c === sid).length;
+      const list = answers[sid] ?? [{ capture: RUNNING }];
+      const { capture, state = "full" } = list[Math.min(n, list.length) - 1];
+      const reply = () =>
+        callback(
+          null,
+          JSON.stringify({ session_id: sid, tracking: state !== "off", signal: state === "off" ? "off" : "on", state,
+            seeded: true, source: "shipped", capture }),
+          "",
+        );
+      if (holdAt && holdAt[0] === sid && holdAt[1] === n) held.push(reply);
+      else reply();
+    });
+    return {
+      calls: (sid: string) => calls.filter((c) => c === sid).length,
+      hold: (sid: string, n: number) => (holdAt = [sid, n]),
+      release: () => held.splice(0).forEach((reply) => reply()),
+      restore: () => execFileMock.mockImplementation(original),
+    };
+  }
+
+  it("reads capture again after the start until the recorder claims the session (#3619)", async () => {
+    pair();
+    installProbeCli();
+    const sessionId = uniqueSessionId("claim");
+    // The start's read, its read-back after the spawn, then the 3 s look.
+    const reads = initializeReads({ [sessionId]: [{ capture: NOT_RECORDING }, { capture: NOT_RECORDING }, { capture: RUNNING }] });
+    try {
+      const { api, handlers } = fakeExtensionAPI();
+      await registerExtension(api as never, tmp);
+      const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl`, hasUI: true });
+
+      await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+
+      expect(reads.calls(sessionId)).toBe(3);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● tracking");
+      await handlers.get("agent_settled")!({}, ctx);
+      expect(reads.calls(sessionId), "a turn's end reads nothing").toBe(3);
+    } finally {
+      reads.restore();
+      rmSync(pidFile(sessionId), { force: true });
+      rmSync(shutdownSentinelFile(sessionId), { force: true });
+    }
+  });
+
+  it("stops looking once the session ends, and after its last look", async () => {
+    pair();
+    installProbeCli();
+    const ended = uniqueSessionId("claim-ended");
+    const never = uniqueSessionId("claim-never");
+    const reads = initializeReads({ [ended]: [{ capture: NOT_RECORDING }], [never]: [{ capture: NOT_RECORDING }] });
+    vi.useFakeTimers();
+    try {
+      const { api, handlers } = fakeExtensionAPI();
+      await registerExtension(api as never, tmp);
+      const ctx = fakeContext({ sessionId: ended, sessionFile: `/tmp/${ended}.jsonl`, hasUI: true });
+      const started = handlers.get("session_start")!({ reason: "startup" }, ctx);
+      await vi.advanceTimersByTimeAsync(2_500); // the spawn's confirmation wait
+      await started;
+      expect(reads.calls(ended)).toBe(2);
+      await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(reads.calls(ended), "no look after the quit").toBe(2);
+
+      // Control: one never claimed is looked at 3 s, 15 s and 60 s after its start, then left.
+      const ctx2 = fakeContext({ sessionId: never, sessionFile: `/tmp/${never}.jsonl`, hasUI: true });
+      const started2 = handlers.get("session_start")!({ reason: "startup" }, ctx2);
+      await vi.advanceTimersByTimeAsync(2_500);
+      await started2;
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(reads.calls(never)).toBe(2 + 3);
+    } finally {
+      vi.useRealTimers();
+      reads.restore();
+      for (const sid of [ended, never]) {
+        rmSync(pidFile(sid), { force: true });
+        rmSync(shutdownSentinelFile(sid), { force: true });
+      }
+    }
+  });
+
+  it("never commits a re-read that comes back after pi switched sessions", async () => {
+    pair();
+    installProbeCli();
+    const first = uniqueSessionId("claim-first");
+    const second = uniqueSessionId("claim-second");
+    const reads = initializeReads({
+      [first]: [{ capture: NOT_RECORDING }],
+      [second]: [{ capture: RUNNING, state: "off" }],
+    });
+    reads.hold(first, 3); // the 3 s look's CLI call is still running when pi switches
+    vi.useFakeTimers();
+    try {
+      const { api, handlers } = fakeExtensionAPI();
+      await registerExtension(api as never, tmp);
+      const ctx1 = fakeContext({ sessionId: first, sessionFile: `/tmp/${first}.jsonl`, hasUI: true });
+      const started = handlers.get("session_start")!({ reason: "startup" }, ctx1);
+      await vi.advanceTimersByTimeAsync(2_500);
+      await started;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(reads.calls(first)).toBe(3);
+
+      const ctx2 = fakeContext({ sessionId: second, sessionFile: `/tmp/${second}.jsonl`, hasUI: true });
+      const switched = handlers.get("session_start")!({ reason: "new" }, ctx2);
+      await vi.advanceTimersByTimeAsync(2_500);
+      await switched;
+      expect(ctx2.setStatus).toHaveBeenLastCalledWith("probe-tracking", "○ off");
+      const drawn = ctx1.setStatus.mock.calls.length;
+
+      reads.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ctx1.setStatus.mock.calls.length, "the old session's footer is not redrawn").toBe(drawn);
+      await handlers.get("agent_settled")!({}, ctx2);
+      expect(ctx2.setStatus, "the new session's state is its own").toHaveBeenLastCalledWith("probe-tracking", "○ off");
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(reads.calls(first), "and the looks stop").toBe(3);
+    } finally {
+      vi.useRealTimers();
+      reads.restore();
+      for (const sid of [first, second]) {
+        rmSync(pidFile(sid), { force: true });
+        rmSync(shutdownSentinelFile(sid), { force: true });
+      }
+    }
+  });
+
   it("ignores a malformed capture block rather than failing the whole read", async () => {
     installProbeCli();
     execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {

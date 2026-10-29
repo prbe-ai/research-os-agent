@@ -40,9 +40,11 @@ import {
 } from "./inlineNotice.js";
 import { agentOwes, owedSendBack } from "./owed.js";
 import {
+  ClaimRecheck,
   finishHostedSession,
   HOSTED_FINISH_WAIT_S,
   pruneStaleShutdownSentinels,
+  recheckUntilClaimed,
   SpawnConfirmation,
   spawnDaemon,
   stopDaemon,
@@ -483,11 +485,20 @@ function realTeamNoteSyncDeps(): TeamNoteSyncDeps {
   };
 }
 
+/**
+ * Read the session's state back from the CLI (`probe session initialize`) and
+ * draw the footer from it. A reading that comes back after pi switched to
+ * another session is the old one's: never committed over the new one's (its
+ * switch, profile, `.probe.config` context and footer). `keepOnFailure`: a
+ * read that fails leaves the last reading, not an unknown one (a re-read after
+ * the start, `recheckUntilClaimed`). True when a reading was committed.
+ */
 async function refreshTrackingStatus(
   s: SessionState,
   ctx: { hasUI: boolean; ui: { setStatus: (key: string, value: string | undefined) => void } },
   sessionId: string,
   cwd: string,
+  opts: { keepOnFailure?: boolean } = {},
 ): Promise<boolean> {
   const state = await initializeTrackingState(sessionId, cwd, {
     execFile: realTrackingExecFile,
@@ -496,6 +507,8 @@ async function refreshTrackingStatus(
     env: process.env,
     log: logLine,
   });
+  if (s.current.sessionId !== null && s.current.sessionId !== sessionId) return false;
+  if (!state && opts.keepOnFailure) return false;
   if (!state) {
     // Unknown, not the last value seen: see SessionState.probe.state's docstring.
     s.probe.state = undefined;
@@ -821,6 +834,22 @@ export function prepareExtension(env: ImplEnv): Candidate {
     // 3.11) would otherwise leave "● tracking" on screen for the rest of the
     // session with nothing capturing behind it.
     await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+    // A live recorder claims the session after its first server read, ~2 s on
+    // (#3619): read it again a few times while it has not, or the footer says
+    // "not capturing" of a session that is captured until something redraws it.
+    recheckUntilClaimed(s.probe.tracking?.capture, {
+      reread: async () => {
+        const current = () => s.current.sessionId === sessionId && s.capture.spawned.has(sessionId);
+        if (!current()) return ClaimRecheck.Stop;
+        const read = await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd, { keepOnFailure: true });
+        if (!current()) return ClaimRecheck.Stop;
+        return read ? s.probe.tracking?.capture : undefined;
+      },
+      later: (fn, ms) => {
+        setTimeout(fn, ms).unref?.();
+      },
+      log: logLine,
+    });
   }
 
   /** Start a pending session's capture once its file exists. Never throws. */

@@ -7,21 +7,28 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  awaitingClaim,
+  CaptureReason,
+  CLAIM_RECHECK_MS,
+  ClaimRecheck,
   finishHostedSession,
   HOSTED_FINISH_GRACE_MS,
   HostedFinish,
   isDaemonAlive,
   pruneStaleShutdownSentinels,
+  recheckUntilClaimed,
   SpawnConfirmation,
   spawnDaemon,
   stopDaemon,
   waitForSpawnConfirmation,
+  type ClaimRecheckDeps,
   type DaemonDeps,
   type PruneDeps,
 } from "../src/core/daemon.js";
 import { hostedFile, OsPlatform, pidFile, shutdownSentinelFile, WATCHER_DIR_ENV, watcherDir } from "../src/core/paths.js";
 import { SERVICE_OWNER_PID_ENV } from "../src/core/service.js";
 import type { TapRuntime } from "../src/core/tapRuntime.js";
+import type { CaptureReading } from "../src/core/trackingState.js";
 
 /**
  * The `tap start` argv, built from the contract the Python side reads too.
@@ -823,5 +830,75 @@ describe("watcherDir", () => {
     expect(watcherDir(OsPlatform.Linux, {})).toBe("/tmp");
     expect(watcherDir(OsPlatform.Linux, { [WATCHER_DIR_ENV]: "relative/not-a-folder" })).toBe("/tmp");
     expect(watcherDir(OsPlatform.Windows, {})).toBe(tmpdir());
+  });
+});
+
+describe("recheckUntilClaimed", () => {
+  // #3619: pi's footer read capture once, right after the spawn, while the Probe
+  // service's recorder had not claimed the session yet (it did 2.0 s later), and
+  // said "not capturing session transcript: not recording" of a captured session.
+  const unclaimed: CaptureReading = { running: false, reason: CaptureReason.NotRecording };
+  const claimed: CaptureReading = { running: true, reason: "running" };
+  type Answer = CaptureReading | undefined | typeof ClaimRecheck.Stop;
+
+  function harness(answers: Answer[]) {
+    const waits: number[] = [];
+    const pending: (() => void)[] = [];
+    let reads = 0;
+    const deps: ClaimRecheckDeps = {
+      reread: async () => answers[reads++],
+      later: (fn, ms) => {
+        waits.push(ms);
+        pending.push(fn);
+      },
+      log: () => {},
+    };
+    /** Fire the next wait's look and let its re-read settle. */
+    const tick = async () => {
+      pending.shift()?.();
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return { deps, waits, pending, tick, reads: () => reads };
+  }
+
+  it("looks again 3 s, 15 s and 60 s after the start, until the recorder claims it", async () => {
+    expect(CLAIM_RECHECK_MS).toEqual([3_000, 12_000, 45_000]);
+    const h = harness([unclaimed, claimed]);
+    recheckUntilClaimed(unclaimed, h.deps);
+    await h.tick();
+    await h.tick();
+    expect(h.waits).toEqual([3_000, 12_000]);
+    expect(h.reads()).toBe(2);
+    expect(h.pending, "claimed: no more looks").toEqual([]);
+  });
+
+  it("keeps looking after a read that failed, and stops when the session is gone", async () => {
+    const failed = harness([undefined, claimed]);
+    recheckUntilClaimed(unclaimed, failed.deps);
+    await failed.tick();
+    await failed.tick();
+    expect(failed.reads(), "an unreadable answer is not the end").toBe(2);
+    const gone = harness([ClaimRecheck.Stop]);
+    recheckUntilClaimed(unclaimed, gone.deps);
+    await gone.tick();
+    expect(gone.pending).toEqual([]);
+  });
+
+  it("stops after its last look", async () => {
+    const h = harness([unclaimed, unclaimed, unclaimed]);
+    recheckUntilClaimed(unclaimed, h.deps);
+    for (let i = 0; i < 4; i++) await h.tick();
+    expect(h.reads()).toBe(3);
+    expect(h.pending, "a recorder whose server does not answer stays 'not recording'").toEqual([]);
+  });
+
+  it("never looks again for a session captured, or not captured for a reason time does not change", () => {
+    for (const capture of [undefined, claimed, { running: false, reason: "not paired" }, { running: false, reason: "Probe is off" }]) {
+      const h = harness([]);
+      recheckUntilClaimed(capture, h.deps);
+      expect(h.waits).toEqual([]);
+      expect(awaitingClaim(capture)).toBe(false);
+    }
+    expect(awaitingClaim(unclaimed)).toBe(true);
   });
 });

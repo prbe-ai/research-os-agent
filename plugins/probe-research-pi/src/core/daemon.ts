@@ -41,7 +41,7 @@ import { hostedMarkerStamp, hostedServicePid, sameMarkerStamp, type MarkerStamp 
 import { hostedFile, pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, watcherDir, type PathEnv } from "./paths.js";
 import { SERVICE_OWNER_PID_ENV } from "./service.js";
 import type { TapRuntime } from "./tapRuntime.js";
-import type { TrackingChild, TrackingExecFileFn } from "./trackingState.js";
+import type { CaptureReading, TrackingChild, TrackingExecFileFn } from "./trackingState.js";
 
 export interface ChildLike {
   pid: number | undefined;
@@ -595,6 +595,71 @@ export async function finishHostedSession(
     // Not ours to remove (another user's file in the shared /tmp), or gone.
   }
   return outcome;
+}
+
+/**
+ * Capture's words (`probe.cli.capture_state.REASONS`) this package acts on.
+ * `not recording`: the Probe service's recorder lives for the session but does
+ * not hold it yet. It claims the session after its first server read (2.0 s
+ * after the start, #3619), so the footer read right after the spawn says
+ * "not capturing" of a session that is captured.
+ */
+export const CaptureReason = {
+  NotRecording: "not recording",
+} as const;
+
+/**
+ * The waits between a start's footer read and each look after it while the
+ * recorder has not claimed the session: 3 s, 15 s and 60 s after the start.
+ * Each look runs `probe session initialize`, the start's own read, so only
+ * near the start (it marks the session's profile as the machine says now) and
+ * a few: a recorder whose server does not answer stays "not recording", which
+ * is then true.
+ */
+export const CLAIM_RECHECK_MS: readonly number[] = [3_000, 12_000, 45_000];
+
+/** A re-read's answer that ends the looks: the session ended, or pi switched to another. */
+export const ClaimRecheck = {
+  Stop: "stop",
+} as const;
+
+/** The recorder lives and has not claimed the session yet: a reading that will change on its own. */
+export function awaitingClaim(capture: CaptureReading | undefined): boolean {
+  return capture !== undefined && !capture.running && capture.reason === CaptureReason.NotRecording;
+}
+
+export interface ClaimRecheckDeps {
+  /**
+   * Read capture again and redraw the footer: the new reading; undefined when
+   * it could not be read (the next look still comes); `ClaimRecheck.Stop` when
+   * the session is no longer the one looked at.
+   */
+  reread: () => Promise<CaptureReading | undefined | typeof ClaimRecheck.Stop>;
+  /** Run `fn` in `ms`, never keeping the process alive for it (an unref'd `setTimeout`). */
+  later: (fn: () => void, ms: number) => void;
+  log: (message: string) => void;
+}
+
+/**
+ * Look at a just-started session's capture again, on `delaysMs`, while its
+ * recorder has not claimed it (`awaitingClaim`), and stop at the first reading
+ * that says anything else. Never throws.
+ */
+export function recheckUntilClaimed(
+  capture: CaptureReading | undefined,
+  deps: ClaimRecheckDeps,
+  delaysMs: readonly number[] = CLAIM_RECHECK_MS,
+): void {
+  if (!awaitingClaim(capture) || delaysMs.length === 0) return;
+  const [wait, ...rest] = delaysMs;
+  deps.later(() => {
+    deps.reread().then(
+      (next) => {
+        if (next !== ClaimRecheck.Stop) recheckUntilClaimed(next ?? capture, deps, rest);
+      },
+      (err) => deps.log(`capture re-read failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }, wait);
 }
 
 /** Sentinels older than this are from a session that is long over — see below. */
