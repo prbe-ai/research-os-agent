@@ -37,15 +37,16 @@ machine, including remote jobs:
   output included. Under `probe exec` the child's output is teed the same way;
   more processes of one run (ranks) each keep `probe/run.rank<N>.log`
 
-A close uploads files up to 64 MB and spends at most 120 s inspecting them
-(`PROBE_CAPTURE_BUDGET_SEC`, or the finish timeout). When your team has big-file
-capture switched on, a file between 64 MB and 5 GB goes up in parts after the
-run ends instead (only its first 16 MB is checked for credentials, and one with
-a credential there stays a pointer), wherever the outbox outlives the process. Any other file past a limit, or one the gate cannot
-inspect, becomes a pointer - path and size, no bytes - on storage that lasts (a network drive, a Modal Volume, your own
-machine). On a throwaway box's own disk (a container, a pod, CI) it cannot be
-kept, so it is listed in `probe/outputs-manifest.json` with a warning: write
-checkpoints there to a bucket or a mounted volume instead.
+A close uploads files up to 64 MB in one request, and spends at most 120 s
+inspecting them (`PROBE_CAPTURE_BUDGET_SEC`, or the finish timeout). A bigger
+file, of any size, goes up in parts after the run ends instead, on a laptop and
+on a throwaway box alike (only its first 16 MB is checked for credentials, and
+one with a credential there is not uploaded); bytes your team already holds are
+not sent again. A file the gate cannot inspect, or one the close ran out of time
+for, becomes a pointer - path and size, no bytes - on storage that lasts (a
+network drive, a Modal Volume, your own machine), and on a throwaway box's own
+disk it is listed in `probe/outputs-manifest.json` with a warning: write it to a
+bucket or a mounted volume, or log it with `log_artifact`.
 
 Still call `probe.log_artifact` for:
 

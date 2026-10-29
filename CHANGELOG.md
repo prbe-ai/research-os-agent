@@ -6,6 +6,8 @@
 - **`probe job bootstrap` (hidden):** the top process of a compute-router job. Restores the run's code tree strictly (exits 70 naming any missing file), downloads sha256-checked inputs, `uv pip sync --no-build`s the lockfile into the root-owned venv, preflights imports and GPUs, runs the command as `probe-job` with the cloud metadata server dropped for that uid (fails closed without `iptables`), uploads complete checkpoints during the run, resumes from the latest complete checkpoint on a restart, drains the outbox against an upload deadline, and records its verdict at `foreign_keys.probe_job`.
 - `probe job submit` tells Probe when it printed a failed job itself (`POST /v1/compute/jobs/{id}/seen`), so a failure it already showed is not also pushed into the agent's session.
 
+- No file is too big to upload any more, on a laptop or a cloud machine. Output capture, the Probe daemon and `probe snapshot` upload a file of any size (over 64 MB in parts, hashed first, and skipped when your team already holds the same bytes) instead of recording a pointer to it, and a throwaway cloud disk no longer lists a big file as "not kept". The only limit left is your team's storage ceiling, which the server enforces. Removed: `probe snapshot --reference-over-mb` and `--max-upload-mb`, `probe artifact add --reference-over`, and the 5 GB automatic-upload limit. On a server that cannot take multipart uploads, a big file is reported as not uploaded, never as over a limit.
+
 ## 0.342.6
 
 - Fix saving daemon reasoning summaries with empty Claude Code settings and single-quoted Codex setting keys. Verify the requested value for every configured agent and name any agent whose save failed.

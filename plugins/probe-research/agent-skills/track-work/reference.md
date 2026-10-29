@@ -69,8 +69,9 @@ probe snapshot-restore RUN --verify-only # can it be rebuilt: want "0 unavailabl
 
 - A glob matching nothing is an error; a path outside the snapshot root is
   refused; naming a file already in the manifest adds no duplicate.
-- Big files are recorded, not stored: `--reference-over-mb`, default 100 (the
-  snapshot's own threshold, not the 5 GB artifact upload limit).
+- Big files are stored too, at any size: hashed first, uploaded in parts, and
+  skipped when the team already holds the same bytes. Only the team's storage
+  ceiling can refuse an upload.
 - A non-git directory is captured whole, skipping lockfile-rebuilt trees and
   credential-shaped names.
 - Files git cannot supply are stored one artifact row per file
@@ -124,7 +125,7 @@ what opens inside it, and it closes `failed` if the body raises.
 
 `probe log`, `probe span add` and a RUN-anchored `probe artifact add` queue
 into a durable local outbox and return immediately; a project or experiment
-upload blocks unless it is over 64 MB or you pass `--async`. `--sync` forces
+upload blocks unless it is over 64 MB (those go up in parts in the background) or you pass `--async`. `--sync` forces
 blocking.
 
 - `probe outbox status` exits 0 when everything is delivered; MCP reads lag
@@ -157,8 +158,10 @@ An artifact is a name with immutable versions, each pinned from an upload.
 
 ### Big files
 
-Up to 5 GB, upload the file (over 64 MB it goes up in parts). Over 5 GB,
-record a pointer instead:
+Upload the file, whatever its size (over 64 MB it goes up in parts; bytes the
+team already holds are never re-sent). Only the team's storage ceiling can
+refuse it (a 402 naming the ceiling). To record where bytes live instead of
+moving them, say so:
 
 | the bytes live | pass | what lands |
 |---|---|---|
