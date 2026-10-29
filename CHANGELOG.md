@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh the bundled command index after the desktop workspace-save fix, so the daemon can use it immediately without rebuilding it on first use. The release gate now checks its source fingerprint.
+
 ## 0.342.7
 
 - Wait up to one minute for an ongoing setup or update before saving or creating the desktop app's default workspace. Recheck the account after waiting and save once; a setup that stays busy still leaves the choice unchanged.
