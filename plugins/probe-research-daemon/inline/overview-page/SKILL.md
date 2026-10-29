@@ -8,7 +8,7 @@ A page is a custom Claude artifact in the dashboard's Summary pane: a research m
 People read top to bottom, so the top carries what matters most now:
 
 1. TL;DR: what this is in one `<p>` sentence, then a `<ul>` of up to 3 one-line bullets on where it stands. No heading above it.
-2. The most recent or most important result, shown: a chart, table or diagram, with one sentence on what it shows.
+2. The most recent or most important result, shown: a chart, table or diagram, with one sentence on what it shows. A project's is what the whole project stands on, not its newest part.
 3. What it means, and how sure we are.
 4. What's next: a decision, the next question, or an ask.
 

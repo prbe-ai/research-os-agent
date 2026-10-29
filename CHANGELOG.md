@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A project's Summary page weighs its parts by the work in them, not by which came last.** The page skills told a writer to rewrite the top around the newest result, so a project that is mostly supervised fine-tuning read as all RL once an RL experiment ran (Willow: 8 of 90 experiment runs are RL, the page led with RL). `write-summary` and `overview-page` now say a project's top is what the project has produced and where each main line of work stands, each part given room by its runs and weeks.
+
 ## 0.346.0
 
 - **`probe summary push` refuses a page Probe's credential scrubber would rewrite, instead of storing it broken.** A figure's code naming a variable like `passSig = [false, ...]` was rewritten to `passSig=<redacted>, ...` on the way, the chart threw, and push still said pushed; push now writes nothing and names the text near the change, as `summary edit` already did. The page skills now say how to load a font (`<link>`, `@import` is refused), that counts stay exact, the chart caps and `PROBE.lineChart` options, where a project's experiments and a whole conclusion are read, and that a table never stands in for a chart. `evals/companion/render.py` no longer counts an icon-sized svg (a legend swatch) as a blank visual. pi's guard allows `probe session owed` under the daemon profile, as the other harnesses' guard has since 0.345.0 (its end-of-turn check was refused there).
