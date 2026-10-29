@@ -110,7 +110,7 @@ Close:
 Every file that directly affects an entity should be uploaded as an artifact (`probe artifact add RUN`, or `--experiment`, `--project`; reference §4) as soon as it exists; retry once, then say so. A note links to a file, never repeats it.
 - A run from `probe.init()` / `probe exec` captures its own outputs and log; add only what it misses.
 - Workspace and Shared files take no new uploads; team data goes in `probe dataset add`. Its `--upload` stores the bytes against the team's hosted-data quota: only when the researcher asks; without it Probe keeps the hash and location.
-- Any size uploads (over 64 MB in parts; bytes the team already holds are not sent again). `--reference` is a pointer you choose (on this box or a shared volume), `--uri` names an object in a bucket; on a box that will be destroyed, upload the file or use a bucket.
+- Over 5 GB: `--reference` (on this box or a shared volume) or `--uri` (in a bucket); on a box that will be destroyed, use a bucket.
 - NEVER UPLOAD SECRETS (`.env`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, tokens) or a customer's private content, as bytes, pointer or prose, nor what a build recreates (`.venv`, `node_modules`, `__pycache__`).
 - A file anchored above the run that wrote it still records lineage back to it: `probe edge add --source run:RUN --relation produces --target artifact:ID`.
 - A changed file with a registry name is a new version (`version-add`); read the chain first (`view="versions"`).

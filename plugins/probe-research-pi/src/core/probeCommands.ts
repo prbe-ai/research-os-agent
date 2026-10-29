@@ -47,7 +47,6 @@ export const WRITE_GROUPS: ReadonlySet<string> = new Set([
   "checkpoint",
   "summary",
   "visuals",
-  "job",
 ]);
 
 /** `session_marker.SUBGROUPS`. */
@@ -71,7 +70,6 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "list",
   "get",
   "status",
-  "logs",
   "versions",
   "cat",
   "diff",
