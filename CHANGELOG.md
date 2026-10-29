@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **The lifeboat no longer "rescues" a machine whose last update check was minutes before a release.** When a release came out less than 15 minutes after the service's last check, the lifeboat's ask for a check was answered "checked recently", no update ran, the idle service exited, and 5 minutes later the lifeboat read that silence as a service that cannot start: it installed the release itself and posted a "Lifeboat rescued" alert for a routine update. The lifeboat's ask (`update.check_now` trigger `keeper`) now always starts an update cycle; other asks keep the 15-minute cooldown.
 - **`probe summary push` marks its push as the whole page (`whole_page`), the one the server judges `no_chart`; the page contract says a page over logged curves must draw one.** `overview-contract` names the server's new `no_chart` refusal: no declared series and no `<canvas>` or `<svg>` while the entity's runs logged curves.
 
 ## 0.347.0
