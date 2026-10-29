@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A Hub dataset read from a `refs/convert/parquet` or `refs/pr/N` revision records that revision, not `refs`.** The SDK's dataset capture (`integrations/_hub.py`) now reads those revisions whole and url-decoded, as the server keys the same uri, so one dataset is not registered as two sources.
+
 ## 0.345.0
 - **Inline and the daemon use notes the same way.** An inline agent (`/probe inline`) gets track-work, write-summary and edit-notes whole, the text the daemon's writer reads, in parts that fit a hook (Claude Code, Codex, Kimi) or whole (pi). The first write a session makes to a project, experiment or run prints the opening of its note and its Open / Don't repeat lines (nothing when it has none), in both modes. The CLI keeps one owed ledger per session (`probe.cli.owed`): a summary for a project or experiment it created or concluded, and, new, a note on a run it tagged `invalid`. The daemon's writer is sent back from it as before (and once for the note); an inline agent is sent back at the end of a turn that completed by a new Stop route (`owed_hook.py`, never inside a subagent) and pi's `agent_before_settle` (never after Esc or a provider error), through the hidden `probe session owed --send-back`, at most twice per item; a turn that owes nothing, or only what was already asked twice, starts no CLI. Taking the `invalid` tag off settles the note. The CLI's own pre-send note refusal says how far over the cap the text is, in the unit it is over.
 
