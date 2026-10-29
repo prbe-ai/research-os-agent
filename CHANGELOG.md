@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe summary push` marks its push as the whole page (`whole_page`), the one the server judges `no_chart`; the page contract says a page over logged curves must draw one.** `overview-contract` names the server's new `no_chart` refusal: no declared series and no `<canvas>` or `<svg>` while the entity's runs logged curves.
+
 ## 0.347.0
 
 - **`probe ask --writer` takes requests up to 16,000 characters** (was 4,000), enough for a phase handover or a branch's conclusion. The worker's marker now names the longest request it takes whole (`request_chars`); a request longer than a running older worker would keep is refused with that worker's limit instead of being cut.
