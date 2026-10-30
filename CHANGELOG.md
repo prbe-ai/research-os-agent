@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.352.1
+
 - **`probe doctor --send` says which of Probe's hooks Codex runs** (`codex_hooks`, as `probe status --json` reads it: `approved`, `needs_approval` with the hooks Codex skips, and whether a Codex session never heard them, named only when it is bound to the reporting account). A report from a Codex session the Probe service never heard of could not tell a hook waiting in Codex's `/hooks` from any other cause.
 
 - **Switching Who records to the daemon no longer fails right after installing its libraries.** The install puts them in a new environment beside the running CLI and switches `probe` to it, but the readiness check imported them in the old process and read `no_libraries`, so the Mac app's first install reported a failure and only a second try worked (2 of the last 4 first-run Mac installs, 10-28 and 10-29). The check now uses the answer the install just verified in the environment it switched `probe` to.
