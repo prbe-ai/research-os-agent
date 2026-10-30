@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Desktop Inline/Daemon changes reuse this Mac’s saved sign-in, without browser approval. A failed credential mint leaves the mode unchanged and offers retry rather than starting device approval.
+
 ## 0.352.1
 
 - **`probe doctor --send` says which of Probe's hooks Codex runs** (`codex_hooks`, as `probe status --json` reads it: `approved`, `needs_approval` with the hooks Codex skips, and whether a Codex session never heard them, named only when it is bound to the reporting account). A report from a Codex session the Probe service never heard of could not tell a hook waiting in Codex's `/hooks` from any other cause.
