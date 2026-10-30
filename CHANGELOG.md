@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.352.2
+
 - Desktop Inline/Daemon changes reuse this Mac’s saved sign-in, without browser approval. A failed credential mint leaves the mode unchanged and offers retry rather than starting device approval.
 
 ## 0.352.1
