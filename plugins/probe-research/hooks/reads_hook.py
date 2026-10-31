@@ -1063,7 +1063,7 @@ ACK_DELIVERED_TO_AGENT = "delivered_to_agent"
 #: `probe.daemon.model.ENV_KEY`: the daemon's own key, before the CLI config's
 #: `companion_token`, as the daemon reads them (`model.endpoint`).
 DAEMON_KEY_ENV = "PROBE_DAEMON_KEY"
-#: `probe.sdk.config.DEFAULT_BASE_URL`.
+#: `probe.sdk.settings.settings.DEFAULT_BASE_URL`.
 DEFAULT_BASE_URL = "https://api.research.prbe.ai"
 #: The longest the hook spends telling Probe what it showed: every message at
 #: once, all of them within this (the hook's own timeout is 5 s).

@@ -246,10 +246,10 @@ def valid_session_id(raw: object) -> bool:
 
 def _home() -> Path:
     """`~`, or the SDK's private stand-in when this process has none (HOME
-    unset and no passwd entry: `probe.sdk.homedir`). The vendored hook copy has
+    unset and no passwd entry: `probe.foundation.durable.homedir`). The vendored hook copy has
     no `probe` package to import; there a missing home raises, as it always did."""
     try:
-        from probe.sdk import homedir
+        from probe.sdk import homedir  # restructure-guard-ok: released hooks run this copy against older CLIs
     except ImportError:
         return Path.home()
     return homedir.home()
@@ -734,7 +734,7 @@ def prune(max_age_seconds: float = MAX_AGE_SECONDS) -> None:
 
 
 def config_path() -> Path:
-    """Mirrors `probe.sdk.config` and `_telemetry_core._config_path`."""
+    """Mirrors `probe.sdk.settings.settings` and `_telemetry_core._config_path`."""
     override = os.environ.get("PROBE_CONFIG_PATH")
     if override:
         return Path(override)
@@ -3571,7 +3571,7 @@ def write_default_tracking(on: bool) -> Path:
     vendored copies may not ship the writer at all -- reading the default must
     keep working there even though setting it cannot.
     """
-    from probe.sdk.config import (
+    from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
         CONFIG_VERSION,
         DEFAULT_CONTEXT,
         _config_lock,
@@ -3620,7 +3620,7 @@ def write_default_state(state: str) -> Path:
     """
     if state not in STATES:
         raise ValueError(f"expected one of {STATES}, got {state!r}")
-    from probe.sdk.config import (
+    from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
         CONFIG_VERSION,
         DEFAULT_CONTEXT,
         _config_lock,
@@ -3683,7 +3683,7 @@ def lower_default_state(state: str, *, by: str, at: str) -> "tuple[str, bool]":
     (an unreadable config file is reported, never replaced)."""
     if state not in (STATE_OFF, STATE_READ_ONLY):
         raise ValueError(f"only off or read-only can be set this way, got {state!r}")
-    from probe.sdk.config import (
+    from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
         CONFIG_VERSION,
         DEFAULT_CONTEXT,
         _config_lock,
@@ -3787,7 +3787,7 @@ def write_recorder(source: str, value: str) -> Path:
         raise ValueError(f"expected one of {RECORDERS}, got {value!r}")
     if not isinstance(source, str) or not source:
         raise ValueError("expected a coding agent name")
-    from probe.sdk.config import (
+    from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
         CONFIG_VERSION,
         DEFAULT_CONTEXT,
         _config_lock,
@@ -3836,7 +3836,7 @@ def pasted_images_on(config: "dict | None" = None) -> bool:
 def write_pasted_images(on: bool) -> Path:
     """Persist the pasted-image setting; returns the config path. Same file,
     lock and loader as `write_recorder`; on removes the key (absent is on)."""
-    from probe.sdk.config import (
+    from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
         CONFIG_VERSION,
         DEFAULT_CONTEXT,
         _config_lock,

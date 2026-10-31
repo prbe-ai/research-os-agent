@@ -49,7 +49,7 @@ CONTEXT_ENV = (
     "PROBE_TELEMETRY", "PROBE_BASE_URL",
 )
 #: A credential in the environment outranks the CLI config's stored token
-#: (`_telemetry_core.effective_token`, `probe.sdk.config.resolve`); a request
+#: (`_telemetry_core.effective_token`, `probe.sdk.settings.settings.resolve`); a request
 #: never carries one, so with one set the hook does the work itself
 #: (`protocol.CREDENTIAL_ENV`, held equal by tests/test_service_cli_surfaces.py).
 CREDENTIAL_ENV = ("PROBE_TOKEN", "PROBE_MCP_TOKEN", "PROBE_SERVICE_TOKEN", "PROBE_INGEST_TOKEN", "PROBE_HMAC_SECRET")

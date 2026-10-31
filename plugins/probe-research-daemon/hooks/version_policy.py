@@ -463,7 +463,7 @@ def fetch(url: str, *, context: ssl.SSLContext | None = None) -> dict:
     misconfigured proxy returning an HTML login page can never be cached as a
     good manifest and compared against.
 
-    `context` is the TLS trust. The CLI passes `probe.sdk.tls.ssl_context()`
+    `context` is the TLS trust. The CLI passes `probe.foundation.tls.tls.ssl_context()`
     (honours REQUESTS_CA_BUNDLE and friends); the plugin copy cannot import it
     and passes nothing, keeping urllib's default.
     """

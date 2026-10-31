@@ -1,7 +1,7 @@
 """One row per capture source, built from the harness registry.
 
 The rows are the captured harnesses of `harnesses.json` (the tap's copy of
-agent/src/probe/harness/harnesses.json, read by `harness_registry.py` beside
+agent/src/probe/foundation/harness_registry/harnesses.json, read by `harness_registry.py` beside
 it). Every value that used to be a `"codex" if capture_source() == "codex"
 else ...` ternary comes from there. Adding a harness is adding a registry row
 and its sanitizer; a value that is NOT in a row does not vary by source.

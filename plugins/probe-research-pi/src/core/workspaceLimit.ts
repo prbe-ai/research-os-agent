@@ -6,7 +6,7 @@
  * every Probe MCP connection sends it, and the hosted MCP forwards it on its API
  * calls, which narrow to W.
  *
- * Mirrors `probe.sdk.workspace_limit.resolve_limit` and
+ * Mirrors `probe.sdk.settings.workspace_limit.resolve_limit` and
  * `agent/plugins/probe-research/bin/probe-mcp-headers` (tests/test_pi_core_parity.py):
  * `PROBE_WORKSPACE_LIMIT` first (`team` = none), else the active context's limit;
  * `PROBE_WORKSPACE_LIMIT_TEAM_ITEMS` overrides the team-items choice of either.

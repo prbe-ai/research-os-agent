@@ -1075,7 +1075,7 @@ class Wire:
         self.token = token
         self.source = source
         self.timeout = timeout
-        # TLS trust. The CLI passes probe.sdk.tls.ssl_context() (REQUESTS_CA_BUNDLE
+        # TLS trust. The CLI passes probe.foundation.tls.tls.ssl_context() (REQUESTS_CA_BUNDLE
         # and friends); the tap's vendored copy cannot import it and passes None,
         # which is urllib's default.
         self.context = context

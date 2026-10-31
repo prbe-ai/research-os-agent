@@ -580,7 +580,7 @@ CONTEXT_ENV = frozenset(
         "PROBE_BASE_URL",
     }
 )
-#: The credentials a process may hold in its environment (`probe.sdk.config`'s
+#: The credentials a process may hold in its environment (`probe.sdk.settings.settings`'s
 #: env table), which outrank the CLI config's stored ones and which a request's
 #: `context` never carries: a caller holding one does the work itself, since a
 #: child of the service would act with another credential (or none).
@@ -588,7 +588,7 @@ CONTEXT_ENV = frozenset(
 CREDENTIAL_ENV = frozenset(
     {"PROBE_TOKEN", "PROBE_MCP_TOKEN", "PROBE_SERVICE_TOKEN", "PROBE_INGEST_TOKEN", "PROBE_HMAC_SECRET"}
 )
-#: `base_url` reaches the child as this variable (`probe.sdk.config.resolve`).
+#: `base_url` reaches the child as this variable (`probe.sdk.settings.settings.resolve`).
 BASE_URL_ENV = "PROBE_BASE_URL"
 MAX_CONTEXT_VALUE = 4096
 
@@ -723,7 +723,7 @@ def report_consent(env) -> bool:
     """`report_env` for a registrant whose environment is `env` (a tap, pi
     through the tap): `PROBE_TELEMETRY` or `PROBE_DIAGNOSTICS` off, or a
     `PROBE_BASE_URL` that is not Probe's hosted service (https, `prbe.ai` or a
-    subdomain), says no. The rule of `probe._shared.report_policy.allowed(env)`
+    subdomain), says no. The rule of `probe.analytics.report_policy.allowed(env)`
     with no CLI config, restated for the tap, which cannot import `probe`
     (tests/test_service_watch.py holds the two equal). The service takes the
     bool as said (it holds none of the registrant's variables), and the report
@@ -1154,7 +1154,7 @@ def need_env(params: dict, key: str = "env") -> dict:
 
 #: A coding agent's session id as Probe keys it (`probe.sdk.session_marker.valid_session_id`).
 SID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
-#: A harness registry id's characters (`probe.harness`'s `id`s: lower case, digits, `_`).
+#: A harness registry id's characters (`probe.foundation.harness_registry`'s `id`s: lower case, digits, `_`).
 AGENT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
 

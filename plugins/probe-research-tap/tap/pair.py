@@ -37,7 +37,7 @@ def _os_label() -> str:
 def _hostname() -> str:
     """The name this machine was GIVEN, not the one the network is using today.
 
-    MIRRORS `probe.sdk.device.hostname()`. It is duplicated rather than imported
+    MIRRORS `probe.sdk.settings.device.hostname()`. It is duplicated rather than imported
     because the tap is a separate plugin package living in the agent's plugin
     cache -- it cannot import the CLI, the same reason `tap/config.py::load_token`
     is mirrored by `capabilities.capture_token_sources`. Any change there must

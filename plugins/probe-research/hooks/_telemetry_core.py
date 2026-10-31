@@ -8,7 +8,7 @@ property names (which also match app/core/analytics.py and the dashboard).
 
 TWO COPIES OF THIS FILE EXIST ON PURPOSE, and they must stay byte-identical:
 
-    src/probe/sdk/_telemetry_core.py                     (canonical — edit here)
+    src/probe/analytics/core.py                     (canonical — edit here)
     plugins/probe-research/hooks/_telemetry_core.py      (vendored — never edit)
 
 The plugin hook runs under the SYSTEM python3 with no `probe` package
@@ -60,7 +60,7 @@ def _harness_rows():
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
         else:
-            from probe.harness import registry as module
+            from probe.foundation.harness_registry import harness_registry as module
         return module.get_registry().all()
     except Exception:  # noqa: BLE001 - telemetry must never break its caller
         return ()
@@ -273,7 +273,7 @@ def resolve_identity(
     disagree with the events' machine_id property.
 
     `context` is the TLS trust for the /v1/me call. The CLI passes the
-    package's shared one (`probe.sdk.tls.ssl_context`, which honours
+    package's shared one (`probe.foundation.tls.tls.ssl_context`, which honours
     REQUESTS_CA_BUNDLE and friends); the plugin copy cannot import it and
     passes nothing, keeping urllib's default.
     """

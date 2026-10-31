@@ -104,7 +104,7 @@ def test_the_tap_and_the_cli_agree_on_how_a_machine_is_named() -> None:
     """
     from pathlib import Path
 
-    cli = Path(__file__).resolve().parents[3] / "src" / "probe" / "sdk" / "device.py"
+    cli = Path(__file__).resolve().parents[3] / "src" / "probe" / "sdk" / "settings" / "device.py"
     if not cli.exists():  # installed tap, no monorepo alongside
         pytest.skip("CLI source not available beside the tap")
 

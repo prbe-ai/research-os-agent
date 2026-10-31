@@ -184,7 +184,7 @@ export const ACK_DELIVERED_TO_AGENT = "delivered_to_agent";
 /** `probe.daemon.model.ENV_KEY`: the daemon's own key, before the CLI config's
  * `companion_token`, as the daemon reads them (`model.endpoint`). */
 export const DAEMON_KEY_ENV = "PROBE_DAEMON_KEY";
-/** `probe.sdk.config.DEFAULT_BASE_URL`. */
+/** `probe.sdk.settings.settings.DEFAULT_BASE_URL`. */
 export const DEFAULT_BASE_URL = "https://api.research.prbe.ai";
 /** `reads_hook.REPORT_BUDGET_S`: the longest telling Probe what was shown may take, in all. */
 export const REPORT_BUDGET_MS = 1500;

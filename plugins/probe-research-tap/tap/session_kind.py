@@ -48,7 +48,7 @@ T3_CODE_TOOL_PREFIX = "mcp__t3-code__"
 
 class SessionKind(str, Enum):  # noqa: UP042 -- StrEnum is 3.11; the CLI runs on 3.10
     """StrEnum's behaviour (`str(kind)` is its value), spelled for Python 3.10,
-    the CLI's floor, without `probe._compat`, which the tap's copy cannot import."""
+    the CLI's floor, without `probe.foundation.compat.compat`, which the tap's copy cannot import."""
 
     AUTOMATED = "automated"
     INTERACTIVE = "interactive"

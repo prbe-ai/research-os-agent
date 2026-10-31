@@ -602,7 +602,7 @@ function tellResearcherAboutDaemon(
 
 /**
  * Every coding agent's session variable, from the harness registry beside this
- * file (`harnesses.json`, synced from `probe.harness`): pi's switch spawns the
+ * file (`harnesses.json`, synced from `probe.foundation.harness_registry`): pi's switch spawns the
  * CLI without them (`trackingSwitch.ts`). Empty when the copy cannot be read.
  */
 export function agentSessionEnv(): readonly string[] {
