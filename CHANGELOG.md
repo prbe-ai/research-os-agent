@@ -5,6 +5,7 @@
 - Nothing changes for users. The tap's ATIF fragment builder and session renderer are now copied from probe-contracts (`contracts/probe_contracts/transcripts`), the one source the knowledge engine also runs, instead of from the engine's repository; only the copies' header lines change.
 
 - Nothing changes for users. A comment in `probe.analytics` names the dashboard file at its new path, and the Codex pre-release check lints the authorize and session pages at theirs.
+- Restructure, naming lane chunk 1 (X7): private helper and local names in `probe.foundation` and `probe.analytics` renamed to the house style, no behaviour change.
 
 - Nothing changes for users. Comments and docstrings in `probe.sdk` `values`, `artifact`, `reads`, `settings`, `catalog`, `hardware` and `recording_rules` are shorter; long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
 
