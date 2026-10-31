@@ -34,7 +34,7 @@ import urllib.request
 import uuid
 
 # The same public write-only ingestion project the dashboard posts to (see
-# dashboard/src/lib/analytics/posthog-config.ts for why embedding is fine; this
+# dashboard/src/shared/analytics/posthog-config.ts for why embedding is fine; this
 # file is mirrored into the public plugin repo, and that is acceptable for a
 # capture-only key exactly as it is for the browser bundle).
 POSTHOG_HOST = os.environ.get("PROBE_TELEMETRY_HOST") or "https://us.i.posthog.com"

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Nothing changes for users. A comment in `probe.analytics` names the dashboard file at its new path, and the Codex pre-release check lints the authorize and session pages at theirs.
+
 - Nothing changes for users. Comments and docstrings in `probe.sdk` `values`, `artifact`, `reads`, `settings`, `catalog`, `hardware` and `recording_rules` are shorter; long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
 
 - Nothing changes for users. Comments in `probe.foundation` and `probe.analytics` are shorter; their long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
