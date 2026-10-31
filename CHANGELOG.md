@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Nothing changes for users. The wheel carries probe-contracts, the shared records and vocabularies, as `probe/_vendor/probe_contracts` (copied from `../contracts` at build by `hatch_build.py`, also from the sdist; a build without that folder, such as the MCP image, skips it, and nothing imports it yet). `probe.generated.records` holds the shared domain records generated from it.
+
 ## 0.353.1
 
 - Internal module moves, no behaviour change: the CLI, SDK, service and MCP import from new folders (`probe.foundation`, `probe.analytics`, SDK leaf folders, `probe.generated`); every old import path still works.
