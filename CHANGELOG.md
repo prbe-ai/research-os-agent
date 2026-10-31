@@ -6,6 +6,8 @@
 
 - Nothing changes for users. Comments and docstrings in `probe.sdk` `values`, `artifact`, `reads`, `settings`, `catalog`, `hardware` and `recording_rules` are shorter; long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
 
+- Nothing changes for users. Comments in `probe.sdk.delivery` are shorter; the journal's layout and the offline-run design move into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
+
 - Nothing changes for users. Comments in `probe.foundation` and `probe.analytics` are shorter; their long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
 
 - Internal module moves, no behaviour change: the SDK's write path (journal, transport, outbox worker, offline runs) lives in `probe.sdk.delivery`, and `Client.write` hands each write to a sink chosen once from the client's mode; every old import path still works and `python -m probe.sdk.outbox_worker` keeps running.
