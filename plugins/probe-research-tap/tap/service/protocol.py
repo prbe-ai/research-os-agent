@@ -93,7 +93,7 @@ class Method:
     #: The service owns the reads mailbox and the approvals board (plan Q2):
     #: a worker posts a message or a held question, a hook or the app claims
     #: messages and answers a held question. The files stay the store
-    #: (`probe.daemon.mailbox`), written with the same atomic operations, so a
+    #: (`probe.shared.mailbox`), written with the same atomic operations, so a
     #: caller with no service writes and claims them itself beside it.
     MAILBOX_POST = "mailbox.post"
     MAILBOX_CLAIM = "mailbox.claim"
@@ -1298,7 +1298,7 @@ MAILBOX_WAIT_S = 1.0
 MAX_MAILBOX_WAIT_S = 10.0
 #: `mailbox.claim`'s `names`, at most.
 MAX_MAILBOX_CLAIM = 64
-#: A message file's name (`probe.daemon.mailbox._file_name`), and the ids,
+#: A message file's name (`probe.shared.mailbox.mailbox._file_name`), and the ids,
 #: tokens and deliverer names a `mailbox.*` call may carry.
 MESSAGE_FILE = re.compile(r"[0-9]{1,24}-[A-Za-z0-9_]{1,64}\.json")
 MAILBOX_ID = re.compile(r"[A-Za-z0-9_]{1,64}")
@@ -1334,9 +1334,9 @@ def _need_mailbox(params: dict, *, sid: bool = True) -> dict:
 
 def need_mailbox_post(params: dict) -> dict:
     """`mailbox.post`: `{sid, state_dir, deadline}` and exactly one of
-    `message` (a `probe.daemon.mailbox.Message` as a dict: a reader's message,
+    `message` (a `probe.shared.mailbox.mailbox.Message` as a dict: a reader's message,
     an answer, a writer's reply, a run alert) or `question` (a held question,
-    `probe.daemon.approvals.Request.to_json()`). Their fields are checked where
+    `probe.shared.mailbox.approvals.Request.to_json()`). Their fields are checked where
     they are written."""
     out = _need_mailbox(params)
     message, question = params.get("message"), params.get("question")

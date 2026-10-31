@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal module moves, no behaviour change: what the CLI, daemon and service share lives in `probe.shared` (notes, mailbox, command rules, reads, reports, feedback, updates) and everything per coding agent in `probe.shared.harness`, behind one `HarnessIntegration` per agent; every old import path still works, and `python -m probe.daemon.cli_spec` and `python -m probe.cli.pi_pins` keep working for good. The tap's copy of the service client (tap 0.10.30) reads the uninstall barrier at its new path, falling back to the old one beside an older CLI.
+
 ## 0.353.2
 
 - Nothing changes for users. `probe.analytics.Event` is now generated from the event catalog the server and dashboard share (`contracts/probe_contracts/analytics/events.json`); every member, value and `EVENT_*` name is unchanged.

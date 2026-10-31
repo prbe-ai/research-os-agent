@@ -49,7 +49,7 @@ instead of the file Route B shows, you've reintroduced this gate.
 probe wizard --agent pi
 ```
 
-Writes the entry for you. `agent/src/probe/cli/pi_config.py`'s
+Writes the entry for you. `agent/src/probe/shared/harness/harnesses/pi/package_entry.py`'s
 `install_package_entry()` resolves this package's directory
 (`PROBE_PI_PACKAGE_ROOT` env, else a bounded checkout walk from wherever the
 `probe` CLI itself is running — see that module's docstring for the full
@@ -575,7 +575,7 @@ follow immediately.
 | `PROBE_MCP_URL` | Probe MCP server URL override (default `https://mcp.research.prbe.ai/mcp`; tests/dev only) |
 
 `PROBE_PI_PACKAGE_ROOT` is a related override, but it belongs to the `probe`
-CLI's wizard (`agent/src/probe/cli/pi_config.py`), not to this extension's
+CLI's wizard (`agent/src/probe/shared/harness/harnesses/pi/package_source.py`), not to this extension's
 own runtime — see "Install" → "Route A" above.
 
 ## What this extension actually does

@@ -74,7 +74,7 @@ START_LOCK_WAIT_S = 2.0
 #: the hook and the CLI run it as a detached process).
 CHECK_NOW_WAIT_S = 5.0
 #: `check-now --wait-for-pid` waits at most this long for the command that
-#: asked (`probe._shared.autoupdate.WAIT_FOR_PID_TIMEOUT`).
+#: asked (`probe.shared.updates.autoupdate.WAIT_FOR_PID_TIMEOUT`).
 WAIT_FOR_PID_S = 1800.0
 #: `desktop_request`'s socket deadline: the service's longest (a change, 120 s)
 #: and a little more, so its own `timed_out` answer arrives first.
@@ -158,7 +158,7 @@ class Ensured:
 # LIVE nothing of Probe's starts or updates anything: `ensure` (UNINSTALLING),
 # the service's own start, the guard, the keeper, `write_runtime`, a daemon
 # worker's start, and every installer. ONE reader decides LIVE / STALE:
-# `probe._shared.uninstall_barrier` (stdlib). This file is also the tap's copy,
+# `probe.shared.updates.uninstall_barrier` (stdlib). This file is also the tap's copy,
 # which has no `probe` to import: there the file being present is enough
 # (conservative: nothing parsed, nothing cleared; the CLI's reader clears a
 # stale one).
@@ -175,9 +175,15 @@ def uninstall_barrier() -> dict | None:
         return None  # the common path: one failed stat, nothing imported
     except OSError:
         pass
-    try:
-        reader = importlib.import_module("probe._shared.uninstall_barrier")
-    except ImportError:
+    reader = None
+    # The old name is a CLI from before agent:12, which the tap's copy of this file can sit beside.
+    for name in ("probe.shared.updates.uninstall_barrier", "probe._shared.uninstall_barrier"):  # restructure-guard-ok
+        try:
+            reader = importlib.import_module(name)
+            break
+        except ImportError:
+            continue
+    if reader is None:
         return {}
     try:
         data = reader.read()
@@ -696,7 +702,7 @@ def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.
     The CLI asks for an update from its root callback, before its own command
     runs, and imports lazily all the way through it: an update that started
     now would replace files that command is still reaching for (a
-    `ModuleNotFoundError`; `probe._shared.autoupdate.wait_for_pid_exit`). The
+    `ModuleNotFoundError`; `probe.shared.updates.autoupdate.wait_for_pid_exit`). The
     barrier stops new starts only, so the asking process waits it out here."""
     deadline = time.monotonic() + timeout
     while True:
