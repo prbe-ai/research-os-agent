@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The hosted MCP searches as its caller's session, and a read names what it opened.** The `/v1/search` call carries the caller's `X-Probe-Agent` / `X-Probe-Agent-Session` (never the server process's own), so the API's `search_performed` can say which session searched; `mcp.tool_served` for `entity` gains `read_ids` (refs given by id, never a slug or name) and `read_ref_count`. stdio is unchanged.
+
 ## 0.352.3
 
 - **The SDK no longer scans what it sends for credentials.** Every call to the credential scanner in SDK code is commented out (`# scanning disabled:`), so these leave the machine as written, credentials included: request bodies (metrics, spans, config, notes, artifact names and metadata), console logs, captured output files, code snapshots, queued uploads and crash reports. Each `probe.log()` was scanning ~52 strings, 65% of its time, for a batch of numbers; median `probe.log()` drops from 3.1 ms to 2.0 ms on the devbox under the same load (283 to 491 calls/s, offline mode, 2,000 calls). Still in place:
