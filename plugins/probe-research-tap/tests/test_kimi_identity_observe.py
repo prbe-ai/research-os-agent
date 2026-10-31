@@ -41,6 +41,7 @@ def test_identity_is_the_session_folder_and_its_state_file(kimi_fixtures) -> Non
     assert proof["native_session_id"] == TUI_ID
     assert proof["source_cwd"] == "/home/researcher/kimi-fixture/proj"
     assert proof["identity_method"] == "producer-record-v1"
+    assert proof["automated"] is False  # Kimi Code writes no headless marker
 
 
 def test_another_session_s_id_is_refused(kimi_fixtures) -> None:

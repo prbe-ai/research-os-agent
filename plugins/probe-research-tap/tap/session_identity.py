@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 from .session_journal import ReconciliationRequired, _harness, prefix_hash
+from .session_kind import SessionKind, read_head, session_kind
 
 #: The transcript formats this check knows (a registry row's
 #: `transcripts.format`). Anything else is refused, never checked as if it
@@ -120,9 +121,12 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
             fmt = _harness(source).transcripts["format"]
         except (KeyError, TypeError) as exc:
             raise ReconciliationRequired(f"no identity check for capture source {source!r}") from exc
+        # A program or a person: the FIRST lines say (`session_kind`), wherever
+        # the identity is read from. The proof only; the verdict reads no more.
+        automated = not verdict_only and session_kind(read_head(handle), expected) is SessionKind.AUTOMATED
         if fmt == FORMAT_KIMI:
             head_lines = _window(handle, size, SAMPLE_BYTES, tail=False)
-            return _kimi_identity(path, head_lines, _harness(source), expected)
+            return _kimi_identity(path, head_lines, _harness(source), expected) | {"automated": automated}
         if fmt != FORMAT_CLAUDE and fmt not in _HEADER_TYPE:
             raise ReconciliationRequired(f"no identity check for transcript format {fmt!r}")
         # Claude's current leg is its LAST primary record; header formats open with theirs.
@@ -178,6 +182,7 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
         "identity_method": "producer-record-v1",
         "observed_lineage": lineage[:32],
         "original_author": "unverified",
+        "automated": automated,
     }
     if isinstance(source_cwd, str) and Path(source_cwd).is_absolute():
         proof["source_cwd"] = source_cwd

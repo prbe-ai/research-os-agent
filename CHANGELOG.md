@@ -3,6 +3,10 @@
 ## Unreleased
 
 - **The hosted MCP searches as its caller's session, and a read names what it opened.** The `/v1/search` call carries the caller's `X-Probe-Agent` / `X-Probe-Agent-Session` (never the server process's own), so the API's `search_performed` can say which session searched; `mcp.tool_served` for `entity` gains `read_ids` (refs given by id, never a slug or name) and `read_ref_count`. stdio is unchanged.
+- **A captured session's first batch says whether a program drove it** (plan anthrogen-search-fixes W1). Its provenance carries `automated`, read from the transcript's first 40 lines: true only for a known headless run, Claude Code's `entrypoint` `sdk-cli` (`claude -p`) on every line of the head the session wrote itself (not T3 Code, whose own tool list in the head marks a person; the history a resumed or forked transcript carries from another session does not count) and Codex's `originator: codex_exec`, `source: exec` or a sub-agent's `source.subagent`. The Agent SDK's `sdk-ts` and `sdk-py` are not automated, because editors built on it (Zed) report them while a person types; nor is any other entrypoint (`cli`, `claude-vscode`, `claude-desktop`, one added later), a head with no marker or one that cannot be read, pi or Kimi Code, so no person's session is hidden on a guess. Search hides automated sessions once the engine reads the flag; this only records it. Imports of past sessions carry it now, live capture from tap 0.10.29 (`tap_core/session_kind.py`, copied into the tap). The team-note audit's own reading of these markers is unchanged.
+- **`probe project create` and the folder import say where a new project went**: `Filed in workspace <name> (<slug>)` on stderr after each create, one workspace read per workspace, the workspace id when that read fails (the create never fails for it). stdout is the same JSON as before.
+
+- **The tap moves to 0.10.29** so existing installs record `automated` on a live session's first batch (`tap/session_kind.py` and `tap/session_identity.py` changed under 0.10.28).
 
 ## 0.352.3
 
