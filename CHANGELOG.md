@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Nothing changes for users. Comments in `probe.foundation` and `probe.analytics` are shorter; their long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
+
 - Nothing changes for users. The wheel carries probe-contracts, the shared records and vocabularies, as `probe/_vendor/probe_contracts` (copied from `../contracts` at build by `hatch_build.py`, also from the sdist; a build without that folder, such as the MCP image, skips it, and nothing imports it yet). `probe.generated.records` holds the shared domain records generated from it.
 
 ## 0.353.1
