@@ -703,7 +703,7 @@ def _outbox_safe_component(value: str) -> str:
 
 
 def _outbox_rank_suffix() -> str | None:
-    """probe.sdk.journal._rank_suffix, copied -- see _outbox_dir for why."""
+    """probe.sdk.delivery.journal.paths._rank_suffix, copied -- see _outbox_dir for why."""
     for var in _OUTBOX_GLOBAL_RANK_VARS:
         raw = (os.environ.get(var) or "").strip()
         if raw:
@@ -719,7 +719,7 @@ def _outbox_rank_suffix() -> str | None:
 def _outbox_dir() -> Path:
     """The CLI's durable write outbox, resolved EXACTLY as the CLI resolves it.
 
-    A copy of probe.sdk.journal.default_dir (rank suffix included), not an
+    A copy of probe.sdk.delivery.journal.paths.default_dir (rank suffix included), not an
     import: the system python3 this hook runs on has no probe package. Copy
     fidelity is load-bearing -- review of the first draft found that omitting
     the rank suffix made any session inside a SLURM/torchrun allocation (RANK

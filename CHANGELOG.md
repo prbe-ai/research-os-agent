@@ -4,6 +4,8 @@
 
 - Nothing changes for users. Comments in `probe.foundation` and `probe.analytics` are shorter; their long rationale moves into `DESIGN.md` files beside the code (they ship in the wheel). No code, help text or tool description changes.
 
+- Internal module moves, no behaviour change: the SDK's write path (journal, transport, outbox worker, offline runs) lives in `probe.sdk.delivery`, and `Client.write` hands each write to a sink chosen once from the client's mode; every old import path still works and `python -m probe.sdk.outbox_worker` keeps running.
+
 - Nothing changes for users. The wheel carries probe-contracts, the shared records and vocabularies, as `probe/_vendor/probe_contracts` (copied from `../contracts` at build by `hatch_build.py`, also from the sdist; a build without that folder, such as the MCP image, skips it, and nothing imports it yet). `probe.generated.records` holds the shared domain records generated from it.
 
 ## 0.353.1
