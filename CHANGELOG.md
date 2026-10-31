@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.354.0
+
 - Internal module moves, no behaviour change: what the CLI, daemon and service share lives in `probe.shared` (notes, mailbox, command rules, reads, reports, feedback, updates) and everything per coding agent in `probe.shared.harness`, behind one `HarnessIntegration` per agent; every old import path still works, and `python -m probe.daemon.cli_spec` and `python -m probe.cli.pi_pins` keep working for good. The tap's copy of the service client (tap 0.10.30) reads the uninstall barrier at its new path, falling back to the old one beside an older CLI.
 
 ## 0.353.2
@@ -9,6 +11,7 @@
 - Nothing changes for users. `probe.analytics.Event` is now generated from the event catalog the server and dashboard share (`contracts/probe_contracts/analytics/events.json`); every member, value and `EVENT_*` name is unchanged.
 
 - Nothing changes for users. The repo's harness-literal check treats generated folders under `packages/` (the dashboard's API types) as generated code.
+- A Miles run whose metric queue drained no longer ends as `partial` on a loaded machine: `finish` waits out what is left of its budget for the exporter thread to exit instead of 0.5 s. A timed-out agent CLI call in `probe status --refresh --timeout N` says `timed out after Ns`, not the scheduling-dependent time left when it started.
 
 - **Codex's plugin update no longer times out downloading the marketplace.** `codex plugin marketplace upgrade research-os-agent` fully cloned the plugin mirror (1,698 commits, ~12 MB, ~22 new commits a day) within Codex's fixed 30 s git timeout: 10-15 s on a good connection, and on a slower one a `git clone marketplace source timed out after 30s ... fatal: early EOF` that failed the whole update. Three of those in a row page the team as "Probe's automatic update keeps failing" (5 in a row on one Mac, 10-30/31). The installer now adds Codex's marketplace with `--sparse .agents --sparse plugins`, so Codex clones `--filter=blob:none` and checks out only its manifest and the plugins (3-5 s, measured), and the update adds the same `sparse_paths` to an install added before this (a Git checkout of `prbe-ai/research-os-agent` on github.com that sets none; a fork, a mirror, a local checkout or paths somebody chose are left alone), so its next upgrade re-clones sparse. Only with git 2.25 or newer, which has `git sparse-checkout`: an older git (RHEL/CentOS 7, Ubuntu 18.04) keeps the full clone. `add` passes the paths an existing entry already has, since Codex refuses an `add` whose paths differ ("already added from a different source") after a full clone, and a `config.toml` that Codex saves while it is being edited is left as Codex wrote it (the next run retries). The printed manual steps say a refused `add` over an older install is harmless.
 
