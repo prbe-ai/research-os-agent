@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.355.0
+
 - Internal module moves, no behaviour change: `probe.sdk.client`, `probe.sdk.run` and `probe.sdk.fluent` are packages now (the client's methods by data domain under `client/resources/`, the run's by job under `run/`); every old import path keeps working, `Client` and `Run` are the same classes (same bases, same members), and `probe.sdk.preempt`, `launch`, `ephemeral` and the other moved run modules stay importable at their old paths. New, additive: `client.runs.get(run_id)`, `client.runs.list(...)`, `client.runs.list_spans(run_id)`, `client.projects.get(project_id)` and `client.projects.list(...)` return typed models (the server's response models); `client.get_run` and the other flat methods return the same dicts as before.
 
 ## 0.354.0
