@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.352.3
+
 - **The SDK no longer scans what it sends for credentials.** Every call to the credential scanner in SDK code is commented out (`# scanning disabled:`), so these leave the machine as written, credentials included: request bodies (metrics, spans, config, notes, artifact names and metadata), console logs, captured output files, code snapshots, queued uploads and crash reports. Each `probe.log()` was scanning ~52 strings, 65% of its time, for a batch of numbers; median `probe.log()` drops from 3.1 ms to 2.0 ms on the devbox under the same load (283 to 491 calls/s, offline mode, 2,000 calls). Still in place:
   - the path-name, file-type and size checks inside `secret_gate.py`, which is also copied to the server and so is unchanged;
   - the code snapshot's file-name rules (`.env`, key files, credential folders);
