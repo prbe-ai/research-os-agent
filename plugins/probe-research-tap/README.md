@@ -35,7 +35,7 @@ claude plugin marketplace add prbe-ai/research-os-agent
 claude plugin install probe-research-tap@research-os-agent
 
 # Codex
-codex plugin marketplace add prbe-ai/research-os-agent
+codex plugin marketplace add prbe-ai/research-os-agent --sparse .agents --sparse plugins
 codex plugin add probe-research-tap@research-os-agent
 ```
 
