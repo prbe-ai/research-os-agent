@@ -126,7 +126,7 @@ def socket_path(session_id: str) -> Path:
 
     When that path is too long for a UNIX socket, `/tmp/probe-<uid>/<hash>.sock`
     in a folder only this user can open. The SDK computes the same path
-    (`probe.sdk.daemon_channel.socket_path`) -- keep the two in step."""
+    (`probe.sdk.run.launch.daemon_channel.socket_path`) -- keep the two in step."""
     import hashlib
 
     path = lease.sessions_dir() / (session_id + ".sock")
