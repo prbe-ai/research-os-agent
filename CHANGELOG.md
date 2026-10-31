@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.353.2
+
 - Nothing changes for users. `probe.analytics.Event` is now generated from the event catalog the server and dashboard share (`contracts/probe_contracts/analytics/events.json`); every member, value and `EVENT_*` name is unchanged.
 
 - Nothing changes for users. The repo's harness-literal check treats generated folders under `packages/` (the dashboard's API types) as generated code.
