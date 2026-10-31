@@ -4,6 +4,8 @@
 
 - A staff capture repair decides where an agent's capture credential lives, and whether an env token hides it, from the harness registry (`capture.cli_token_fallback`) and the agent's own token variable (`tap_token_env`) instead of naming Claude Code. Same answer as before for every agent; agent-ci's harness-literal ratchet is green again.
 
+- **Nothing changes for users; the code now compiles with Cython for the private wheel.** Three `max([a, *b])` calls (`cli/main.py`, `daemon/worker.py`, `service/hints.py`) are spelled `max([a] + list(b))`, which Cython 3.2.9 accepts, and the daemon's CLI spec fingerprint (`daemon/cli_spec.py`) also counts compiled CLI modules, so a compiled release never reuses the spec cached for the last one. A source install has no compiled modules, so its fingerprint is unchanged; `cli_spec.json` is regenerated only because `cli/main.py` changed.
+
 ## 0.353.0
 
 - **The hosted MCP searches as its caller's session, and a read names what it opened.** The `/v1/search` call carries the caller's `X-Probe-Agent` / `X-Probe-Agent-Session` (never the server process's own), so the API's `search_performed` can say which session searched; `mcp.tool_served` for `entity` gains `read_ids` (refs given by id, never a slug or name) and `read_ref_count`. stdio is unchanged.
