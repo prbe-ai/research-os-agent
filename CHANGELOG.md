@@ -8,6 +8,8 @@
 
 - **Nothing changes for users; the code now compiles with Cython for the private wheel.** Three `max([a, *b])` calls (`cli/main.py`, `daemon/worker.py`, `service/hints.py`) are spelled `max([a] + list(b))`, which Cython 3.2.9 accepts, and the daemon's CLI spec fingerprint (`daemon/cli_spec.py`) also counts compiled CLI modules, so a compiled release never reuses the spec cached for the last one. A source install has no compiled modules, so its fingerprint is unchanged; `cli_spec.json` is regenerated only because `cli/main.py` changed.
 
+- `scripts/sync_atif_fragment.py` reads the engine paths of the vendored ATIF fragment builder and transcript renderer from the engine's `engine/vendored_paths.json` at `--ref` (today's paths for a ref older than that file), so the engine can move them: a move alone (same bytes) still passes `--check`, and the fragment's renderer import is rewritten from wherever the renderer lives. `ENGINE_PINS` in `tests/test_atif_fragment_vendor.py` is keyed by tap file, not engine path. Dev tooling only: the vendored bytes are unchanged.
+
 ## 0.353.0
 
 - **The hosted MCP searches as its caller's session, and a read names what it opened.** The `/v1/search` call carries the caller's `X-Probe-Agent` / `X-Probe-Agent-Session` (never the server process's own), so the API's `search_performed` can say which session searched; `mcp.tool_served` for `entity` gains `read_ids` (refs given by id, never a slug or name) and `read_ref_count`. stdio is unchanged.
