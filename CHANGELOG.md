@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.353.1
+
 - Internal module moves, no behaviour change: the CLI, SDK, service and MCP import from new folders (`probe.foundation`, `probe.analytics`, SDK leaf folders, `probe.generated`); every old import path still works.
 
 - A staff capture repair decides where an agent's capture credential lives, and whether an env token hides it, from the harness registry (`capture.cli_token_fallback`) and the agent's own token variable (`tap_token_env`) instead of naming Claude Code. Same answer as before for every agent; agent-ci's harness-literal ratchet is green again.
