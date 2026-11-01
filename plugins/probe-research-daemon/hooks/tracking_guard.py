@@ -1675,12 +1675,13 @@ _QUOTED_METHOD = re.compile(r"[\"']((?:mailbox\.(?:answer|claim|post)|hooks\.run
 #: service (`_PROBE_SERVICE`).
 _MAILBOX_ONLY = re.compile(r"\b(?:mailbox\.(?:answer|claim|post)|hooks\.run)\b")
 _QUOTED_MAILBOX_ONLY = re.compile(r"[\"']((?:mailbox\.(?:answer|claim|post)|hooks\.run))[\"']")
-#: What names Probe's service in a command: its client (`probe.service`, the
-#: tap's `tap.service` / `tap service`, the hooks' `_service_rpc`, the daemon's
-#: `service_call`) or its socket (`.../probe/service/...`, `service.sock`,
-#: `/tmp/probe-<uid>/service-<hash>.sock`).
+#: What names Probe's service in a command: its client (`probe.service`, and
+#: `service_api` in any spelling since agent:16, the tap's `tap.service` / `tap
+#: service`, the hooks' `_service_rpc`, the daemon's `service_call`) or its socket
+#: (`.../probe/service/...`, `service.sock`, `/tmp/probe-<uid>/service-<hash>.sock`).
+#: Plain words only: a pattern that backtracks on long input would time the hook out.
 _PROBE_SERVICE = re.compile(
-    r"\bprobe\.service\b|\btap\.service\b|\btap\s+service\b|\b_service_rpc\b|\bservice_call\b"
+    r"\bprobe\.service\b|\bservice_api\b|\btap\.service\b|\btap\s+service\b|\b_service_rpc\b|\bservice_call\b"
     r"|\bservice(?:-[0-9a-f]+)?\.sock\b|probe/+service\b|/tmp/probe-")
 #: The service client's own command line (`python -m probe.service.client
 #: register|end ...`, the tap's copy as `python -m tap service ...`): its

@@ -285,22 +285,26 @@ def _pid_in(path: str) -> "int | None":
 
 def _service_holds(session_id: str) -> bool:
     """Does the Probe service's saved list of what it records (`recorders.json`
-    in its folder) name this session? Read from `probe.service.paths`, or the
-    copy beside the hooks; False when it cannot be read."""
+    in its folder) name this session? Read from the CLI's service paths (a CLI
+    from before agent:16 has them at `probe.service.paths`), or the copy beside
+    the hooks; False when it cannot be read."""
     try:
         try:
-            from probe.service import paths  # noqa: PLC0415
+            from probe.foundation.service_api import paths  # noqa: PLC0415
         except ImportError:
-            import importlib.util  # noqa: PLC0415
+            try:
+                from probe.service import paths  # noqa: PLC0415  restructure-guard-ok: hooks run this copy against older CLIs
+            except ImportError:
+                import importlib.util  # noqa: PLC0415
 
-            name = "_probe_hooks._service_paths"
-            paths = sys.modules.get(name)
-            if paths is None:
-                spec = importlib.util.spec_from_file_location(
-                    name, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_service_paths.py"))
-                paths = importlib.util.module_from_spec(spec)
-                sys.modules[name] = paths
-                spec.loader.exec_module(paths)
+                name = "_probe_hooks._service_paths"
+                paths = sys.modules.get(name)
+                if paths is None:
+                    spec = importlib.util.spec_from_file_location(
+                        name, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_service_paths.py"))
+                    paths = importlib.util.module_from_spec(spec)
+                    sys.modules[name] = paths
+                    spec.loader.exec_module(paths)
         with open(os.path.join(str(paths.service_dir()), RECORDERS_NAME), encoding="utf-8") as handle:
             sessions = json.load(handle).get("sessions") or []
         return any(isinstance(item, dict) and item.get("sid") == session_id for item in sessions)
