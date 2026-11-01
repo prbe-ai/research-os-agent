@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal restructure of the SDK's write path, no behaviour change: `probe.sdk.delivery`'s journal, transport and drain are split into files by job, with a DESIGN.md per folder. Every import path and `python -m` entry keeps working.
+
 ## 0.357.0
 
 - Internal, no behaviour change: the bundled command index's source fingerprint is current again.
