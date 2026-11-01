@@ -19,6 +19,7 @@
 
 - Internal module moves, no behaviour change: the Probe service is split into folders by job (`probe.service.server`, `sessions`, `updater`, `hooks`, `hints`, `watch`, `mail`, `jobs`, `actions`, `keeper`), and its client side is `probe.foundation.service_api`. Every old `probe.service.*` import path keeps working, and `python -m probe.service`, `probe.service.client`, `probe.service.keeper` and `probe.service.guard` keep running.
 
+- Internal, no behaviour change: module-private names in `daemon/`, `mcp/` and `cli/` follow the naming rules (spelled-out locals, question-form booleans, verb-first private helpers).
 - Internal, no behaviour change: the folder import (`probe.cli.imports.folder`) loads only the pieces a call reads, so each `probe` call inside an import's record session starts as fast as it did before the CLI was split; `probe.cli.backfill_evidence` is served from `probe.cli.imports.folder.evidence` and keeps working.
 - Docs only, no behaviour change: `foundation/request_identity/DESIGN.md` names the server's client-version models by their moved path (`app.capture.clients.versions.models`).
 
