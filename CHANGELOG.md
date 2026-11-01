@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal module moves, no behaviour change: the daemon is split into folders by job (`probe.daemon.worker`, `agent`, `agent.tools`, `shell`, `lanes`, `host`, `session`, `store`, `trace`; prompts in `daemon/prompts/`), with a `Lane` protocol for the lanes beside the writer. Every old `probe.daemon.*` import path keeps working.
+
 - Internal module moves, no behaviour change: the SDK's automatic capture is a package, `probe.sdk.capture` (`lineage/` for what a run reads and writes, `outputs/` for output capture, `code/` for the code and environment snapshot, `logs/` for the console log). Every old import path keeps working (`probe.sdk.inputs`, `probe.sdk.outputs`, `probe.sdk.snapshot`, `probe.sdk.logcapture`, `probe.sdk.logstream`), `python -m probe.sdk.outputs` still runs, and the code snapshot reads the shared credential rules through one `SecretScanner` interface (scanning stays off in the SDK). `probe.sdk.snapshot` no longer re-exports the scanner's private `_scan`, `_scan_quick` and `_keyword_windows` (their home is `probe.tap_core.secrets`).
 
 - Internal comment and docstring cleanup in `probe.sdk.client`, `probe.sdk.run`, `probe.shared` and `probe.mcp`; no behaviour change.
