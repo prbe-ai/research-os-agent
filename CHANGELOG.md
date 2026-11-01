@@ -4,6 +4,8 @@
 
 - Internal module moves, no behaviour change: the daemon is split into folders by job (`probe.daemon.worker`, `agent`, `agent.tools`, `shell`, `lanes`, `host`, `session`, `store`, `trace`; prompts in `daemon/prompts/`), with a `Lane` protocol for the lanes beside the writer. Every old `probe.daemon.*` import path keeps working.
 
+- Typed results on `client.<domain>.get/list` and the other read verbs for every client domain: `client.experiments`, `client.metrics`, `client.artifacts`, `client.catalog`, `client.lineage`, `client.papers`, `client.summaries`, `client.notes`, `client.sessions`, `client.workspaces`, `client.integrations`, `client.auth` and `client.reads` answer with the server's response models (`probe.generated.models`), and `client.runs` / `client.projects` gain 13 more typed reads. The flat methods (`client.get_experiment`, `client.run_metrics` ...) keep returning the same dicts.
+
 - Internal module moves, no behaviour change: the SDK's automatic capture is a package, `probe.sdk.capture` (`lineage/` for what a run reads and writes, `outputs/` for output capture, `code/` for the code and environment snapshot, `logs/` for the console log). Every old import path keeps working (`probe.sdk.inputs`, `probe.sdk.outputs`, `probe.sdk.snapshot`, `probe.sdk.logcapture`, `probe.sdk.logstream`), `python -m probe.sdk.outputs` still runs, and the code snapshot reads the shared credential rules through one `SecretScanner` interface (scanning stays off in the SDK). `probe.sdk.snapshot` no longer re-exports the scanner's private `_scan`, `_scan_quick` and `_keyword_windows` (their home is `probe.tap_core.secrets`).
 
 - Internal comment and docstring cleanup in `probe.sdk.client`, `probe.sdk.run`, `probe.shared` and `probe.mcp`; no behaviour change.
