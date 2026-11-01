@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Internal, no behaviour change: the folder import (`probe.cli.imports.folder`) loads only the pieces a call reads, so each `probe` call inside an import's record session starts as fast as it did before the CLI was split; `probe.cli.backfill_evidence` is served from `probe.cli.imports.folder.evidence` and keeps working.
 - Docs only, no behaviour change: `foundation/request_identity/DESIGN.md` names the server's client-version models by their moved path (`app.capture.clients.versions.models`).
 
 - Internal module moves, no behaviour change: the `probe` CLI's commands live in `probe.cli.commands` (one folder per command group), and its wizard, imports, install and lifecycle code in `probe.cli.wizard`, `probe.cli.imports`, `probe.cli.install` and `probe.cli.lifecycle`; every command, flag and `--help` text is unchanged, `probe.cli.main` stays the entry, and every old import path keeps working.
