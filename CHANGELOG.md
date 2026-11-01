@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tests only: a characterization test pins what `BackgroundHost` answers, books and logs for `drain` and `watch_box` (unusable, stopping, busy, failing, stalled cases).
+
 ## 0.357.3
 
 - Internal, no behaviour change: regenerated the bundled CLI command spec after #3805 changed a comment in a command file.
