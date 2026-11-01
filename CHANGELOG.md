@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.358.0
+
 - **Wire twins name the new server folders.** `agent/twins.json` and each Client resource module's header point at the server's domain folders (`app/files/artifacts`, `app/accounts/auth`, `app/projects/experiments` …) now that the old server paths are deleted. No code change.
 - Tests only: a characterization test pins what `BackgroundHost` answers, books and logs for `drain` and `watch_box` (unusable, stopping, busy, failing, stalled cases).
 - **Writes set aside behind one revoked key are sent again, with nothing to run.** A one-time restore puts back the writes a customer's training jobs queued on 2026-10-22 and 2026-10-23 under the key a re-sign-in revoked mid-run (fingerprint `738f7f8ed3fe16d6`), which `probe outbox discard --held` had set aside and nothing ever sent. Only that credential's writes from those two days go back, and only those the server never refused for their content and the signed-in login may send (no `/ingest` writes, DELETEs, scope refusals, or uploads whose bytes are not in the outbox); every other set-aside write, on every machine, stays where it is. The existing rescue then sends them with the login when it is the same team and user; a login of another account sets them aside again, and no login or no answer from the server leaves them queued for the next look. It starts from any `probe` command or the Probe service, at most every 10 minutes, until a pass leaves nothing waiting. Reported as `outbox.restored` (counts only). This step is removed in a later release.
