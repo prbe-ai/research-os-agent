@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tests only: the service tests run on Ubuntu 26.04 (whose `sleep` refuses to run under another name). No behaviour change.
+
 - Internal restructure of the SDK's run write path, no behaviour change: opening a run and the close are split into named stages, with a DESIGN.md per folder. Every import path, request, warning and error is as before.
 - Internal restructure of the SDK's write path, no behaviour change: `probe.sdk.delivery`'s journal, transport and drain are split into files by job, with a DESIGN.md per folder. Every import path and `python -m` entry keeps working.
 
