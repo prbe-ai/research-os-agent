@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.356.0
+
 - Internal module moves, no behaviour change: the daemon is split into folders by job (`probe.daemon.worker`, `agent`, `agent.tools`, `shell`, `lanes`, `host`, `session`, `store`, `trace`; prompts in `daemon/prompts/`), with a `Lane` protocol for the lanes beside the writer. Every old `probe.daemon.*` import path keeps working.
 
 - Typed results on `client.<domain>.get/list` and the other read verbs for every client domain: `client.experiments`, `client.metrics`, `client.artifacts`, `client.catalog`, `client.lineage`, `client.papers`, `client.summaries`, `client.notes`, `client.sessions`, `client.workspaces`, `client.integrations`, `client.auth` and `client.reads` answer with the server's response models (`probe.generated.models`), and `client.runs` / `client.projects` gain 13 more typed reads. The flat methods (`client.get_experiment`, `client.run_metrics` ...) keep returning the same dicts.
