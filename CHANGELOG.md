@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.357.0
+
 - Internal, no behaviour change: the bundled command index's source fingerprint is current again.
 
 - A Hugging Face run opened in a forked worker (accelerate's `notebook_launcher`, a `Process` per trial) closes `canceled` on Ctrl-C even when the launcher's own SIGINT reaches the worker on its way out: when a signal during `train()` ends the worker, it holds SIGINT and SIGTERM until its close is done (25 s per hold). It could stay `running` before.
