@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.357.1
+
 - Tests only: the service tests run on Ubuntu 26.04 (whose `sleep` refuses to run under another name). No behaviour change.
 
 - Internal restructure of the SDK's run write path, no behaviour change: opening a run and the close are split into named stages, with a DESIGN.md per folder. Every import path, request, warning and error is as before.
