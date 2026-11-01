@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A Hugging Face run opened in a forked worker (accelerate's `notebook_launcher`, a `Process` per trial) closes `canceled` on Ctrl-C even when the launcher's own SIGINT reaches the worker on its way out: when a signal during `train()` ends the worker, it holds SIGINT and SIGTERM until its close is done (25 s per hold). It could stay `running` before.
+
 - Internal module moves, no behaviour change: the Probe service is split into folders by job (`probe.service.server`, `sessions`, `updater`, `hooks`, `hints`, `watch`, `mail`, `jobs`, `actions`, `keeper`), and its client side is `probe.foundation.service_api`. Every old `probe.service.*` import path keeps working, and `python -m probe.service`, `probe.service.client`, `probe.service.keeper` and `probe.service.guard` keep running.
 
 - Internal, no behaviour change: the folder import (`probe.cli.imports.folder`) loads only the pieces a call reads, so each `probe` call inside an import's record session starts as fast as it did before the CLI was split; `probe.cli.backfill_evidence` is served from `probe.cli.imports.folder.evidence` and keeps working.
