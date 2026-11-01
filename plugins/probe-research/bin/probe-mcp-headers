@@ -117,7 +117,7 @@ if [ -n "$AGENT_LABEL" ] && [ -n "$AGENT_SESSION" ]; then
 fi
 
 # This computer's WORKSPACE LIMIT (`probe workspace limit`; MIRRORS
-# src/probe/sdk/workspace_limit.py `resolve_limit`): PROBE_WORKSPACE_LIMIT first
+# src/probe/sdk/settings/workspace_limit.py `resolve_limit`): PROBE_WORKSPACE_LIMIT first
 # (`team` = none), else the active context's `workspace` when its `limit` is true;
 # PROBE_WORKSPACE_LIMIT_TEAM_ITEMS overrides the team-items choice of either. The
 # hosted MCP forwards both headers on its API calls, and the API narrows what that
