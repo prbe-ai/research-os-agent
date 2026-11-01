@@ -76,7 +76,7 @@ SIGTERM. A SIGTERM handler installed before `probe.init()` runs first.
 `log()` queues to local disk and returns; the run's rows go out every
 `PROBE_SEND_INTERVAL_SEC` (5 s; `0` sends at once), so the page trails by that
 much, and `finish()` sends the rest without waiting. A power cut can lose the
-last second of rows (`PROBE_OUTBOX_FSYNC=each` fsyncs each row, slower).
+last ~2 s of rows (`PROBE_OUTBOX_FSYNC=each` fsyncs each row, slower).
 
 ## UPLOAD ONLY WHAT A RERUN NEEDS:
 
