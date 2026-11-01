@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Wire twins name the new server folders.** `agent/twins.json` and each Client resource module's header point at the server's domain folders (`app/files/artifacts`, `app/accounts/auth`, `app/projects/experiments` …) now that the old server paths are deleted. No code change.
 - Tests only: a characterization test pins what `BackgroundHost` answers, books and logs for `drain` and `watch_box` (unusable, stopping, busy, failing, stalled cases).
 
 ## 0.357.3
