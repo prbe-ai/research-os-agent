@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal module moves, no behaviour change: the SDK's automatic capture is a package, `probe.sdk.capture` (`lineage/` for what a run reads and writes, `outputs/` for output capture, `code/` for the code and environment snapshot, `logs/` for the console log). Every old import path keeps working (`probe.sdk.inputs`, `probe.sdk.outputs`, `probe.sdk.snapshot`, `probe.sdk.logcapture`, `probe.sdk.logstream`), `python -m probe.sdk.outputs` still runs, and the code snapshot reads the shared credential rules through one `SecretScanner` interface (scanning stays off in the SDK). `probe.sdk.snapshot` no longer re-exports the scanner's private `_scan`, `_scan_quick` and `_keyword_windows` (their home is `probe.tap_core.secrets`).
+
 - Internal module moves, no behaviour change: the MCP server's code is split into `probe.mcp.server`, `probe.mcp.tools`, `probe.mcp.source` and `probe.mcp.delivery` packages; `probe.mcp.server`, `probe.mcp.service`, `probe.mcp.source`, `probe.mcp.accounting`, `probe.mcp.branches`, `probe.mcp.browse_delivery`, `probe.mcp.continuation` and `probe.mcp.delivery_context` keep importing, and the `probe-research-mcp` / `probe-research-mcp-http` entry points are unchanged.
 
 ## 0.355.0
