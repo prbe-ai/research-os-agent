@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the MCP read tools each live in one mixin under `src/probe/mcp/tools/reads/`, and the service-only `research_context` / `research_compare` build their fixed shapes as frozen dataclasses. Same tools, schemas and output; no behaviour change.
+
 ## 0.369.0
 
 - Internal: the rest of the wizard modules now import cleanly as the first import of a process (`wizard.wizard`, `apply.*`, `screens.run_summary`, `settings.menu` raised an ImportError); `Selection` moved to a new leaf `wizard/selection.py` (still served from `wizard.py`), and two cross imports became function-local. No behaviour change.
