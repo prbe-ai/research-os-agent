@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the MCP server's longest functions (`create_server`, `browse_list`, `search`, the tree delivery's `invoke`) are cut into named stages. Same tools, schemas and order; no behaviour change.
+
 - Internal: the run watcher's code moved from `probe/box/` to `probe/sdk/run/watcher/`; `probe.box` and `python -m probe.box` still work.
 
 - Internal: shared code no longer imports the daemon, service, MCP or core; old module paths still import for one release.
