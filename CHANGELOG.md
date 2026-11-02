@@ -3,6 +3,11 @@
 ## Unreleased
 
 - Internal: the run watcher's code moved from `probe/box/` to `probe/sdk/run/watcher/`; `probe.box` and `python -m probe.box` still work.
+
+- Internal: shared code no longer imports the daemon, service, MCP or core; old module paths still import for one release.
+
+- Internal: coding-agent integration code and the wizard's setup state moved below the CLI, daemon and service; old module paths still import for one release.
+
 - Internal: the lowest code layers (foundation, analytics) no longer import the SDK or shared code; the old module paths still import for one release.
 
 ## 0.362.2

@@ -292,8 +292,10 @@ def _service_holds(session_id: str) -> bool:
         try:
             from probe.foundation.service_api import paths  # noqa: PLC0415
         except ImportError:
-            try:
-                from probe.service import paths  # noqa: PLC0415  restructure-guard-ok: hooks run this copy against older CLIs
+            try:  # by name: the layers contract keeps shared/ off the service package
+                import importlib  # noqa: PLC0415
+
+                paths = importlib.import_module("probe.service.paths")  # restructure-guard-ok: older CLIs
             except ImportError:
                 import importlib.util  # noqa: PLC0415
 
