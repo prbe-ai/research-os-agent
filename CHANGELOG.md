@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A `probe exec` job's own requests (its run's create, beats and close) now identify as the SDK, not the CLI: a job that runs for days on a dev pod no longer reads as someone using the `probe` CLI there, which kept the stuck-update alert's clock running.
+
 ## 0.365.0
 
 - **Restructure naming (X7, chunk 4a): private names in the agent's foundation, analytics, connectors and integrations.** Locals, private-function parameters and private helpers got full words and verb-first names (banned abbreviations 82 to 54 here); no behaviour change.
