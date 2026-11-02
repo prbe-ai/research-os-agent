@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Internal: the rest of the wizard modules now import cleanly as the first import of a process (`wizard.wizard`, `apply.*`, `screens.run_summary`, `settings.menu` raised an ImportError); `Selection` moved to a new leaf `wizard/selection.py` (still served from `wizard.py`), and two cross imports became function-local. No behaviour change.
 - Internal: the session marker and `.probe.config` matcher sources are split into pieces (`src/probe/sdk/marker/`, `src/probe/sdk/recording_rules/probe_config/`) that `tools/vendor.py` joins back into `probe/sdk/session_marker.py` and `probe/sdk/probe_config.py` byte for byte; nothing a user runs changes, and the plugin hook copies are unchanged.
 
 ## 0.368.0
