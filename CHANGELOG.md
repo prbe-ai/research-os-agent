@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.362.1
+
 - Fix: `Run.execute()` on an offline run (`probe.init(mode="offline")`) that captured output files no longer waits out `PROBE_FINISH_TIMEOUT_SEC` at close. It flushed the run's queue every 0.25 s until the deadline (60 s set meant 60 s added to the job), and only `probe sync` can deliver that queue; it now closes at once and leaves the queue to `probe sync`.
 - Fix: crash recovery of an offline `Run.execute()` with output capture (picked up by the log helper or the next capture on the machine) no longer sends the offline run's queue to the server. It built an ordinary client over the queue and delivered it, skipping every check `probe sync` makes (same server, same team, lineage the server takes); it now only queues (with no queue cap, as the live run), and does nothing when the queue folder was deleted.
 - Fix: an offline `Run.execute()` records the child's exit. The close re-read the run from the server to check it was still open, the offline transport refused that read, and the verdict was dropped, so a job that exited 3 synced `completed`; an offline run cannot be attached, so its own close state answers instead, and `finish()` (the exit hook's included) keeps that verdict.
