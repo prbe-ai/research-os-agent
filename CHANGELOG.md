@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Restructure naming (X7, chunk 4a): private names in the agent's foundation, analytics, connectors and integrations.** Locals, private-function parameters and private helpers got full words and verb-first names (banned abbreviations 82 to 54 here); no behaviour change.
+
 ## 0.364.0
 
 - **Restructure X14 (agent cli/imports/folder): comments rewritten to the ELI10 house style.** `walk/walk.py`, `agents/argv.py`, `agents/flags.py`: comments and docstrings shortened, every why, trap, number and issue kept; comment-only (checker green, no code change).
