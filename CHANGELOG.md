@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal clean-up: the old module paths kept for one release after the restructure are removed (`probe.cli.autoupdate`/`run_lock`/`telemetry`/`json_events`, the root `probe.feedback`/`drafts`/`doctrine`, `probe.hw`, `probe.sdk.delivery.sinks.direct`/`journaled`/`offline`, and the rest). `python -m` entry paths and the paths released plugin hooks import are kept.
+
 ## 0.362.1
 
 - Fix: `Run.execute()` on an offline run (`probe.init(mode="offline")`) that captured output files no longer waits out `PROBE_FINISH_TIMEOUT_SEC` at close. It flushed the run's queue every 0.25 s until the deadline (60 s set meant 60 s added to the job), and only `probe sync` can deliver that queue; it now closes at once and leaves the queue to `probe sync`.
