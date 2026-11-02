@@ -14,6 +14,7 @@ __all__ = [
     "Action",
     "Audience",
     "ClientMessage",
+    "ClientMessageList",
     "ClientRefusalBody",
     "MAX_TEXT_LENGTH",
     "MessageCode",
@@ -61,6 +62,10 @@ class MessageCode(_StrEnum):
 
     CLIENT_TOO_OLD = "client_too_old"
     WORKSPACE_REQUIRED = "workspace_required"
+    UPDATE_RECOMMENDED = "update_recommended"
+    MAINTENANCE = "maintenance"
+    INCIDENT = "incident"
+    ANNOUNCEMENT = "announcement"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -95,3 +100,13 @@ class ClientRefusalBody:
     action: Action
     severity: Severity
     docs_url: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ClientMessageList:
+    """`GET /v1/client/messages`: the notices that apply to the caller now. `set_revision` is the
+    `X-Probe-Notices` value for this set (None when it is empty); refetch when the header differs.
+    """
+
+    set_revision: str | None = None
+    messages: list[ClientMessage]
