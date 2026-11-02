@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.364.0
+
 - **Restructure X14 (agent cli/imports/folder): comments rewritten to the ELI10 house style.** `walk/walk.py`, `agents/argv.py`, `agents/flags.py`: comments and docstrings shortened, every why, trap, number and issue kept; comment-only (checker green, no code change).
 
 - The background sender now keeps a per-run progress note, sends the runs a `finish()` is waiting on first, and sets aside a write that has kept failing for 5 minutes with nothing else of its run getting through: it stays on disk with its bytes (`held/`), is tried again every hour, and the rest of the run's data still lands. It also tells the server when a run's writes stall or are refused, so you can be emailed (servers that predate this ignore it).
