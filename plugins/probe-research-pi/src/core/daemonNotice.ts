@@ -23,12 +23,13 @@ import { probeConfigPath, probeStateDir, type PathEnv } from "./paths.js";
 /** `session_marker.DAEMON_CONTEXT`: the one statement of who writes what. */
 export const DAEMON_CONTEXT =
   "The Probe daemon is recording this session: you launch and instrument runs, and the daemon " +
-  "records. Yours: start runs (`probe exec` or the SDK, no project needed), the run's own data " +
-  "(metrics, spans, trials, files the run itself attaches) and `probe run end` when a run " +
-  "finishes. The daemon's: everything else, including creating the project, experiment and " +
-  "sweep group a run is filed in, and its notes, artifacts, papers, tags, names, descriptions " +
-  "and lineage, read from the transcript; it also ends any run you leave open. If the " +
-  "researcher asks for one of the daemon's writes, add `--directed`.";
+  "records. Yours: start runs in a project (`project=` or `--project`; if none fits, " +
+  "`probe project create <slug>`), the run's own data (metrics, spans, trials, files the run " +
+  "itself attaches) and `probe run end` when a run finishes. The daemon's: everything else, " +
+  "including the experiment and sweep group a run is filed in, renaming or moving projects " +
+  "and runs, and its notes, artifacts, papers, tags, names, descriptions and lineage, read " +
+  "from the transcript; it also ends any run you leave open. If the researcher asks for one " +
+  "of the daemon's writes, add `--directed`.";
 
 /** `tracking_guard.FLIP_NOTICE["daemon"]`: the daemon (again) holds the writes. */
 export const DAEMON_LIVE_NOTICE =

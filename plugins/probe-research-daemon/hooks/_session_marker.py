@@ -1305,11 +1305,11 @@ READ_GROUP_REMOVALS = frozenset({"metrics delete", "shared delete"})
 PLUMBING_GROUP_WRITES = frozenset({"workspace set"})
 
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
-#: launch of a run and the run's own data -- the `instrument-code` surface the
-#: daemon never authors -- and nothing else (daemon v2, D2 / S11). The project,
-#: experiment and sweep group a run belongs in are the DAEMON's now: a run
-#: starts floating (no project) and the daemon creates its containers and files
-#: it, so a launch never waits on a container. Keys are "group verb" (three
+#: launch of a run, the run's own data -- the `instrument-code` surface the
+#: daemon never authors -- and the project a run needs when none fits (daemon v2,
+#: D2 / S11; every run has a project since floating runs retired). The
+#: experiment and sweep group a run belongs in, and renaming or moving projects
+#: and runs, stay the DAEMON's. Keys are "group verb" (three
 #: words under a `SUBGROUPS` entry), or the bare top-level command.
 #: `probe session status` prints this list as `daemon.agent_writes`, and
 #: `DAEMON_CONTEXT` below says the same thing in words.
@@ -1321,6 +1321,7 @@ DAEMON_AGENT_WRITES = frozenset(
         "exec",
         "log",
         "snapshot",
+        "project create",
         "run start",
         "run child",
         "run fork",
@@ -1709,10 +1710,10 @@ DENY_REASON_OFF = (
 
 DENY_REASON_DAEMON = (
     "The Probe daemon is recording this conversation (the `daemon` state), so `{matched}` was "
-    "refused before it ran: that write is the daemon's, and it creates the project, "
-    "experiment and group your runs are filed in. Yours are starting runs (they may start "
-    "with no project), the run's own data and `probe run end`; `probe session status` lists "
-    "them.\n\n" + DIRECTED_RETRY
+    "refused before it ran: that write is the daemon's (it files runs in an experiment and "
+    "group, and renames or moves projects and runs). Yours are starting runs in a project "
+    "(`probe project create <slug>` if none fits), the run's own data and `probe run end`; "
+    "`probe session status` lists them.\n\n" + DIRECTED_RETRY
 )
 
 #: THE ONE STATEMENT OF WHO WRITES WHAT IN THE `daemon` STATE. Every surface that
@@ -1725,12 +1726,13 @@ DENY_REASON_DAEMON = (
 #: BACKSTOP, not the plan, so `run end` stays the agent's.
 DAEMON_CONTEXT = (
     "The Probe daemon is recording this session: you launch and instrument runs, and the daemon "
-    "records. Yours: start runs (`probe exec` or the SDK, no project needed), the run's own data "
-    "(metrics, spans, trials, files the run itself attaches) and `probe run end` when a run "
-    "finishes. The daemon's: everything else, including creating the project, experiment and "
-    "sweep group a run is filed in, and its notes, artifacts, papers, tags, names, descriptions "
-    "and lineage, read from the transcript; it also ends any run you leave open. If the "
-    "researcher asks for one of the daemon's writes, add `--directed`."
+    "records. Yours: start runs in a project (`project=` or `--project`; if none fits, "
+    "`probe project create <slug>`), the run's own data (metrics, spans, trials, files the run "
+    "itself attaches) and `probe run end` when a run finishes. The daemon's: everything else, "
+    "including the experiment and sweep group a run is filed in, renaming or moving projects "
+    "and runs, and its notes, artifacts, papers, tags, names, descriptions and lineage, read "
+    "from the transcript; it also ends any run you leave open. If the researcher asks for one "
+    "of the daemon's writes, add `--directed`."
 )
 
 

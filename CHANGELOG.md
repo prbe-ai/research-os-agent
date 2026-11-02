@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe.init()`, `probe run start` and `probe exec` now need a project.** With no `project=` / `experiment=` (`--project` / `--experiment`) a run takes this computer's project (`PROBE_PROJECT`, else `probe project use`); with none it raises `ProjectRequired` before anything is sent, and `probe exec` exits before the command starts. Offline runs are refused at `probe.init` the same way, and an older CLI's queued create with no project is refused at sync, naming `probe sync <folder> --project <slug>`. A fork or child of a run an older CLI left unfiled says to `probe run move` it first. The Hugging Face callback and Lightning logger stop training on a missing project instead of training unrecorded. Daemon-mode agents may `probe project create` the project their run needs; the daemon still renames and moves projects and runs. Unfiled runs that already exist are still listed (`probe run list --unfiled`, doctor, `browse`).
+
 ## 0.359.0
 
 - **`client.send(...)`: one door for a write whose answer you need now** (`write(..., sync=True)` with the same `strict`, `raise_permanent` and `durable` options; `write` keeps every flag). Inside, the SDK's write paths come from one route table (`probe.sdk.routes`) instead of eleven path patterns, and one failure policy (`SendPolicy`) instead of rules spread over three places. What goes on disk and over the wire is unchanged, byte for byte. Two edge cases are fixed: a hand-edited queued run PATCH whose `status` is not text no longer stops every drain pass, and an op file whose path is not text reads as no route instead of crashing.

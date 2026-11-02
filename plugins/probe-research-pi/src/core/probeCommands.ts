@@ -145,11 +145,12 @@ export const READ_GROUP_REMOVALS: ReadonlySet<string> = new Set(["metrics delete
 /** `session_marker.PLUMBING_GROUP_WRITES`: commands of a plumbing group that record research content. */
 export const PLUMBING_GROUP_WRITES: ReadonlySet<string> = new Set(["workspace set"]);
 
-/** `session_marker.DAEMON_AGENT_WRITES`: the agent's writes under the daemon (a run and its own data). */
+/** `session_marker.DAEMON_AGENT_WRITES`: the agent's writes under the daemon (a run, its own data, its project). */
 export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
   "exec",
   "log",
   "snapshot",
+  "project create",
   "run start",
   "run child",
   "run fork",
