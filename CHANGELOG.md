@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.362.0
+
 - **Unfiled-run reads are gone: every run has a project.** `probe run list --unfiled`, `Client.unfiled_runs()` and `list_runs(unfiled=...)` are removed; `probe doctor`, the wizard's Diagnose screen and `probe session status` no longer show an unfiled-runs count, and MCP browse no longer lists unfiled runs (its `unfiled_runs` completeness marker is retired).
 
 ## 0.361.0
