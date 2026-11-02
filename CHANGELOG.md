@@ -4,6 +4,8 @@
 
 - **Restructure X14 (agent cli/imports/folder): comments rewritten to the ELI10 house style.** `walk/walk.py`, `agents/argv.py`, `agents/flags.py`: comments and docstrings shortened, every why, trap, number and issue kept; comment-only (checker green, no code change).
 
+- The background sender now keeps a per-run progress note, sends the runs a `finish()` is waiting on first, and sets aside a write that has kept failing for 5 minutes with nothing else of its run getting through: it stays on disk with its bytes (`held/`), is tried again every hour, and the rest of the run's data still lands. It also tells the server when a run's writes stall or are refused, so you can be emailed (servers that predate this ignore it).
+
 ## 0.363.0
 
 - A watcher now starts with your first run on a machine and records, within about 10 seconds, when a run's process disappears (killed, out of memory, Ctrl-C), so the server can close a dead run in seconds instead of after 15 minutes of silence. It runs inside the Probe service when one is running, otherwise as one small background process per machine, however many runs you start. Turn it off with `PROBE_WATCHER=0`. (Its reports never reached the server before this release: fixed.) The old `PROBE_BOX` switch and `PROBE_BOX_*` settings still work for one release.
