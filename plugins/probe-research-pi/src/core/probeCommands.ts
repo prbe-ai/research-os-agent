@@ -50,7 +50,7 @@ export const WRITE_GROUPS: ReadonlySet<string> = new Set([
 ]);
 
 /** `session_marker.SUBGROUPS`. */
-export const SUBGROUPS: ReadonlySet<string> = new Set(["project code", "project reference", "run input", "wandb key"]);
+export const SUBGROUPS: ReadonlySet<string> = new Set(["project code", "project reference", "run input", "wandb key", "session home"]);
 
 /** The keys of `session_marker.READ_UNLESS_FLAGS`: reads unless given one of `READ_UNLESS_FLAGS_WRITE_FLAGS`. */
 export const READ_UNLESS_FLAGS_COMMANDS: ReadonlySet<string> = new Set(["project contributors"]);
@@ -143,7 +143,7 @@ export const READ_GROUP_WRITES: ReadonlySet<string> = new Set(["metrics backfill
 export const READ_GROUP_REMOVALS: ReadonlySet<string> = new Set(["metrics delete", "shared delete"]);
 
 /** `session_marker.PLUMBING_GROUP_WRITES`: commands of a plumbing group that record research content. */
-export const PLUMBING_GROUP_WRITES: ReadonlySet<string> = new Set(["workspace set"]);
+export const PLUMBING_GROUP_WRITES: ReadonlySet<string> = new Set(["workspace set", "session home set", "session home clear"]);
 
 /** `session_marker.DAEMON_AGENT_WRITES`: the agent's writes under the daemon (a run, its own data, its project). */
 export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
@@ -219,6 +219,7 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "capy sync",
   "capy disconnect",
   "session owed",
+  "session home show",
 ]);
 
 /**

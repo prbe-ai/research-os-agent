@@ -70,6 +70,9 @@ MAX_AGE_SECONDS = 30 * 86400
 #: landed in (`write_scope`). Its own file because the refresh hook replaces the
 #: marker whole. `prune` sweeps it with the rest of the directory.
 SCOPE_SUFFIX = ".scope"
+#: `<session>.home` beside it: where this session's runs go (`write_run_home`), set by
+#: the daemon. Not a key in `.scope`, which every landed write rewrites. `prune` sweeps it.
+HOME_SUFFIX = ".home"
 #: A bound on a project name this file stores or shows. Server slugs are
 #: free-form TEXT; the segment elides a long one anyway, so this only keeps a
 #: pathological value off the render path.
@@ -417,6 +420,60 @@ def clear_scope(session_id: str, ref: str) -> bool:
         return False
 
 
+def home_path(session_id: str) -> Path:
+    return sessions_dir() / (session_id + HOME_SUFFIX)
+
+
+def write_run_home(session_id: str, *, project: str, project_id: str, experiment: "str | None" = None,
+                   experiment_id: "str | None" = None, base_url: str, customer_id: "str | None") -> bool:
+    """Record where this session's runs go (`probe session home set`): the project, and the
+    experiment when one is named, by slug and id, with the server and team they were
+    resolved on. True when it landed. No expiry: the daemon replaces it when the work moves."""
+    names_ok = _printable(project) and (experiment is None or _printable(experiment))
+    ids_ok = (isinstance(project_id, str) and bool(project_id) and (experiment is None) == (experiment_id is None)
+              and (experiment_id is None or isinstance(experiment_id, str) and bool(experiment_id)))
+    if not valid_session_id(session_id) or not names_ok or not ids_ok or not isinstance(base_url, str):
+        return False
+    record = {"project": project, "project_id": project_id, "experiment": experiment,
+              "experiment_id": experiment_id, "base_url": base_url, "customer_id": customer_id,
+              "decided_at": time.time()}
+    return _publish_atomically(home_path(session_id), json.dumps(record) + "\n")
+
+
+def read_run_home(session_id: str) -> "dict | None":
+    """This session's run home as `write_run_home` stored it, or None: absent,
+    unreadable and malformed alike."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        with open(home_path(session_id), encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not _printable(record.get("project")):
+        return None
+    experiment, experiment_id = record.get("experiment"), record.get("experiment_id")
+    if not record.get("project_id") or not isinstance(record.get("project_id"), str):
+        return None
+    if not isinstance(record.get("base_url"), str):
+        return None
+    if (experiment, experiment_id) != (None, None) and not (_printable(experiment) and experiment_id
+                                                            and isinstance(experiment_id, str)):
+        return None
+    return record
+
+
+def clear_run_home(session_id: str) -> bool:
+    """Forget this session's run home. True when there was one to forget."""
+    if not valid_session_id(session_id):
+        return False
+    try:
+        os.unlink(home_path(session_id))
+        return True
+    except OSError:
+        return False
+
+
 def write(session_id: str, state: dict) -> bool:
     """Replace this session's marker. True when it landed.
 
@@ -701,7 +758,8 @@ def prune(max_age_seconds: float = MAX_AGE_SECONDS) -> None:
 
     A session whose gap file still holds a gap (`_keeps_gaps`) keeps that file
     and its `.state` (what says it was off) whatever their age; its other
-    files go as any session's do. A gap file that is done with goes now.
+    files go as any session's do. A gap file that is done with goes now. A
+    `.home` stays while its session lives (`_keeps_home`).
     """
     try:
         now = time.time()
@@ -726,12 +784,27 @@ def prune(max_age_seconds: float = MAX_AGE_SECONDS) -> None:
                 suffix = next((s for s in KEPT_SUFFIXES if entry.name.endswith(s)), None)
                 if suffix is not None and entry.name[: -len(suffix)] in kept:
                     continue
-                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                if entry.is_file() and entry.stat().st_mtime < cutoff and not _keeps_home(entry.name, cutoff):
                     os.unlink(entry.path)
             except OSError:
                 continue
     except OSError:
         pass
+
+
+def _keeps_home(name: str, cutoff: float) -> bool:
+    """Is this an old `.home` whose session still lives? A home never expires on its own,
+    so it stays while the session's marker, daemon lease or scope was written in the window."""
+    if not name.endswith(HOME_SUFFIX):
+        return False
+    session_id = name[: -len(HOME_SUFFIX)]
+    for path in (marker_path(session_id), lease_path(session_id), scope_path(session_id)):
+        try:
+            if path.stat().st_mtime >= cutoff:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1186,11 +1259,11 @@ WRITE_GROUPS = frozenset(
     }
 )
 
-#: Every subgroup inside a write group. Its OWN verb decides, so `project code
-#: list` reads while `project code attach` writes; read two words deep, every
-#: `project code` command looked like one write. Keys in the tables below name
-#: the three words (`wandb key set`); a bare subgroup key never matches.
-SUBGROUPS = frozenset({"project code", "project reference", "run input", "wandb key"})
+#: Every subgroup inside a write group, and `session home`. Its OWN verb decides,
+#: so `project code list` reads while `project code attach` writes; read two words
+#: deep, every `project code` command looked like one write. Keys in the tables
+#: below name the three words (`wandb key set`); a bare subgroup key never matches.
+SUBGROUPS = frozenset({"project code", "project reference", "run input", "wandb key", "session home"})
 
 #: Commands that only read unless given one of these flags: bare
 #: `project contributors` lists who is credited, `--add`/`--remove` change it.
@@ -1307,8 +1380,9 @@ READ_GROUP_WRITES = frozenset({"metrics backfill", "shared add", "shared share",
 READ_GROUP_REMOVALS = frozenset({"metrics delete", "shared delete"})
 
 #: Commands of a plumbing group (not in WRITE_GROUPS) that record research
-#: content: `workspace set` picks the workspace's best experiment.
-PLUMBING_GROUP_WRITES = frozenset({"workspace set"})
+#: content: `workspace set` picks the workspace's best experiment, `session home
+#: set|clear` where the session's runs go (the daemon's: not in DAEMON_AGENT_WRITES).
+PLUMBING_GROUP_WRITES = frozenset({"workspace set", "session home set", "session home clear"})
 
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
 #: launch of a run, the run's own data -- the `instrument-code` surface the
@@ -1505,7 +1579,8 @@ def daemon_allows_agent(matched: str) -> bool:
 #: steering its workers, G7): the server takes it only for a session of the same
 #: person and labels it as from an agent session, never as the researcher.
 #: `session owed` reads the session's own owed ledger (notes parity N3); the
-#: plugin's end-of-turn hook runs it, and the agent may too.
+#: plugin's end-of-turn hook runs it, and the agent may too. `session home show`
+#: prints where this session's runs go, as `session status` does.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "session send", "ignore check", "run expect", "doctor", "paper find",
      "docs", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
@@ -1514,7 +1589,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
-     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed"}
+     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
