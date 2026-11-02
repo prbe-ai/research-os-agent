@@ -62,6 +62,13 @@ of its deliverers was never received (`claimed/<sid>/*.*.json`: `deliver_orphans
 `claude-reads.json` (the Stop waiter; Claude Code only, since `asyncRewake` is a
 Claude Code key). Under Codex: the same prompt and after-tool-call delivery, no wake.
 
+SERVER MESSAGES (kind "server": the Probe server's own refusal, posted by the tap or the
+service). Their own lane on prompt, tool use AND Stop (a waiting one wakes the agent), never a
+turn's slot; the agent reads the server's sentence quoted under `[Probe] Notice from Probe
+(server):`. The PERSON gets one `systemMessage` banner per message for a warning or blocking
+one (`take_banners`: an exclusive marker beside the claim, so both plugins' hooks show it once);
+a Stop wake counts as shown, since the woken turn is in front of them.
+
 SHOWN, SAID AT ONCE (G7). Once its output carrying a message Probe held for the
 session (`origin` "inbox") went out -- and only then, after its `shown` line --
 the hook tells Probe itself (`report_delivered`: `delivered_to_agent`, under
@@ -129,6 +136,23 @@ TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}"
 #: researcher (a headline metric or a best pick the writer set), under its own label.
 WRITER_RELAY_PREFIX = "Tell the researcher: "
 TEXT_WRITER_RELAY = "[Probe] {message}"
+#: `mailbox.Kind.SERVER` and its texts (the parity test pins them): a message from the Probe
+#: server (a refusal). Its own lane on prompt, tool use and Stop; the agent reads the server's
+#: sentence quoted under its own label, and the PERSON gets one banner per message for these
+#: severities and audiences (this hook is its one emitter: `dispatch.py` joins every banner).
+KIND_SERVER = "server"
+SERVER_ID_PREFIX = "n"
+SERVER_FILE_HEAD = "0" * 20
+SERVER_PREFIX = "[Probe] Notice from Probe (server): "
+TEXT_SERVER = SERVER_PREFIX + '"{message}"'
+TEXT_SERVER_BANNER = "Probe: {message}"
+BANNER_SEVERITIES = ("warning", "blocking")
+AGENT_AUDIENCES = ("agent", "both")
+PERSON_AUDIENCES = ("person", "both")
+#: `claimed/<sid>/<message id>.banner`: its person's banner was shown (an exclusive create). By
+#: id, so a file an older service named by time gets its one banner too.
+BANNER_SUFFIX = ".banner"
+BANNER_ID_RE = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 #: What the RESEARCHER sees when something fails: a `systemMessage` (shown in
 #: the UI, never in the model's context), once per change of state. Mirrors
@@ -316,12 +340,18 @@ def _message(data: "dict | None") -> "dict | None":
             "text": str(data.get("text") or ""), "ask": data.get("ask"), "question": data.get("question"),
             "reason": data.get("reason"), "made_at": float(data.get("made_at") or 0.0),
             "expires_at": float(data.get("expires_at") or 0.0), "origin": data.get("origin"),
+            "severity": data.get("severity"), "audience": data.get("audience"),
         }
     except (KeyError, TypeError, ValueError):
         return None
-    if not all(_optional_str(msg[k]) for k in ("ask", "question", "reason", "origin")):
+    if not all(_optional_str(msg[k]) for k in ("ask", "question", "reason", "origin", "severity", "audience")):
         return None
     return msg
+
+
+def _is_for_agent(msg: dict) -> bool:
+    """Whether the agent is shown `msg`: all but a server message for the person alone."""
+    return msg.get("kind") != KIND_SERVER or (msg.get("audience") or "both") in AGENT_AUDIENCES
 
 
 #: `mailbox.INBOX_TAG_FOLDED`, `_tag_spans`, `_untagged` (the parity test pins them).
@@ -383,6 +413,18 @@ def inbox_safe(text: str) -> str:
     return "\n".join([head] + [line if line.startswith(INBOX_QUOTE) else INBOX_QUOTE + line for line in lines])
 
 
+def render_server_text(text: str) -> str:
+    """`mailbox.render_server_text`: the server's sentence, quoted under its own label."""
+    first, *rest = INBOX_LINE_BREAK.split(text)
+    head = TEXT_SERVER.format(message=_untagged(" ".join(first.split())).replace('"', "'"))
+    return "\n".join([head] + [INBOX_QUOTE + _untagged(line) for line in rest if line.strip()])
+
+
+def render_server_banner(text: str) -> str:
+    """`mailbox.render_server_banner`: the person's one-line banner."""
+    return TEXT_SERVER_BANNER.format(message=" ".join(text.split()))
+
+
 def rendered(msg: dict) -> str:
     """`Message.rendered`: what the main agent reads, under the one-label rule."""
     return one_label(_framed(msg))
@@ -391,6 +433,8 @@ def rendered(msg: dict) -> str:
 def _framed(msg: dict) -> str:
     kind = msg.get("kind")
     text = msg.get("text") or ""
+    if kind == KIND_SERVER:
+        return render_server_text(text)
     if msg.get("origin") == ORIGIN_HINT and kind == KIND_MESSAGE and text.startswith(HINT_PREFIX):
         return text  # rendered whole by Probe, its framing included; else framed as its kind
     if msg.get("origin") == ORIGIN_INBOX and kind == KIND_MESSAGE and text.startswith(INBOX_PREFIX):
@@ -752,16 +796,17 @@ def deliver(sid: str, token: str, by: str) -> "list[str]":
 
 def deliver_items(sid: str, token: str, by: str) -> "list[tuple[str, str]]":
     """Claim what this hook may hand over now: every answer not held for a
-    waiting `probe ask --wait`, every run alert and inbox message, every writer
-    message, this turn's one unasked message of the reader's, and its one hint.
-    Each as `(message id, text)`."""
+    waiting `probe ask --wait`, every run alert, inbox and server message, every
+    writer message, this turn's one unasked message of the reader's, and its one
+    hint. Each as `(message id, text)`; a server message for the person alone is
+    claimed for its banner (`take_banners`) and never shown to the agent."""
     picks: list = []  # (path, the turn's slot it took or None), in delivery order
     tried: set = set()  # the slots this hook tried
     for path, msg in waiting(sid):
         if msg["kind"] != KIND_MESSAGE or msg.get("origin") in (ORIGIN_WRITER, ORIGIN_INBOX):
-            # The end of an ask, a run alert or an inbox message (no ask, so never
-            # held) or a writer message: each one, whenever a hook runs, outside
-            # the turn's unasked slot.
+            # The end of an ask, a run alert, an inbox or server message (no ask,
+            # so never held) or a writer message: each one, whenever a hook runs,
+            # outside the turn's unasked slot.
             if not held(sid, msg["ask"]):
                 picks.append((path, None))
             continue
@@ -773,7 +818,7 @@ def deliver_items(sid: str, token: str, by: str) -> "list[tuple[str, str]]":
         if marker is not None:
             picks.append((path, marker))
     got = claim_all(sid, [path for path, _ in picks], by)
-    out = [(msg["id"], rendered(msg)) for msg in deliver_orphans(sid, by)]
+    out = [(msg["id"], rendered(msg)) for msg in deliver_orphans(sid, by) if _is_for_agent(msg)]
     for path, marker in picks:
         msg = got.get(path)
         if msg is None:
@@ -784,8 +829,58 @@ def deliver_items(sid: str, token: str, by: str) -> "list[tuple[str, str]]":
                 except OSError:
                     pass
             continue
-        out.append((msg["id"], rendered(msg)))
+        if _is_for_agent(msg):
+            out.append((msg["id"], rendered(msg)))
     return out
+
+
+def _take_banner(sid: str, msg: dict) -> "Path | None":
+    """The exclusive create of `msg`'s banner marker: its path when this hook took it, else None
+    (shown already, by this hook or another, or an id that is no plain word)."""
+    if not BANNER_ID_RE.fullmatch(msg["id"]):
+        return None
+    marker = _claimed_dir(sid) / f"{msg['id']}{BANNER_SUFFIX}"
+    try:
+        os.close(os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+    except OSError:
+        return None
+    return marker
+
+
+def _should_show_banner(msg: "dict | None") -> bool:
+    """A server message the person is shown: severity warning or blocking, audience person or
+    both (a file whose service dropped them reads as a refusal's: blocking, both)."""
+    return (msg is not None and msg.get("kind") == KIND_SERVER
+            and (msg.get("severity") or "blocking") in BANNER_SEVERITIES
+            and (msg.get("audience") or "both") in PERSON_AUDIENCES)
+
+
+def take_banners(sid: str) -> "list[tuple[Path, str]]":
+    """The person's banners for claimed server messages none was shown for yet: each taken by an
+    exclusive create of its marker, so of any number of hooks (both plugins' included) exactly
+    one shows it. As `(marker, banner)`."""
+    folder = _claimed_dir(sid)
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob(f"*-{SERVER_ID_PREFIX}*.json")):
+        if path.name.count(".") > 1:
+            continue  # a service claim not received yet
+        msg = _message(_read_json(path))
+        if not _should_show_banner(msg):
+            continue
+        marker = _take_banner(sid, msg)
+        if marker is not None:
+            out.append((marker, render_server_banner(msg["text"])))
+    return out
+
+
+def mark_banners_shown(sid: str, msgs: "list[dict]") -> None:
+    """The Stop waiter's wake carries these messages into a turn the person watches: their
+    banners count as shown (a woken turn has no `systemMessage`)."""
+    for msg in msgs:
+        if _should_show_banner(msg):
+            _take_banner(sid, msg)
 
 
 # ---------------------------------------------------------------------------
@@ -1296,13 +1391,21 @@ def _emit(event: str, texts: "list[str]", notice: "str | None" = None) -> bool:
 def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "str | None") -> None:
     """Emit this hook's messages, record the ones that went out as shown, and
     tell Probe which of them it held for the session (`report_delivered`).
-    Output that never went out: its inbox messages wait again (`return_unshown`)."""
+    Output that never went out: its inbox messages wait again (`return_unshown`),
+    and its server messages' banners go out with the next hook's."""
     ids = [mid for mid, _text in items]
+    banners = take_banners(sid)
+    notice = "\n".join(([notice] if notice else []) + [banner for _marker, banner in banners]) or None
     if _emit(event, [text for _id, text in items], notice):
         mark_shown(sid, ids, event)
         report_delivered(sid, ids)
     else:
         return_unshown(sid, ids)
+        for marker, _banner in banners:
+            try:
+                marker.unlink()
+            except OSError:
+                pass
 
 
 def on_prompt(payload: dict) -> int:
@@ -1338,8 +1441,8 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
     # serves. A worker restarting right now still counts: the loop gives it
     # WORKER_GONE_GRACE_S.
     alerts = _served(sid)
-    if not asks and not alerts:
-        return 0
+    if not asks and not alerts and not any(m["kind"] == KIND_SERVER and _is_for_agent(m) for _p, m in waiting(sid)):
+        return 0  # a server message waiting is told at once, whoever else waits
     # The next prompt's shell writes a new token here even when nothing waits
     # (routes.json); the folder must exist for that write to land.
     _turn_path(sid).parent.mkdir(parents=True, exist_ok=True)
@@ -1377,18 +1480,24 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             return 0  # a newer Stop's waiter waits for this session now
         picks = []
         for path, msg in waiting(sid):
-            if msg["kind"] == KIND_ALERT or _inbox(msg):
+            if msg["kind"] == KIND_SERVER:
+                if not _is_for_agent(msg):
+                    continue  # the person's banner alone: a prompt or a tool call shows it
+            elif msg["kind"] == KIND_ALERT or _inbox(msg):
                 if not alerts:
                     continue
             elif msg["kind"] == KIND_MESSAGE or msg["ask"] not in asks or held(sid, msg["ask"]):
                 continue
             picks.append(path)
         got = claim_all(sid, picks, "Stop")
-        items = [(msg["id"], rendered(msg)) for msg in deliver_orphans(
+        delivered = deliver_orphans(
             sid, "Stop", lambda m: ((m["kind"] == KIND_ALERT or _inbox(m)) and alerts)
-            or (m["kind"] != KIND_MESSAGE and m["ask"] in asks))]
-        items += [(got[path]["id"], rendered(got[path])) for path in picks if path in got]
+            or (m["kind"] == KIND_SERVER and _is_for_agent(m))
+            or (m["kind"] != KIND_MESSAGE and m["ask"] in asks))
+        delivered += [got[path] for path in picks if path in got]
+        items = [(msg["id"], rendered(msg)) for msg in delivered]
         if items:
+            mark_banners_shown(sid, delivered)
             _mark_woke(sid)
             try:
                 sys.stderr.write("\n\n".join(text for _id, text in items))

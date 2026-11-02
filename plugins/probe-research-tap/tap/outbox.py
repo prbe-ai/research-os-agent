@@ -17,6 +17,7 @@ from importlib import import_module
 from tap import config as cfg
 from tap import httpclient
 from tap import transcript as _transcript
+from tap.server_messages import forward_refusal, parse_server_message
 from tap.storage import Storage
 
 log = logging.getLogger("probe-research-tap.outbox")
@@ -283,13 +284,17 @@ def drain_once(
         # QUARANTINED this session, 413 = body over the gateway's 2MB cap,
         # 422 = schema rejection. None can succeed on retry of the SAME batch,
         # so the batch is dropped and the daemon keeps running — a per-session /
-        # per-batch server-side decision, not a credential failure.
+        # per-batch server-side decision, not a credential failure. A refusal the
+        # server's message registry wrote (a retired route, a client floor) is its
+        # sentence in the log AND told to the session's agent (R12, R23).
+        said = parse_server_message(resp.status, resp.body)
         log.warning(
-            "outbox: poison drop id=%d status=%d body=%r",
+            "outbox: poison drop id=%d status=%d %s",
             row.id,
             resp.status,
-            resp.body[:200],
+            f"server: {said.text[:300]!r}" if said.is_registered else f"body={resp.body[:200]!r}",
         )
+        forward_refusal(row.session_id, resp.status, resp.body)
         storage.mark_success(row.id)
         return True
     if resp.classification == httpclient.Classification.HALT:

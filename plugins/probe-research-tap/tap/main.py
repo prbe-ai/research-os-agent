@@ -75,6 +75,7 @@ from tap import config as cfg
 from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
+from tap.server_messages import forward_refusal
 from tap.session_identity import IdentityMismatch, validate_identity
 from tap.session_journal import (
     DeliveryPending,
@@ -566,6 +567,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
     holds the session's claim.
     """
     wire = Wire(cfg.api_base_url(), c.token, cfg.capture_source())
+    # A refusal the server's message registry wrote reaches the session's agent (R12). Set, not
+    # passed: the constructor's shape stays the one every caller and stand-in knows.
+    wire.on_refusal = forward_refusal
     journal = None
     tick = 0
     seen_reader = False

@@ -74,6 +74,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import NamedTuple
@@ -1070,6 +1071,7 @@ class Wire:
     def __init__(
         self, base_url: str, token: str, source: str, timeout: float = 30,
         context: ssl.SSLContext | None = None,
+        on_refusal: Callable[[str, int, dict], None] | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -1079,10 +1081,32 @@ class Wire:
         # and friends); the tap's vendored copy cannot import it and passes None,
         # which is urllib's default.
         self.context = context
+        # Told every refusal of a session's request (session id, status, error body): the tap
+        # and the Probe service tell the session's agent one the server's registry wrote (R12).
+        self.on_refusal = on_refusal
         self.last_request_retryable = False
         self.last_request_error = None
 
+    def _forward_refusal(self, code: int, body: dict, path: str, sent: bytes | None) -> None:
+        """`on_refusal`, never raising. The session is the route's (`/sessions/<source>/<sid>/...`)
+        or, for a batch, its body's, read only for a message from the server's registry."""
+        on_refusal = getattr(self, "on_refusal", None)  # a subclass from before it never set it
+        detail = body.get("detail")
+        if on_refusal is None or code < 400 or not (
+                "message_id" in body or (isinstance(detail, dict) and "message_id" in detail)):
+            return
+        try:
+            route = path.split("?", 1)[0].split("/")
+            session_id = route[5] if len(route) > 6 and route[3] == "sessions" else None
+            if session_id is None and sent:
+                session_id = json.loads(sent).get("session_id")
+            if isinstance(session_id, str) and session_id:
+                on_refusal(session_id, code, body)
+        except Exception:  # noqa: BLE001 -- telling the agent is best effort; delivery goes on
+            log.debug("refusal not forwarded", exc_info=True)
+
     def _request(self, path: str, body: bytes | None = None) -> tuple[int, dict]:
+        sent = body
         self.last_request_retryable = False
         self.last_request_error = None
         request = urllib.request.Request(
@@ -1106,9 +1130,12 @@ class Wire:
             self.last_request_retryable = _retryable_status(exc.code)
             try:
                 body = json.loads(exc.read(8192))
-                return exc.code, body if isinstance(body, dict) else {"detail": "invalid error response"}
             except (OSError, ValueError):
                 return exc.code, {"detail": "invalid error response"}
+            if not isinstance(body, dict):
+                return exc.code, {"detail": "invalid error response"}
+            self._forward_refusal(exc.code, body, path, sent)
+            return exc.code, body
         except (OSError, ValueError) as exc:
             self.last_request_retryable = _network_interruption(exc)
             cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
