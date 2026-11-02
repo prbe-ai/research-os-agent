@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.367.0
+
 - The Probe daemon's folder looks (which folders a session works in, and the walk that notices changed files) now run off the session's own loop with a 60-second limit, and a look still stuck on a hung mount is never started twice: the loop goes on renewing its lease, using the folders it last found. Before, a dead network mount at boot could stop a session's recording for days (Kimball, 10-27).
 
 ## 0.366.0
