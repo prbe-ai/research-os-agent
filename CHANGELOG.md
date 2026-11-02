@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.359.0
+
 - **`client.send(...)`: one door for a write whose answer you need now** (`write(..., sync=True)` with the same `strict`, `raise_permanent` and `durable` options; `write` keeps every flag). Inside, the SDK's write paths come from one route table (`probe.sdk.routes`) instead of eleven path patterns, and one failure policy (`SendPolicy`) instead of rules spread over three places. What goes on disk and over the wire is unchanged, byte for byte. Two edge cases are fixed: a hand-edited queued run PATCH whose `status` is not text no longer stops every drain pass, and an op file whose path is not text reads as no route instead of crashing.
 
 ## 0.358.1
