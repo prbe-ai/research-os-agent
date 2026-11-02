@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A watcher now starts with your first run on a machine and records, within about 10 seconds, when a run's process disappears (killed, out of memory, Ctrl-C), so the server can close a dead run in seconds instead of after 15 minutes of silence. It runs inside the Probe service when one is running, otherwise as one small background process per machine, however many runs you start. Turn it off with `PROBE_WATCHER=0`. (Its reports never reached the server before this release: fixed.) The old `PROBE_BOX` switch and `PROBE_BOX_*` settings still work for one release.
 - Internal: the MCP server's longest functions (`create_server`, `browse_list`, `search`, the tree delivery's `invoke`) are cut into named stages. Same tools, schemas and order; no behaviour change.
 
 - Internal: the run watcher's code moved from `probe/box/` to `probe/sdk/run/watcher/`; `probe.box` and `python -m probe.box` still work.
