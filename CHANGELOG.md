@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Probe daemon's folder looks (which folders a session works in, and the walk that notices changed files) now run off the session's own loop with a 60-second limit, and a look still stuck on a hung mount is never started twice: the loop goes on renewing its lease, using the folders it last found. Before, a dead network mount at boot could stop a session's recording for days (Kimball, 10-27).
+
 ## 0.366.0
 
 - `finish()` now waits for your data: it returns once the background sender has delivered everything the run logged, printing progress every few seconds (writes and bytes left, time left; Ctrl-C stops waiting and the sender keeps going). If some of it cannot be delivered (refused by the server, a write that kept failing, your sign-in refused, the server unreachable for 10 minutes) it raises `probe.DeliveryIncomplete` naming what is missing; the data stays on disk. `finish(wait=False)` and `probe run end --async` return at once. Your training process no longer sends queued writes itself, a token passed in code included. `probe outbox status` shows writes set aside and why; `probe outbox retry` sends them again now.
