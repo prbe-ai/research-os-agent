@@ -1955,3 +1955,75 @@ describe("registerExtension — Probe's tracking switched off (probeTracking: fa
     expect(trackingOff({ env: process.env, cwd: project, packageRoot: tmp })).toBe(true);
   });
 });
+
+describe("the server's notices (plan T9, R25)", () => {
+  const NOTICE = {
+    message_id: "maintenance_nov3", code: "maintenance", severity: "warning", action: "none", audience: "both",
+    text: "Probe is read-only 02:00-03:00 UTC on Nov 3.", revision: 7,
+  };
+  type BeforeAgentStart = (event: { systemPrompt: string }, ctx: unknown) => Promise<{ message?: { content: string } } | undefined>;
+
+  /** A fresh shim and implementation state, as pi's `/reload` leaves it (module state does not survive). */
+  async function freshHost() {
+    const impl = await import("../src/impl.js");
+    const { emptySharedState, ShimHost } = await import("../src/shim.js");
+    const { api, handlers } = fakeExtensionAPI();
+    await new ShimHost({ installRoot: tmp, cloneImpl: impl, shared: emptySharedState() }).attach(api as never);
+    return handlers;
+  }
+
+  it("tells the person once per computer and the agent once per session, and still works after /reload", async () => {
+    installProbeCli();
+    const config = join(tmp, "config.json");
+    writeFileSync(config, JSON.stringify({ base_url: "https://probe.test", token: "probe_pat_pi" }));
+    process.env.PROBE_CONFIG_PATH = config;
+    let messages: unknown[] = [NOTICE];
+    const reads: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
+      reads.push(`${url} ${init.headers["X-Probe-Client"]}/${init.headers["X-Probe-Client-Version"]}`);
+      return new Response(JSON.stringify({ set_revision: "0123456789abcdef", messages }), { status: 200 });
+    });
+    const original = execFileMock.getMockImplementation()!;
+    execFileMock.mockImplementation((command, args, options, callback) =>
+      args[0] === "--version" ? callback(null, "probe 0.370.0\n", "") : original(command, args, options, callback));
+    try {
+      const sessionId = uniqueSessionId("server-notices");
+      const ctx = fakeContext({ sessionId, sessionFile: undefined, hasUI: true });
+      const said = (text: string) => ctx.notify.mock.calls.filter(([line]) => line === `Probe: ${text}`);
+
+      const first = await freshHost();
+      await first.get("session_start")!({ reason: "startup" }, ctx);
+      await vi.waitFor(() => expect(said(NOTICE.text)).toHaveLength(1));
+      expect(said(NOTICE.text)[0][1]).toBe("warning");
+      expect(reads).toEqual(["https://probe.test/v1/client/messages cli/0.370.0"]);
+      const turn = await (first.get("before_agent_start") as unknown as BeforeAgentStart)({ systemPrompt: "BASE" }, ctx);
+      expect(turn?.message?.content).toContain(`[Probe] Notice from Probe (server): "${NOTICE.text}"`);
+
+      // /reload: the module state is gone, the ledger on disk is not. A list older than FRESH_S is read again.
+      const { ledgerFor } = await import("../src/core/serverNotices.js");
+      const saved = ledgerFor(process.env)!;
+      saved.saveList(null, saved.loadList("cli")!.items, "cli", Date.now() / 1000 - 120);
+      messages = [NOTICE, { ...NOTICE, message_id: "incident_1", revision: 1, text: "Uploads are slow; nothing is lost." }];
+      const reloaded = await freshHost();
+      await reloaded.get("session_start")!({ reason: "reload" }, ctx);
+      await vi.waitFor(() => expect(said("Uploads are slow; nothing is lost.")).toHaveLength(1));
+      expect(said(NOTICE.text)).toHaveLength(1);
+      // A server message the CLI posted to this session's mailbox (no daemon serves it) reaches both.
+      const box = join(process.env.XDG_STATE_HOME!, "probe", "reads", "messages", sessionId);
+      mkdirSync(box, { recursive: true });
+      writeFileSync(join(box, `${"0".repeat(20)}-nupdate_cli_2.json`), JSON.stringify({
+        id: "nupdate_cli_2", session: sessionId, kind: "server", text: "This CLI misses a fix.", ask: null, question: null,
+        reason: null, made_at: 1, expires_at: Date.now() / 1000 + 3600, severity: "warning", audience: "both",
+      }));
+      const after = await (reloaded.get("before_agent_start") as unknown as BeforeAgentStart)({ systemPrompt: "BASE" }, ctx);
+      const content = after?.message?.content ?? "";
+      expect(content).toContain(`[Probe] Notice from Probe (server): "This CLI misses a fix."`);
+      expect(content).toContain(`[Probe] Notice from Probe (server): "Uploads are slow; nothing is lost."`);
+      expect(content).not.toContain(NOTICE.text);
+      expect(said("This CLI misses a fix.")).toHaveLength(1);
+    } finally {
+      execFileMock.mockImplementation(original);
+      vi.unstubAllGlobals();
+    }
+  });
+});

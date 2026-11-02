@@ -62,6 +62,7 @@ import {
 import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, pythonMissingFile, teamNoteDocumentPath } from "./core/paths.js";
 import { hostedMarkerStamp, hostedServicePid } from "./core/hosted.js";
 import { Mailbox } from "./core/reads.js";
+import { fetchNotices, ledgerFor, notifyLevel, notifyPerson, takeAgentNotices } from "./core/serverNotices.js";
 import { checkPairing } from "./core/pairing.js";
 import { buildStatusReport } from "./status.js";
 import { pythonSeen, resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
@@ -393,6 +394,37 @@ function mailboxFor(sessionId: string): Mailbox {
   return new Mailbox(`${state}/reads`, `${state}/sessions`, sessionId);
 }
 
+/** The person's notices for the server messages this session's mailbox delivered (R17, R28): this
+ * extension is pi's one emitter. A notice counts as shown on this computer only once `notify` returned. */
+function notifyServerBanners(ctx: any, box: Mailbox): void {
+  if (!ctx?.hasUI) return; // print mode: nobody to show it to, so nothing is taken
+  for (const banner of box.takeBanners(() => ledgerFor(process.env))) {
+    try {
+      ctx.ui.notify(banner.text, notifyLevel(banner.severity));
+    } catch {
+      banner.claim?.release();
+      fs.rmSync(banner.marker, { force: true });
+      continue;
+    }
+    banner.claim?.commit();
+  }
+}
+
+/** The server's notices at a session start (plan T9): read (the CLI's kind and version), then the
+ * person's shown once per computer. Not awaited: a session start never waits on the network. */
+async function startServerNotices(ctx: any): Promise<void> {
+  try {
+    const items = await fetchNotices({
+      env: process.env,
+      fetchImpl: globalThis.fetch,
+      cliVersion: () => localCliVersion({ execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env }),
+    });
+    if (ctx?.hasUI) notifyPerson(items, ledgerFor(process.env), (text, level) => ctx.ui.notify(text, level));
+  } catch (err) {
+    logLine(`server notices: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function readsNotify(ctx: any, line: string | null): void {
   if (line && ctx?.hasUI) {
     try {
@@ -701,6 +733,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
         box.markShown(box.lastClaimed, "pi poller"); // only once sendMessage returned
         void box.reportDelivered(box.lastClaimed); // Probe hears it was shown (inbox only; never awaited)
       }
+      notifyServerBanners(live, box);
       readsNotify(live, box.researcherNotice());
     } catch (err) {
       logLine(`reads poller: ${err instanceof Error ? err.message : String(err)}`);
@@ -895,6 +928,9 @@ export function prepareExtension(env: ImplEnv): Candidate {
     await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
     // A resumed session's agent hears again that Probe is inline (`/probe inline`).
     if (sessionId && event.reason === "resume") forgetInlineShown(sessionId);
+    // The server's notices, every start, `/reload` included (the ledger keeps each to once): never
+    // with Probe `off` (no Probe calls), and never awaited.
+    if (!probeIsOff(s)) void startServerNotices(ctx);
 
     if (probeIsOff(s)) {
       // `off` means no Probe calls and nothing injected. Leaving this out was
@@ -1202,6 +1238,20 @@ export function prepareExtension(env: ImplEnv): Candidate {
             void box.reportDelivered(box.lastClaimed); // Probe hears it was shown (inbox only; never awaited)
           }
           readsNotify(ctx, box.researcherNotice());
+        } else {
+          // The server's lane is every session's (R21): what the Probe server and the CLI posted.
+          const texts = box.deliver(box.currentTurn(), "before_agent_start", true, true);
+          if (texts.length) {
+            notice = [notice, ...texts].filter(Boolean).join("\n\n");
+            box.markShown(box.lastClaimed, "before_agent_start");
+          }
+        }
+        notifyServerBanners(ctx, box);
+        // The notices read at session start, for this session's agent (plan T9): once per session.
+        const notices = takeAgentNotices(sessionId);
+        if (notices.texts.length) {
+          notice = [notice, ...notices.texts].filter(Boolean).join("\n\n");
+          for (const claim of notices.claims) claim.commit(); // returned to pi as this turn's message
         }
       } catch (err) {
         logLine(`reads at prompt: ${err instanceof Error ? err.message : String(err)}`);

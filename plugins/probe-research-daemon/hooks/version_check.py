@@ -94,6 +94,10 @@ import version_policy
 # the caller happens to have.
 import _session_marker
 
+# The server's notices for this plugin (plan T8): shown once per computer to the person and once per
+# session to the agent, through the ledger the CLI, the SDK and pi share. Sibling import, as above.
+import server_notices
+
 TTL = version_policy.TTL
 BACKOFF = version_policy.BACKOFF
 TIMEOUT = version_policy.TIMEOUT
@@ -372,8 +376,18 @@ def _parked_copies() -> list:
 
 
 
+#: The server notices `_final` put in this hook's output: shown only once it went out (`_emit`).
+_SHOWING = server_notices.Notices()
+
+
 def _emit(obj: dict) -> NoReturn:
-    sys.stdout.write(json.dumps(obj))
+    try:
+        sys.stdout.write(json.dumps(obj))
+        sys.stdout.flush()
+    except BaseException:
+        _SHOWING.release()
+        raise
+    _SHOWING.commit()
     sys.exit(0)
 
 
@@ -1087,25 +1101,43 @@ def _final(obj: dict) -> NoReturn:
 
     In the daemon profile nothing reaches the agent -- `additionalContext` is
     dropped and the researcher gets the reports as a systemMessage line -- but
-    the `.probe.config` line (`_daemon_profile_excluded`) and an inline
-    session's notice after a compaction or resume (`_inline_reminder`).
+    the `.probe.config` line (`_daemon_profile_excluded`), an inline
+    session's notice after a compaction or resume (`_inline_reminder`) and the
+    server's notices (`_server_notices`), which reach both profiles' agents.
     """
+    notices = _server_notices()
+    _SHOWING.claims.extend(notices.claims)
+    if notices.person_lines:
+        prior = obj.get("systemMessage")
+        obj["systemMessage"] = "\n".join(([prior] if prior else []) + notices.person_lines)
     if _daemon_profile():
         obj.pop("hookSpecificOutput", None)
         notice = _daemon_profile_notice()
         if notice:
             prior = obj.get("systemMessage")
             obj["systemMessage"] = f"{prior}\n{notice}" if prior else notice
-        context = [c for c in (_daemon_profile_excluded(), _inline_reminder()) if c]
+        context = [c for c in (_daemon_profile_excluded(), _inline_reminder(), *notices.agent_lines) if c]
         if context:
             obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(context)}
         _emit(obj)
-    ctx = _start_context()
-    if ctx:
+    for ctx in (_start_context(), *notices.agent_lines):
+        if not ctx:
+            continue
         hso = obj.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
         prior = hso.get("additionalContext")
         hso["additionalContext"] = f"{prior}\n\n{ctx}" if prior else ctx
     _emit(obj)
+
+
+def _server_notices() -> "server_notices.Notices":
+    """The server's notices for this session start; none on PreCompact, which shows nothing, nor with
+    Probe `off` (no Probe calls), and none for the agent of an untracked session, which does no Probe
+    work (its person still sees them)."""
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT or _probe_state() == _session_marker.STATE_OFF:
+        return server_notices.Notices()
+    version = _local_plugin(os.environ.get("PROBE_PLUGIN_JSON") or "")
+    session_id = "" if _tracking_off() else os.environ.get(SESSION_ID_ENV) or ""
+    return server_notices.collect(session_id, version if isinstance(version, str) else None)
 
 
 def _ver_str(v: str) -> str:

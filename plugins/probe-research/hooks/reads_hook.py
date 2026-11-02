@@ -67,7 +67,9 @@ service). Their own lane on prompt, tool use AND Stop (a waiting one wakes the a
 turn's slot; the agent reads the server's sentence quoted under `[Probe] Notice from Probe
 (server):`. The PERSON gets one `systemMessage` banner per message for a warning or blocking
 one (`take_banners`: an exclusive marker beside the claim, so both plugins' hooks show it once);
-a Stop wake counts as shown, since the woken turn is in front of them.
+a Stop wake counts as shown, since the woken turn is in front of them. A NOTICE (wave 2: severity
+warning, posted by a `probe` command the agent ran) is the person's once per COMPUTER: its banner
+also takes the person's claim in the seen ledger every client shares (`_server_ledger.py`).
 
 SHOWN, SAID AT ONCE (G7). Once its output carrying a message Probe held for the
 session (`origin` "inbox") went out -- and only then, after its `shown` line --
@@ -855,10 +857,11 @@ def _should_show_banner(msg: "dict | None") -> bool:
             and (msg.get("audience") or "both") in PERSON_AUDIENCES)
 
 
-def take_banners(sid: str) -> "list[tuple[Path, str]]":
+def take_banners(sid: str) -> "list[tuple[Path, str, object]]":
     """The person's banners for claimed server messages none was shown for yet: each taken by an
     exclusive create of its marker, so of any number of hooks (both plugins' included) exactly
-    one shows it. As `(marker, banner)`."""
+    one shows it. A notice is the person's once per COMPUTER too (`_claim_person`). As
+    `(marker, banner, its ledger claim or None)`."""
     folder = _claimed_dir(sid)
     if not folder.is_dir():
         return []
@@ -867,11 +870,14 @@ def take_banners(sid: str) -> "list[tuple[Path, str]]":
         if path.name.count(".") > 1:
             continue  # a service claim not received yet
         msg = _message(_read_json(path))
-        if not _should_show_banner(msg):
-            continue
+        if not _should_show_banner(msg) or _is_unwatched_notice(msg):
+            continue  # an unwatched one waits, marker untaken, for a hook the person watches
         marker = _take_banner(sid, msg)
-        if marker is not None:
-            out.append((marker, render_server_banner(msg["text"])))
+        if marker is None:
+            continue
+        shown, claim = _claim_person(msg)
+        if shown:
+            out.append((marker, render_server_banner(msg["text"]), claim))
     return out
 
 
@@ -879,8 +885,57 @@ def mark_banners_shown(sid: str, msgs: "list[dict]") -> None:
     """The Stop waiter's wake carries these messages into a turn the person watches: their
     banners count as shown (a woken turn has no `systemMessage`)."""
     for msg in msgs:
-        if _should_show_banner(msg):
-            _take_banner(sid, msg)
+        if _should_show_banner(msg) and not _is_unwatched_notice(msg) and _take_banner(sid, msg) is not None:
+            _claim, claim = _claim_person(msg)
+            if claim is not None:
+                claim.commit()
+
+
+#: A server NOTICE (advice: severity warning or info; a refusal is blocking) reaches the person once
+#: per computer, through the ledger the CLI, the SDK, SessionStart and pi share (`_server_ledger.py`).
+NOTICE_SEVERITIES = ("warning", "info")
+
+
+def _claim_person(msg: dict) -> "tuple[bool, object]":
+    """(show its banner?, the ledger claim to commit once shown). A refusal: shown, no claim. A notice:
+    shown only when this hook took the person's claim; with no account here, shown per session."""
+    if (msg.get("severity") or "blocking") not in NOTICE_SEVERITIES:
+        return True, None
+    try:
+        notices = _server_notices()
+        account = notices.read_account()
+        if account is None:
+            return True, None
+        ledger = notices._load("_server_ledger")
+        claim = ledger.MessageLedger.from_account(*account).claim(
+            msg["id"][len(SERVER_ID_PREFIX):], ledger.Destination.PERSON)
+    except Exception:  # noqa: BLE001 -- no ledger: this session's banner, as for a refusal
+        return True, None
+    return claim is not None, claim
+
+
+def _is_unwatched_notice(msg: dict) -> bool:
+    """A notice in a `claude -p` run nobody watches: its banner would spend the person's one showing."""
+    if (msg.get("severity") or "blocking") not in NOTICE_SEVERITIES:
+        return False
+    try:
+        return not _server_notices().is_person_watching()
+    except Exception:  # noqa: BLE001 -- unknown reads as watched, as before this rule
+        return False
+
+
+def _server_notices():
+    """SessionStart's notice module beside this file (the account and ledger every hook keys by), by path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks.server_notices"
+    if key in sys.modules:
+        return sys.modules[key]
+    spec = importlib.util.spec_from_file_location(key, os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_notices.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -1395,13 +1450,18 @@ def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "st
     and its server messages' banners go out with the next hook's."""
     ids = [mid for mid, _text in items]
     banners = take_banners(sid)
-    notice = "\n".join(([notice] if notice else []) + [banner for _marker, banner in banners]) or None
+    notice = "\n".join(([notice] if notice else []) + [banner for _marker, banner, _claim in banners]) or None
     if _emit(event, [text for _id, text in items], notice):
         mark_shown(sid, ids, event)
         report_delivered(sid, ids)
+        for _marker, _banner, claim in banners:
+            if claim is not None:
+                claim.commit()
     else:
         return_unshown(sid, ids)
-        for marker, _banner in banners:
+        for marker, _banner, claim in banners:
+            if claim is not None:
+                claim.release()
             try:
                 marker.unlink()
             except OSError:
@@ -1497,7 +1557,6 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
         delivered += [got[path] for path in picks if path in got]
         items = [(msg["id"], rendered(msg)) for msg in delivered]
         if items:
-            mark_banners_shown(sid, delivered)
             _mark_woke(sid)
             try:
                 sys.stderr.write("\n\n".join(text for _id, text in items))
@@ -1505,6 +1564,7 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             except (OSError, ValueError):
                 return_unshown(sid, [mid for mid, _text in items])
                 return 2
+            mark_banners_shown(sid, delivered)  # only once the wake went out: a failed one keeps them
             mark_shown(sid, [mid for mid, _text in items], "Stop")
             report_delivered(sid, [mid for mid, _text in items])
             return 2

@@ -27,6 +27,7 @@ process.env.PI_CODING_AGENT_DIR = join(root, ".pi", "agent");
 process.env.CODEX_HOME = join(root, ".codex");
 process.env.CLAUDE_CONFIG_DIR = join(root, ".claude");
 for (const name of [
+  "PROBE_TOKEN",
   "PROBE_MCP_TOKEN",
   "PROBE_INGEST_TOKEN",
   "PROBE_PI_TAP_TOKEN",
