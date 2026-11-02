@@ -6,6 +6,8 @@
 
 - Internal clean-up: the old module paths kept for one release after the restructure are removed (`probe.cli.autoupdate`/`run_lock`/`telemetry`/`json_events`, the root `probe.feedback`/`drafts`/`doctrine`, `probe.hw`, `probe.sdk.delivery.sinks.direct`/`journaled`/`offline`, and the rest). `python -m` entry paths and the paths released plugin hooks import are kept.
 
+- Fix: a script started by `Run.execute()` on an offline run (`probe.init(mode="offline")`) can call `probe.init()`. The launcher hands its child the run's `local:` id, as online, and the child's `probe.init()` refused it (offline) or asked the server for a run only this machine's queue holds (online). The child now joins the launcher's run: its metrics land in the same queue with no second run, `probe.init(project=...)` naming another run is refused as online, and a child that closes the run itself (`finish("failed")`) keeps that verdict over the launcher's exit code.
+
 ## 0.362.1
 
 - Fix: `Run.execute()` on an offline run (`probe.init(mode="offline")`) that captured output files no longer waits out `PROBE_FINISH_TIMEOUT_SEC` at close. It flushed the run's queue every 0.25 s until the deadline (60 s set meant 60 s added to the job), and only `probe sync` can deliver that queue; it now closes at once and leaves the queue to `probe sync`.
