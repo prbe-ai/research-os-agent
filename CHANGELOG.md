@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.360.0
+
 - Fix: an offline run (`PROBE_MODE=offline`) can no longer have its queue set aside before `probe sync`. Anything that drained the run's own queue in the process — a background sender started by `PROBE_EXPORT_INTERVAL_SEC`, `flush()`, the `probe run` launch loop — sent it through the offline transport, which refuses every request, and each refusal counted toward the retry budget that moves writes to the failed pile (24 h and 50 tries). Those refusals now count for nothing, and an offline run no longer starts that background sender at all.
 - **`probe.init()`, `probe run start` and `probe exec` now need a project.** With no `project=` / `experiment=` (`--project` / `--experiment`) a run takes this computer's project (`PROBE_PROJECT`, else `probe project use`); with none it raises `ProjectRequired` before anything is sent, and `probe exec` exits before the command starts. Offline runs are refused at `probe.init` the same way, and an older CLI's queued create with no project is refused at sync, naming `probe sync <folder> --project <slug>`. A fork or child of a run an older CLI left unfiled says to `probe run move` it first. The Hugging Face callback and Lightning logger stop training on a missing project instead of training unrecorded. Daemon-mode agents may `probe project create` the project their run needs; the daemon still renames and moves projects and runs. Unfiled runs that already exist are still listed (`probe run list --unfiled`, doctor, `browse`).
 - The daemon's writer rules (tap 0.10.32) now say the main agent starts each run in a project it picked or created, and the daemon organises them: it moves runs, and renames, regroups or moves projects. They no longer tell it to file runs that started with no project.
