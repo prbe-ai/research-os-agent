@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the run watcher's code moved from `probe/box/` to `probe/sdk/run/watcher/`; `probe.box` and `python -m probe.box` still work.
+
 ## 0.362.2
 
 - Internal: module docs moved next to their code and `agent/scripts/` became `agent/tools/<job>/`; generated-file headers name the new generator paths.
