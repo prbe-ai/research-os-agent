@@ -12,6 +12,10 @@
 
 - Internal: the lowest code layers (foundation, analytics) no longer import the SDK or shared code; the old module paths still import for one release.
 
+
+
+- Internal: the wizard's four longest functions (`_wizard_session`, `_run_configure_action`, `_run_configure_steps`, `_run_chosen_action`) are cut into named stages; the guided install's screens live in `cli/wizard/session/guided_install.py` and the configure work list in `cli/wizard/actions/work_list.py`. No behaviour change.
+
 ## 0.362.2
 
 - Internal: module docs moved next to their code and `agent/scripts/` became `agent/tools/<job>/`; generated-file headers name the new generator paths.
