@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Internal: the run watcher's code moved from `probe/box/` to `probe/sdk/run/watcher/`; `probe.box` and `python -m probe.box` still work.
+- Internal: the lowest code layers (foundation, analytics) no longer import the SDK or shared code; the old module paths still import for one release.
 
 ## 0.362.2
 

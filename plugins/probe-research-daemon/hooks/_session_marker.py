@@ -512,13 +512,19 @@ def from_active_runs(payload: object) -> list[str]:
 
 
 def _fcntl():
-    """The flock provider: `probe._shared.oscompat` (fcntl on POSIX, msvcrt on
+    """The flock provider: `probe.foundation.os_backend.os_backend` (fcntl on POSIX, msvcrt on
     Windows). The vendored hook copy has no `probe` package to import; there it
     is fcntl itself, or None on a platform without it."""
     try:
-        from probe._shared import oscompat  # noqa: PLC0415
+        from probe.foundation.os_backend import os_backend  # noqa: PLC0415
 
-        return oscompat
+        return os_backend
+    except ImportError:
+        pass
+    try:  # an older CLI keeps it at its old path
+        import importlib  # noqa: PLC0415
+
+        return importlib.import_module("probe._shared.oscompat")  # restructure-guard-ok: older CLIs
     except ImportError:
         pass
     try:
