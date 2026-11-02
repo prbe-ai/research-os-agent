@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: module docs moved next to their code and `agent/scripts/` became `agent/tools/<job>/`; generated-file headers name the new generator paths.
+
 - Internal clean-up: the old module paths kept for one release after the restructure are removed (`probe.cli.autoupdate`/`run_lock`/`telemetry`/`json_events`, the root `probe.feedback`/`drafts`/`doctrine`, `probe.hw`, `probe.sdk.delivery.sinks.direct`/`journaled`/`offline`, and the rest). `python -m` entry paths and the paths released plugin hooks import are kept.
 
 ## 0.362.1

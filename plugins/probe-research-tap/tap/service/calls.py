@@ -208,7 +208,7 @@ def desktop_request(
     --json`'s stdin object) -> its v1 envelope, `{v, ok, data | error}`.
     `origin="desktop"`: a person asked. ServiceError for a refusal (its
     `data.reason`), OSError when no service answers: the caller then runs the
-    CLI, as before (`agent/docs/desktop-service-management.md`)."""
+    CLI, as before (`agent/src/probe/service/DESIGN.md`)."""
     params: dict = {"request": request}
     if context:
         params["context"] = context

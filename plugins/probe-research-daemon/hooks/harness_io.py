@@ -6,7 +6,7 @@
 The hooks in this folder speak Claude Code's protocol (Codex copied it): a
 payload with `transcript_path`, a string `prompt`, a `tool_response` object, a
 `permission_mode`; and output `{"hookSpecificOutput": {"additionalContext": ...}}`.
-Kimi Code's differs (agent/docs/adding-a-harness.md, Kimi facts):
+Kimi Code's differs (agent/src/probe/shared/harness/adding-a-harness.md, Kimi facts):
 
   in   `session_id` is `session_<uuid>`; `prompt` is a list of content parts;
        `tool_output` is a string (an answered AskUserQuestion is JSON text);

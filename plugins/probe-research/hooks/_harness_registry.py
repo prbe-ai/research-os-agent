@@ -22,7 +22,7 @@ and the JSON are copied next to each consumer by ``make sync-harnesses``:
 ``agent/tests/test_harness_registry.py`` fails when any copy drifts. Each copy
 reads the JSON that sits next to it, so no consumer needs another's path.
 
-Adding a harness: ``agent/docs/adding-a-harness.md``.
+Adding a harness: ``agent/src/probe/shared/harness/adding-a-harness.md``.
 """
 
 from __future__ import annotations
