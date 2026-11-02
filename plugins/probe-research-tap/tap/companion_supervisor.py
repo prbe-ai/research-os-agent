@@ -219,9 +219,9 @@ class Supervisor:
 
     def _open_socket(self) -> None:
         """Listen for SDK messages (a UNIX datagram socket): nothing to accept, nothing
-        to block on, and a sender with no listener fails at once and floats its run."""
+        to block on, and a sender with no listener fails at once."""
         if self.sock is not None or not hasattr(socket, "AF_UNIX"):
-            return  # (Windows: no datagram socket; runs start floating and are filed later)
+            return  # (Windows: no datagram socket; the daemon reads the session log alone)
         path = socket_path(self.session_id)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -233,7 +233,7 @@ class Supervisor:
             sock.setblocking(False)
             self.sock = sock
         except OSError:
-            log.exception("daemon socket unavailable; runs start floating and are filed later")
+            log.exception("daemon socket unavailable; the daemon reads the session log alone")
 
     def _drain_socket(self) -> None:
         """Append each SDK message to the session's inbox, which the worker reads."""
