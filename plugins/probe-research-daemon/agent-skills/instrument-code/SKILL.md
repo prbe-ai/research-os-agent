@@ -13,8 +13,11 @@ Example:
 import probe
 probe.init(project="folding", description="dockq sweep, temperature 0.7", tags=["dockq"],
            config=args, intent="does 0.7 beat 1.0 on DockQ?")
-# Every run needs a project. None fits? `probe project create <slug>` first; in the
-# `daemon` state the daemon may rename it or move the run.
+# Every run needs a project. In the `daemon` state a run on this machine naming none
+# goes to this session's project, which the daemon sets (`probe session home show`
+# prints it); pass project= to choose another, and before it is set (or on another
+# machine) pass one. None fits? `probe project create <slug>` first; the daemon may
+# rename it or move the run.
 # `on` state: name the experiment you created too, e.g.
 # probe.init(project="folding", experiment="dockq-sweep", question="does temperature 0.7 beat 1.0 on DockQ?")
 probe.log({"loss": 0.42}, step=42)   # ambient: no handle to thread through call frames

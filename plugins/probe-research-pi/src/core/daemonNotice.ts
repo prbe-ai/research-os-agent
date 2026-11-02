@@ -23,8 +23,11 @@ import { probeConfigPath, probeStateDir, type PathEnv } from "./paths.js";
 /** `session_marker.DAEMON_CONTEXT`: the one statement of who writes what. */
 export const DAEMON_CONTEXT =
   "The Probe daemon is recording this session: you launch and instrument runs, and the daemon " +
-  "records. Yours: start runs in a project (`project=` or `--project`; if none fits, " +
-  "`probe project create <slug>`), the run's own data (metrics, spans, trials, files the run " +
+  "records. Yours: start runs (a run on this machine naming no project goes to this session's " +
+  "project, which the daemon sets: `probe session home show` prints it; pass `project=` or " +
+  "`--project` for another, and before it is set pass one, or `probe project create <slug>` if " +
+  "none fits), " +
+  "the run's own data (metrics, spans, trials, files the run " +
   "itself attaches) and `probe run end` when a run finishes. The daemon's: everything else, " +
   "including the experiment and sweep group a run is filed in, renaming or moving projects " +
   "and runs, and its notes, artifacts, papers, tags, names, descriptions and lineage, read " +

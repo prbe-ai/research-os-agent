@@ -4,6 +4,8 @@
 
 - A `probe exec` job's own requests (its run's create, beats and close) now identify as the SDK, not the CLI: a job that runs for days on a dev pod no longer reads as someone using the `probe` CLI there, which kept the stuck-update alert's clock running.
 
+- In ML sessions the Probe daemon now picks the session's project at its first prompt, before the main agent's first run: it runs `probe session home set` (and again when the work moves), so a run on this machine that names no project lands there. The main agent's session-start text, the `instrument-code` skill and the "a run needs a project" error say so: `probe session home show` prints the session's project; pass `project=` for another, and before the daemon has set one (or on another machine), pass one or `probe project create <slug>`. At most one extra writer run per session.
+
 ## 0.365.0
 
 - **Restructure naming (X7, chunk 4a): private names in the agent's foundation, analytics, connectors and integrations.** Locals, private-function parameters and private helpers got full words and verb-first names (banned abbreviations 82 to 54 here); no behaviour change.
