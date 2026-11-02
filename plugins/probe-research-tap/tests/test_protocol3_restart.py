@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 
-from tap.session_journal import Journal, Wire
+from tap.transcripts.journal import Journal, Wire
 from tests.test_session_deleted import (  # noqa: F401 - fixtures
     CUSTOMER,
     Server,

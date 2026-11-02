@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tap import secrets
+from tap.transcripts import credential_scan as secrets
 
 USER = "user"
 ASSISTANT = "assistant"

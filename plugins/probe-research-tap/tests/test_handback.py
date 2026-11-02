@@ -28,7 +28,7 @@ from tap import config as cfg
 from tap import main as tapmain
 from tap import start as tap_start
 from tap.service import client
-from tap.session_journal import Journal
+from tap.transcripts.journal import Journal
 from tap.storage import Storage
 from tests.test_durable_runtime import Wire
 

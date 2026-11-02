@@ -20,8 +20,9 @@ from uuid import uuid4
 
 import pytest
 
-from tap import session_journal as sj
-from tap.session_journal import DeliveryPending, Journal, ReconciliationRequired, UnsafePending
+from tap.transcripts import credential_scan
+from tap.transcripts import journal as sj
+from tap.transcripts.journal import DeliveryPending, Journal, ReconciliationRequired, UnsafePending
 
 TOKEN = "probe_pat_" + "0123456789abcdef" * 2
 _CURSORS = ("batch_seq", "source_byte_end", "source_line_end", "event_end", "prefix_sha256")
@@ -119,7 +120,9 @@ def session(tmp_path, monkeypatch):
 def _stage_under_old_rules(sid, journal, monkeypatch) -> bytes:
     """Stage the way a daemon whose scrubber missed TOKEN did."""
     with monkeypatch.context() as patch:
-        patch.setattr(sj, "_scrub_content", lambda payload: payload)
+        patch.setattr(sj.integrity, "_scrub_content", lambda payload: payload)
+        patch.setattr(sj.reconcile, "_scrub_content", lambda payload: payload)
+        patch.setattr(sj.stage, "_scrub_content", lambda payload: payload)
         body = journal.stage(sid, cwd="/work")
     assert TOKEN.encode() in body
     with pytest.raises(UnsafePending):
@@ -326,7 +329,9 @@ def test_a_rebuild_that_refuses_leaves_the_journal_as_it_was(session, other, mon
     def refuse(*_args, **_kwargs):
         raise DeliveryPending("not enough free disk space for the transcript snapshot")
 
-    monkeypatch.setattr(sj, "_record_terms", refuse)
+    monkeypatch.setattr(sj.ensure, "_record_terms", refuse)
+    monkeypatch.setattr(sj.reconcile, "_record_terms", refuse)
+    monkeypatch.setattr(sj.stream_protocol, "_record_terms", refuse)
     with pytest.raises(DeliveryPending):
         journal.reconcile_pending(sid, server)
     assert journal.pending(sid) == body and journal.get(sid) == before
@@ -344,7 +349,13 @@ def test_redaction_that_never_settles_is_refused_not_looped(session):
     sid, journal, server, monkeypatch = session
     body = _stage_under_old_rules(sid, journal, monkeypatch)
     monkeypatch.setattr(
-        sj, "_scrub_content", lambda payload: payload | {"cwd": payload.get("cwd", "") + "x"}
+        sj.integrity, "_scrub_content", lambda payload: payload | {"cwd": payload.get("cwd", "") + "x"}
+    )
+    monkeypatch.setattr(
+        sj.reconcile, "_scrub_content", lambda payload: payload | {"cwd": payload.get("cwd", "") + "x"}
+    )
+    monkeypatch.setattr(
+        sj.stage, "_scrub_content", lambda payload: payload | {"cwd": payload.get("cwd", "") + "x"}
     )
     with pytest.raises(ReconciliationRequired, match="does not settle"):
         journal.reconcile_pending(sid, server)
@@ -360,8 +371,8 @@ def test_a_staged_body_always_passes_its_own_safety_check():
         "{'contexts': {'default': {'token': '" + TOKEN + "', 'workspace': {'id': '" + uuid + "'}}}}"
     )
     payload = {"events": [{"line_no": 0, "raw": {"stdout": config}}], "cwd": "/work"}
-    once, _ = sj.redact_event({"events": payload["events"], "cwd": "/work"})
-    assert sj.redact_event(once)[0] == once
+    once, _ = credential_scan.redact_event({"events": payload["events"], "cwd": "/work"})
+    assert credential_scan.redact_event(once)[0] == once
     body = sj.canonical_payload(sj._scrub_content(payload))
     sj._require_safe_pending(body)
     assert TOKEN.encode() not in body and uuid.encode() in body
@@ -376,7 +387,8 @@ def test_a_line_the_sanitizer_cannot_handle_costs_that_line_not_the_session(sess
             raise TypeError("a shape this sanitizer never saw")
         return real(event)
 
-    monkeypatch.setattr(sj, "_sanitizer", lambda source: trips_on_the_token)
+    monkeypatch.setattr(sj.harness, "_sanitizer", lambda source: trips_on_the_token)
+    monkeypatch.setattr(sj.stage, "_sanitizer", lambda source: trips_on_the_token)
     body = json.loads(journal.stage(sid, cwd="/work"))
     assert body["source_line_end"] == 2, "the cursor moves past the line"
     assert [e["raw"]["message"]["content"] for e in body["events"]] == ["hi"]
@@ -385,7 +397,8 @@ def test_a_line_the_sanitizer_cannot_handle_costs_that_line_not_the_session(sess
 def test_a_line_nested_past_the_redactors_reach_is_dropped_not_fatal(tmp_path, monkeypatch):
     # The journal's own guard, whatever a sanitizer lets through: an identity
     # sanitizer hands the redactor the deep value as is.
-    monkeypatch.setattr(sj, "_sanitizer", lambda source: lambda event: event)
+    monkeypatch.setattr(sj.harness, "_sanitizer", lambda source: lambda event: event)
+    monkeypatch.setattr(sj.stage, "_sanitizer", lambda source: lambda event: event)
     monkeypatch.setenv("PROBE_TRANSCRIPT_STATE_DIR", str(tmp_path / "v2"))
     sid = str(uuid4())
     # Past the 64-level cap, well inside every Python's own json/recursion
@@ -419,7 +432,9 @@ def test_a_line_nested_past_the_redactors_reach_is_dropped_not_fatal(tmp_path, m
 
 def _journal_clock(monkeypatch) -> list[float]:
     clock = [1_800_000_000.0]
-    monkeypatch.setattr(sj, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(sj.delivery, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(sj.media.media, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(sj.reconcile, "time", SimpleNamespace(time=lambda: clock[0]))
     return clock
 
 
@@ -428,7 +443,7 @@ def test_a_lasting_conflict_waits_longer_each_time_for_that_body_only(session):
     refusal does not double it again. A new body (here the same batch
     re-redacted) starts over, and acceptance ends the wait."""
     sid, journal, server, monkeypatch = session
-    monkeypatch.setattr(sj, "CONFLICT_RETRY_JITTER", 0.0)
+    monkeypatch.setattr(sj.delivery, "CONFLICT_RETRY_JITTER", 0.0)
     clock = _journal_clock(monkeypatch)
     assert journal.defer_conflict(sid) == 0  # nothing pending: nothing to hold back
     _stage_under_old_rules(sid, journal, monkeypatch)
@@ -591,7 +606,9 @@ def test_a_rebuild_refused_after_its_snapshot_copy_leaves_the_journal_as_it_was(
     def refuse(*_args):
         raise ReconciliationRequired("historical prefix differs")
 
-    monkeypatch.setattr(sj, "_validate_history", refuse)  # runs after the copy
+    monkeypatch.setattr(sj.ensure, "_validate_history", refuse)  # runs after the copy
+    monkeypatch.setattr(sj.errors, "_validate_history", refuse)
+    monkeypatch.setattr(sj.stage, "_validate_history", refuse)
     with pytest.raises(ReconciliationRequired, match="historical prefix differs"):
         journal.reconcile_pending(sid, server)
     assert journal.pending(sid) == body and journal.get(sid) == before

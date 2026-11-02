@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 from tap import companion_observe
-from tap.session_identity import validate_identity
-from tap.session_journal import ReconciliationRequired
+from tap.transcripts.session_identity import validate_identity
+from tap.transcripts.journal import ReconciliationRequired
 
 TUI_ID = "0d2f2223-e34e-4cd1-87e3-b8d8d39aa229"
 RUN_ID = "9b40c4c4-d58a-4ed7-9372-cfecf8469b05"

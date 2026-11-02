@@ -24,7 +24,7 @@ from tap import config as cfg
 from tap import hosted, record_client, threadenv
 from tap import main as tapmain
 from tap import start as tap_start
-from tap.session_journal import Journal
+from tap.transcripts.journal import Journal
 from tests.test_durable_runtime import _hosted, setup  # noqa: F401 -- the fixture
 
 # -- one environment per thread ---------------------------------------------------
@@ -102,7 +102,7 @@ def test_the_hosted_loop_beats_before_each_session_and_batch_it_sends(setup, mon
     """Delta review #3: one pass may send 64 sessions' batches, each behind HTTP
     timeouts; a beat per pass alone made a slow server read as every recorder
     stalled. Each batch's delivery comes after a beat of its own."""
-    from tap.session_journal import Journal
+    from tap.transcripts.journal import Journal
 
     config, storage, _wire = setup
     beats: list = []
@@ -450,7 +450,7 @@ def test_each_session_thread_gets_its_own_tls_trust(tmp_path, monkeypatch):
     import ssl
 
     from tap import httpclient
-    from tap import session_journal
+    from tap.transcripts import journal as session_journal
 
     paths = ssl.get_default_verify_paths()
     found = [c for c in (paths.cafile, paths.openssl_cafile, "/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem",

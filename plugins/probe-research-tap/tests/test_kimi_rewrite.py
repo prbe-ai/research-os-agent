@@ -20,7 +20,7 @@ from uuid import uuid4
 import pytest
 
 from tap import main as tapmain
-from tap.session_journal import Journal, ReconciliationRequired, SourceRewritten
+from tap.transcripts.journal import Journal, ReconciliationRequired, SourceRewritten
 from tap.storage import Storage
 from tests.test_session_deleted import CUSTOMER, Server
 
@@ -120,7 +120,7 @@ def test_the_journal_names_a_rewrite_as_its_own_refusal(daemon, server, tmp_path
     """Equal size or shorter, the journal refuses with SourceRewritten, which
     every older caller still catches as ReconciliationRequired."""
     config, _storage = daemon
-    from tap.session_journal import Wire
+    from tap.transcripts.journal import Wire
 
     wire = Wire(server.url, "synthetic-token", "kimi_code", timeout=5)
     journal = Journal(server.url, CUSTOMER, "kimi_code")

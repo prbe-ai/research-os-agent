@@ -6,8 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from tap import secrets, transcript
-from tap.session_journal import Journal, ReconciliationRequired, Wire
+from tap.transcripts import credential_scan as secrets
+from tap.transcripts import transcripts as transcript
+from tap.transcripts.journal import Journal, ReconciliationRequired, Wire
 
 KEY = 'ghp_' + hashlib.sha256(b'synthetic-transcript-regression').hexdigest()[:36]
 OPAQUE = 'qT7mP2vN9cX4zL8hR5kW1yB6dF0sA3uE7jG9pC2n'
@@ -159,7 +160,11 @@ def test_journal_scanner_failure_keeps_source_and_never_reserves(tmp_path, monke
     try:
         before = journal.get('synthetic')
         def fail(*args, **kwargs): raise error('synthetic failure')
-        monkeypatch.setattr(secrets, 'scan', fail)
+        monkeypatch.setattr(secrets.credential_scan, 'scan', fail)
+        monkeypatch.setattr(secrets.decoding, 'scan', fail)
+        monkeypatch.setattr(secrets.events, 'scan', fail)
+        monkeypatch.setattr(secrets.quick, 'scan', fail)
+        monkeypatch.setattr(secrets.windows, 'scan', fail)
         with pytest.raises(error):
             journal.stage('synthetic', cwd='/work')
         assert journal.pending('synthetic') is None

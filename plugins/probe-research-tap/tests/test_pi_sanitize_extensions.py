@@ -1,5 +1,5 @@
 # tests/test_pi_sanitize_extensions.py
-from tap.pi_sanitize import sanitize_event
+from tap.transcripts.sanitizers.pi import sanitize_event
 
 
 def test_custom_message_enters_the_transcript_as_user_content():

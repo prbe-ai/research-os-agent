@@ -25,7 +25,7 @@ import pytest
 
 from tap import config as cfg
 from tap import main as tapmain
-from tap.session_journal import Journal, Wire
+from tap.transcripts.journal import Journal, Wire
 from tap.storage import Storage
 
 CUSTOMER = "tenant-synthetic"

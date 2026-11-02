@@ -59,11 +59,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
-from tap import capture_gate, outbox, pi_discovery, sources
+from tap import outbox, pi_discovery, sources
 from tap import config as cfg
-from tap import transcript as _transcript
+from tap.transcripts import capture_gate
+from tap.transcripts import transcripts as _transcript
 from tap.storage import FileOffset, Storage
-from tap.transcript import byte_offset_after, read_new, validate_json
+from tap.transcripts.transcripts import byte_offset_after, read_new, validate_json
 
 log = logging.getLogger("probe-research-tap.reconcile")
 
@@ -89,7 +90,8 @@ MAX_BACKFILL_FILES_PER_SWEEP = 4
 # and `httpclient.classify` maps the resulting 413 to POISON — a silent drop. A
 # backfill is precisely where oversized ticks show up (a 2MB gap is one batch if
 # nothing splits it), so the reconciler chunks. The value and the splitter live
-# canonically in tap/transcript.py (synced from src/probe/tap_core); this module
+# canonically in tap/transcripts/transcripts.py (synced from
+# src/probe/foundation/transcripts); this module
 # keeps its own NAME for the budget so tests can patch reconcile.MAX_BATCH_BYTES
 # and the call-time resolution in chunk_lines below still honours the patch.
 MAX_BATCH_BYTES = _transcript.MAX_BATCH_BYTES

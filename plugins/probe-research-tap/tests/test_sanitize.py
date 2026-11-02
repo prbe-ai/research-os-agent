@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from tap.outbox import build_batch_body
-from tap.sanitize import sanitize_event
+from tap.transcripts.sanitizers.claude_code import sanitize_event
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +705,7 @@ def test_tool_result_carries_size_but_never_body() -> None:
     """'ok' cannot distinguish a grep that found nothing from one that found
     four hundred matches, and that difference is most of what a result means
     once the body is gone."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     ev = {
         "type": "user",
@@ -730,7 +730,7 @@ def test_drops_hook_output_attachments() -> None:
     conversation: 12,217 events and 11.5 MB across ten measured sessions, none
     of which produce a single character of indexed text. hook_success alone is
     54.7% of those bytes."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     event = {
         "type": "attachment",
@@ -749,7 +749,7 @@ def test_drops_attachments_that_carry_file_content() -> None:
     """The consent screen says file contents are not sent. These attachment
     types are a file's contents (or a snippet, a CLAUDE.md, the system prompt)
     and used to ship because the filter only named what to DROP (tap 0.9.10)."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     for kind, payload in (
         ("file", {"filename": "a.py", "content": "FILE BODY"}),
@@ -771,7 +771,7 @@ def test_unknown_attachment_types_fail_closed() -> None:
     """Allow-list, not deny-list: an attachment type we have not checked does
     not ship. The deny-list's "a future kind still ships" is how file content
     shipped."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     for attachment in (
         {"type": "some_future_kind", "content": "?"},
@@ -785,7 +785,7 @@ def test_unknown_attachment_types_fail_closed() -> None:
 def test_compact_file_reference_ships_its_paths_and_nothing_else() -> None:
     """The one kept attachment type ships only its named keys, so the day it
     grows a content field the content still stays on the machine."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     out = sanitize_event({
         "type": "attachment",
@@ -823,7 +823,7 @@ def test_drops_tool_use_result_the_second_copy_of_tool_output() -> None:
     (shipped as a size) and as top-level `toolUseResult` (stdout, the whole
     original file, the whole edit). Only the import lane used to drop the
     second copy; live capture shipped it."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     out = sanitize_event({
         "type": "user",
@@ -842,7 +842,7 @@ def test_drops_tool_use_result_the_second_copy_of_tool_output() -> None:
 
 
 def test_unknown_top_level_keys_do_not_ship() -> None:
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     out = sanitize_event({
         "type": "assistant",
@@ -856,7 +856,7 @@ def test_unknown_top_level_keys_do_not_ship() -> None:
 
 
 def test_message_keys_outside_the_allow_list_do_not_ship() -> None:
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     out = sanitize_event({
         "type": "assistant",
@@ -881,7 +881,7 @@ def test_message_keys_outside_the_allow_list_do_not_ship() -> None:
 def test_a_non_string_top_level_content_does_not_ship() -> None:
     """The renderer reads a top-level `content` only as a string; any other
     shape there is a payload nobody named."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     assert sanitize_event({"type": "system", "subtype": "x", "content": "kept"})["content"] == "kept"
     assert "content" not in sanitize_event({"type": "system", "subtype": "x", "content": {"a": 1}})
@@ -892,7 +892,7 @@ def test_a_non_string_top_level_content_does_not_ship() -> None:
 def test_a_named_key_holding_the_wrong_type_does_not_ship() -> None:
     """probe-events/1 types every allow-listed key (tap 0.9.11), so a named
     key cannot carry an unnamed payload either."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     out = sanitize_event({
         "type": "assistant",
@@ -923,7 +923,7 @@ def test_a_named_key_holding_the_wrong_type_does_not_ship() -> None:
 def test_unknown_block_types_ship_as_a_dropped_marker() -> None:
     """They used to be forwarded unchanged. A document, a search result or a
     server tool's output is exactly the content the consent screen excludes."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     out = sanitize_event({
         "type": "user",
@@ -949,7 +949,7 @@ def test_unknown_block_types_ship_as_a_dropped_marker() -> None:
 def test_pasted_image_ships_its_type_and_size_never_the_bytes() -> None:
     """Codex, pi and Kimi already reduce a pasted image to this shape; Claude
     Code forwarded the base64."""
-    from tap.sanitize import sanitize_event
+    from tap.transcripts.sanitizers.claude_code import sanitize_event
 
     data = "iVBORw0KGgo" * 100
     out = sanitize_event({

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tap.pi_sanitize import sanitize_event
+from tap.transcripts.sanitizers.pi import sanitize_event
 
 FIXTURES = sorted((Path(__file__).parent / "fixtures" / "pi").glob("*.jsonl"))
 

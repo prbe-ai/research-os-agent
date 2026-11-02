@@ -24,10 +24,10 @@ import time
 
 import pytest
 
-from tap import secrets
-from tap.codex_sanitize import sanitize_event as codex_sanitize
-from tap.sanitize import sanitize_event as cc_sanitize
-from tap.transcript import build_batch_body
+from tap.transcripts import credential_scan as secrets
+from tap.transcripts.sanitizers.codex import sanitize_event as codex_sanitize
+from tap.transcripts.sanitizers.claude_code import sanitize_event as cc_sanitize
+from tap.transcripts.transcripts import build_batch_body
 
 # ---------------------------------------------------------------------------
 # Corpora
@@ -437,7 +437,11 @@ def test_suite_fails_when_the_detector_is_stubbed(monkeypatch) -> None:
     plumbing — passes against a `scan()` that does nothing at all. Without this
     test, breaking the detector looks exactly like the detector working.
     """
-    monkeypatch.setattr(secrets, "scan", lambda _text: [])
+    monkeypatch.setattr(secrets.credential_scan, "scan", lambda _text: [])
+    monkeypatch.setattr(secrets.decoding, "scan", lambda _text: [])
+    monkeypatch.setattr(secrets.events, "scan", lambda _text: [])
+    monkeypatch.setattr(secrets.quick, "scan", lambda _text: [])
+    monkeypatch.setattr(secrets.windows, "scan", lambda _text: [])
     survived = []
     for name, text in TRUE_POSITIVES:
         redacted, rules = secrets.redact(text)

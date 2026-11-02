@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from tap.codex_sanitize import sanitize_event
+from tap.transcripts.sanitizers.codex import sanitize_event
 from tap.outbox import build_batch_body
-from tap.sanitize import COMMAND_MAX_LEN
+from tap.transcripts.sanitizers.claude_code import COMMAND_MAX_LEN
 
 FIXTURE = Path(__file__).parent / "fixtures" / "rollout-sample.jsonl"
 

@@ -5,12 +5,12 @@ from tap import outbox
 def test_dispatch_selects_the_pi_sanitizer(monkeypatch):
     monkeypatch.setenv("PROBE_TAP_SOURCE", "pi")
     fn = outbox.sanitizer_for_current_source()
-    assert fn.__module__ == "tap.pi_sanitize"
+    assert fn.__module__ == "tap.transcripts.sanitizers.pi"
 
 
 def test_dispatch_selects_the_codex_sanitizer(monkeypatch):
     monkeypatch.setenv("PROBE_TAP_SOURCE", "codex")
-    assert outbox.sanitizer_for_current_source().__module__ == "tap.codex_sanitize"
+    assert outbox.sanitizer_for_current_source().__module__ == "tap.transcripts.sanitizers.codex"
 
 
 def test_dispatch_is_resolved_once_per_batch_not_per_line(monkeypatch):

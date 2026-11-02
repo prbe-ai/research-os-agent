@@ -76,8 +76,8 @@ from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
 from tap.server_messages import forward_refusal
-from tap.session_identity import IdentityMismatch, validate_identity
-from tap.session_journal import (
+from tap.transcripts.session_identity import IdentityMismatch, validate_identity
+from tap.transcripts.journal import (
     DeliveryPending,
     Journal,
     ProtocolRestarted,
@@ -89,7 +89,7 @@ from tap.session_journal import (
     recoverable,
 )
 from tap.storage import FileOffset, Storage
-from tap.transcript import read_new, validate_json
+from tap.transcripts.transcripts import read_new, validate_json
 
 log = logging.getLogger("probe-research-tap")
 

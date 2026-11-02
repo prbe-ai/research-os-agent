@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Restructure, agent step 18: `probe.tap_core` is now `probe.foundation.transcripts`, and tap 0.10.34 carries the same tree.** Sanitizers live in `sanitizers/` (claude_code, codex, pi, kimi_code), `transcript.py` is `transcripts.py`, `transcript_render.py` is `render.py`, the session journal is split by job into `journal/` (Journal's members sit in part classes folded back by `compose`) and the credential scanner into `credential_scan/`. The tap vendors the tree byte-identical at `tap/transcripts/` (plus `tap/compose/`); its old flat modules (`tap.session_journal`, `tap.secrets`, `tap.sanitize`, ...) are the moved modules under their old names, because every Probe service imports `tap.session_journal` from the installed tap and `tap.sources` loads sanitizers as `tap.<registry key>`. `probe.tap_core.*` stays importable for one release. Pure move: no behaviour change.
+
 ## 0.367.0
 
 - The Probe daemon's folder looks (which folders a session works in, and the walk that notices changed files) now run off the session's own loop with a 60-second limit, and a look still stuck on a hung mount is never started twice: the loop goes on renewing its lease, using the folders it last found. Before, a dead network mount at boot could stop a session's recording for days (Kimball, 10-27).

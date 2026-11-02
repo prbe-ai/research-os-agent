@@ -121,7 +121,7 @@ def test_a_session_whose_switch_reads_off_is_never_adopted(storage, projects, pl
     a session that is off, or whose off stretch is still open, so nothing is
     asked of the server about it; a closed off stretch alone does not (its
     lines are read past as nothing when it is staged)."""
-    from tap import capture_gate
+    from tap.transcripts import capture_gate
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     sessions = tmp_path / "state" / "probe" / "sessions"

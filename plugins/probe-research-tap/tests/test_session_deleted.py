@@ -26,7 +26,7 @@ import pytest
 
 from tap import httpclient, outbox
 from tap import main as tapmain
-from tap.session_journal import DeliveryPending, Journal, SessionDeleted, Wire
+from tap.transcripts.journal import DeliveryPending, Journal, SessionDeleted, Wire
 from tap.storage import Storage
 
 CUSTOMER = "tenant-synthetic"

@@ -16,7 +16,7 @@ from importlib import import_module
 
 from tap import config as cfg
 from tap import httpclient
-from tap import transcript as _transcript
+from tap.transcripts import transcripts as _transcript
 from tap.server_messages import forward_refusal, parse_server_message
 from tap.storage import Storage
 
@@ -61,7 +61,7 @@ def sanitizer_for_current_source():
     caller unchanged. The shared builder takes the function as a parameter
     instead of looking it up, because an importer processing both agents'
     history in one pass cannot have a single ambient answer — see
-    tap_core/transcript.build_batch_body.
+    foundation/transcripts/transcripts.build_batch_body.
 
     Resolved ONCE per batch (build_batch_body below), not per line — a
     5,000-line tick should do one import-cache lookup, not 5,000.
@@ -197,7 +197,7 @@ def session_deleted(resp: httpclient.Response, session_id: str | None = None) ->
     """
     if resp.status != 410:
         return False
-    from tap.session_journal import deleted_response
+    from tap.transcripts.journal import deleted_response
 
     return deleted_response(resp.status, httpclient.parse_json(resp), session_id)
 

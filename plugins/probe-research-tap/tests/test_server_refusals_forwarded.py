@@ -16,7 +16,7 @@ import pytest
 
 from tap import outbox, server_messages
 from tap.server_messages import mailbox as tap_mailbox
-from tap.session_journal import DeliveryPending, Wire
+from tap.transcripts.journal import DeliveryPending, Wire
 from tap.storage import Storage
 
 #: The bodies the server pins (app/capture/clients/messages, #3895).

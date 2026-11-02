@@ -14,9 +14,9 @@ from uuid import uuid4
 import pytest
 
 from tap import main as tapmain
-from tap import session_journal as tapmain_journal
-from tap.session_identity import validate_identity
-from tap.session_journal import DeliveryPending, Journal
+from tap.transcripts import journal as tapmain_journal
+from tap.transcripts.session_identity import validate_identity
+from tap.transcripts.journal import DeliveryPending, Journal
 from tap.storage import Storage
 
 # Another session's folder: an absolute path on this system (`/synthetic/...`
@@ -645,7 +645,9 @@ def test_a_batch_older_redaction_let_through_no_longer_strands_its_session(setup
         historical=False, cwd=str(config.cwd),
     )
     with monkeypatch.context() as patch:
-        patch.setattr(tapmain_journal, "_scrub_content", lambda payload: payload)
+        patch.setattr(tapmain_journal.integrity, "_scrub_content", lambda payload: payload)
+        patch.setattr(tapmain_journal.reconcile, "_scrub_content", lambda payload: payload)
+        patch.setattr(tapmain_journal.stage, "_scrub_content", lambda payload: payload)
         assert token.encode() in journal.stage(config.session_id, cwd=str(config.cwd))
     journal.close()
     assert tapmain._run_durable_loop(config, storage) == 0
@@ -733,7 +735,9 @@ def _clock(monkeypatch, *, ticks: int, step: float = 60, each=None) -> list[floa
     (one sleep per tick at these tests' 1 s cadence: a minute per tick is the
     real active cadence), and a stop after `ticks` sleeps."""
     clock = [1_800_000_000.0]
-    monkeypatch.setattr(tapmain_journal, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(tapmain_journal.delivery, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(tapmain_journal.media.media, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(tapmain_journal.reconcile, "time", SimpleNamespace(time=lambda: clock[0]))
     monkeypatch.setattr(tapmain, "_transcript_has_active_reader", lambda _path: None)
     sleeps = 0
 
@@ -778,7 +782,7 @@ def test_a_lasting_409_is_sent_again_on_a_backoff_while_other_sessions_flow(setu
     )
     journal.close()
     _owner_states(monkeypatch, {}, default=Owner.ALIVE)
-    monkeypatch.setattr(tapmain_journal, "CONFLICT_RETRY_JITTER", 0.0)
+    monkeypatch.setattr(tapmain_journal.delivery, "CONFLICT_RETRY_JITTER", 0.0)
     written = []
 
     def write_other(now):
@@ -856,7 +860,7 @@ def test_a_cooling_rebase_is_asked_again_after_each_wait(setup, monkeypatch):
     `reconcile_pending` again after each wait: the racing producer may be
     gone by then. Before, the first answer stood for the process's life."""
     config, storage, wire = setup
-    monkeypatch.setattr(tapmain_journal, "CONFLICT_RETRY_JITTER", 0.0)
+    monkeypatch.setattr(tapmain_journal.delivery, "CONFLICT_RETRY_JITTER", 0.0)
     clock = _clock(monkeypatch, ticks=30)
     posts = _refuse(monkeypatch, wire, config.session_id, clock)
     asked = []
@@ -1067,7 +1071,7 @@ def test_an_off_session_whose_last_batch_still_goes_gets_no_title_after_it(setup
     _switched_off(monkeypatch, tmp_path, sid)
     titles: list[str] = []
     monkeypatch.setattr(wire, "title", lambda s, t: titles.append(s) or (503, {}), raising=False)
-    monkeypatch.setattr(tapmain_journal, "TITLE_RETRY_SECONDS", 0)
+    monkeypatch.setattr(tapmain_journal.delivery, "TITLE_RETRY_SECONDS", 0)
     assert tapmain._run_durable_loop(config, storage) == 0
     assert any(key[0] == sid for key in wire.accepted)  # the pending batch went
     assert titles.count(sid) == 1  # its own delivery's try, refused; no idle retry while off

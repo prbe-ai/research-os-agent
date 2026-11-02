@@ -61,7 +61,7 @@ from tap import companion_lease as lease
 from tap import companion_ledger as ledger_mod
 from tap import companion_observe as observe
 from tap import config as cfg
-from tap import secrets
+from tap.transcripts import credential_scan as secrets
 
 log = logging.getLogger("tap.companion")
 

@@ -1,5 +1,5 @@
 # tests/test_pi_sanitize_header.py
-from tap.pi_sanitize import sanitize_event
+from tap.transcripts.sanitizers.pi import sanitize_event
 
 
 def test_session_header_becomes_a_system_event():
