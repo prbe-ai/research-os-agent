@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the session marker and `.probe.config` matcher sources are split into pieces (`src/probe/sdk/marker/`, `src/probe/sdk/recording_rules/probe_config/`) that `tools/vendor.py` joins back into `probe/sdk/session_marker.py` and `probe/sdk/probe_config.py` byte for byte; nothing a user runs changes, and the plugin hook copies are unchanged.
+
 ## 0.368.0
 
 - **Notices from the Probe server (planned maintenance, a known incident, "please update") reach you and your coding agent, once each.** The CLI and the SDK notice when the server's notice list changes (the `X-Probe-Notices` header) and read it in the background, never slowing or failing your request. In a terminal you see each notice once per computer (`Probe: <sentence>` on stderr, with how to update when it asks you to). When a coding agent runs `probe`, the notice goes to the session's Probe mailbox instead: the agent reads it quoted as `[Probe] Notice from Probe (server): "<sentence>"`, and you get one banner per computer. Claude Code and Codex sessions also read the notices when they start (one second at most), as do pi sessions, which show them with pi's notifications, also after `/reload`. One record on the computer (`~/.local/state/probe/server-messages/`) keeps every client, both Probe plugins and pi from showing a notice twice; an edited notice shows once more. With Probe `off` nothing is read.
