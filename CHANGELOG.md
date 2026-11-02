@@ -16,6 +16,8 @@
 
 - Automatic updates no longer stall on a machine whose `uv` only your terminal can find. When an update finds no `uv` anywhere, Probe installs its own copy of uv 0.13.1 from the same package index Probe comes from (your `UV_DEFAULT_INDEX`, `UV_INDEX_URL` or `PIP_INDEX_URL`, else the default index in uv's own `uv.toml`, with their credentials or `~/.netrc`; otherwise pypi.org), checks its sha256 against the index and the published one, and keeps it in `~/.local/state/probe/uv/`, on no PATH: the `uv` your terminal runs does not change. A `uv` an update found once is also no longer forgotten when the Probe service restarts. A failed attempt is retried after 6 hours.
 
+
+- Internal: the code capture's `_upload_pending_files` is cut into named stages (`_put_file`, `_confirm_window`, `_raise_if_outage`). No behaviour change.
 ## 0.364.0
 
 
