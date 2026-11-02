@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.366.0
+
 - `finish()` now waits for your data: it returns once the background sender has delivered everything the run logged, printing progress every few seconds (writes and bytes left, time left; Ctrl-C stops waiting and the sender keeps going). If some of it cannot be delivered (refused by the server, a write that kept failing, your sign-in refused, the server unreachable for 10 minutes) it raises `probe.DeliveryIncomplete` naming what is missing; the data stays on disk. `finish(wait=False)` and `probe run end --async` return at once. Your training process no longer sends queued writes itself, a token passed in code included. `probe outbox status` shows writes set aside and why; `probe outbox retry` sends them again now.
 
 - A `probe exec` job's own requests (its run's create, beats and close) now identify as the SDK, not the CLI: a job that runs for days on a dev pod no longer reads as someone using the `probe` CLI there, which kept the stuck-update alert's clock running.
