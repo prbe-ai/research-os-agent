@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the outbox's `status.json` keys have one definition, `StatusField` (a `StrEnum`) and the `WrittenStatus` / `QueueStatus` TypedDicts in `src/probe/sdk/delivery/status_fields.py`; the SDK, service and `shared/reads` readers and writers spell keys through them instead of string literals (`analytics/`, below `sdk/`, keeps literals). The file on disk is byte-for-byte the same and readers still tolerate keys an older release does not write. New guard `agent/tests/sdk/delivery/test_status_fields.py`. No behaviour change.
+
 ## 0.370.0
 
 - Internal: the MCP read tools each live in one mixin under `src/probe/mcp/tools/reads/`, and the service-only `research_context` / `research_compare` build their fixed shapes as frozen dataclasses. Same tools, schemas and output; no behaviour change.
