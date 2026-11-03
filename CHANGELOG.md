@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Setup wizard: a taken workspace name says so and asks again.** Workspace names are now unique per team on the server (any case, including workspaces you cannot see); the "New workspace" step shows the server's sentence and asks for another name instead of ending with `could not set this computer's workspace (ConflictError)`. The SDK's `create_workspace` docstring names the new 409.
+
 ## 0.372.0
 
 - **Restructure, shim sweep (agent MCP): the one-release old-path doors under `probe.mcp.tools` are deleted.** `probe.mcp.tools.{browse,entity,listing,literature,metrics,search}` and `probe.mcp.tools.listings` (+ `catalog`, `files`, `notes`, `runs`, `workspaces`) are gone; every caller already uses `probe.mcp.tools.reads.*` (CLI 0.370.0 and 0.371.0 shipped the new paths). No behaviour change.
