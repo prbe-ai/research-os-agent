@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.374.0
+
 - Internal: dropped two unused imports in `cli/connection.py` (ruff F401/F811) so the pre-push check passes. No behaviour change; `cli_spec.json` hash regenerated.
 - **Probe's hooks run in the ChatGPT app's Codex on a Mac that also has Codex on PATH.** Codex 0.166 (the ChatGPT app's) also pins a plugin's contents when it approves a hook (`trusted_content_hash`), and Probe approved its hooks, and checked them, through the `codex` on PATH alone. An older PATH Codex (brew's 0.163) wrote and read approvals without that pin, so the app's Codex ran no Probe hook while `probe status`, `probe doctor` and the app's banner said "all approved". Probe now asks every Codex on the machine (the one on PATH and the ChatGPT app's copy): it approves through each in turn, and a hook any of them would skip counts as waiting. A Codex that does not answer leaves the state unknown, never "approved". The next update approves them; until then, `probe doctor --fix` or `/hooks` in the app.
 - Claude Code sessions started from the Claude desktop app on a Mac are recorded by the Probe service again (tap 0.10.37). The app keeps Claude Code under `~/Library/Application Support/`, and the tap read a process's name from `ps` up to the first space, so the app's Claude Code read as `Application`: no session it ran had an owner, the service refused each with `no_owner`, and the session's own tap watch recorded it instead (an extra process per session that never noticed the app closing). On macOS a process is now also named by the file the kernel says it runs (`proc_pidpath`), which touches no file, so no privacy prompt.
