@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Comments X14 s10 (3/N): tighter comments in 4 more agent CLI files** (artifact enqueue, folder import landed count, upload units, classify). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Comments X14 s10 (2/N): tighter comments in 7 more agent CLI files** (write-mode precedence, write gate, folder import walk rows/index/evidence, importer agent confinement). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Comments X14 s10 (1/N): tighter comments in 9 agent CLI files** (capture off, charts, folder import plan/coverage/ledger, update spawn, version refresh, session capture state). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Restructure, updater regroup: `service/updater/` goes from 16 entries to 12.** The cycle, child, app-decision, install-switch and state pieces now live in `service/updater/cycle/`. Pure move, no behaviour change; nothing outside the package ran them by path.
