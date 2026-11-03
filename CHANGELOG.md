@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.379.0
+
 - **Every uv install and run of the CLI names a Python (`--python`), so a new Mac whose first Python is Homebrew 3.15 installs (T19 smoke).** Left to choose, uv took 3.15, which tiktoken<0.14 has no wheel for, and `uv tool run --from 'probe-research[all]==0.377.0'` stopped on "can't find Rust compiler". The CLI asks for the Python it runs on when that is 3.10-3.14, else 3.13 (`installs.get_python_request`; an update keeps the receipt's exact interpreter, also over a recorded request like "3.13", so uv never rebuilds an env in place on another 3.13, and retries a failed exact pin on 3.13, never on uv's own pick); the npx launcher (rides in the unpublished 0.15.0) asks for 3.13, as the desktop app does, and passes over a uv older than 0.4.20 (which cannot download CPython 3.13) for its pinned 0.13.1. uv downloads a managed 3.13 where none is installed. The commands Probe prints for a person carry it too.
 
 ## 0.378.0
