@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.376.0
+
 - **A new Mac's first install no longer stops at "uv is not installed".** The launcher puts uv in `~/.local/bin`, which a new Mac's PATH lacks, and the install looked for uv on PATH alone, so it refused with exit 2 before sign-in (since 0.335.0; seen on 0.371.0, 0.374.0 and 0.375.0). It now looks where updates look (PATH, the recorded copy, `~/.local/bin` and the other usual folders, Probe's own copy) and runs uv by its path.
 
 ## 0.375.0
