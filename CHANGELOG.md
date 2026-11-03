@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **The Probe daemon reads your request in the look it wakes, so a session's project is set in seconds, not minutes.** A daemon look used to stop just before the next request, so a session started with `/probe on` had its project set about 5 minutes after the request, after the agent's first runs were refused with `ProjectRequired`. Now a look ends with that request, and the one-time look that picks the session's project runs the first time a request waits that no look has shown yet (a look at the `/probe on` turn alone no longer uses it up), never held back by the daemon's gap between looks. The project lands about 20 s after the request; a run started sooner is still refused once.
 - Internal: the outbox's `status.json` keys have one definition, `StatusField` (a `StrEnum`) and the `WrittenStatus` / `QueueStatus` TypedDicts in `src/probe/sdk/delivery/status_fields.py`; the SDK, service and `shared/reads` readers and writers spell keys through them instead of string literals (`analytics/`, below `sdk/`, keeps literals). The file on disk is byte-for-byte the same and readers still tolerate keys an older release does not write. New guard `agent/tests/sdk/delivery/test_status_fields.py`. No behaviour change.
 
 ## 0.370.0
