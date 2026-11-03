@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `probe cli search` returns both halves of an opposite pair together (`probe capture on` / `off`, `probe session track` / `untrack`), so "do not capture my transcript" and "my sessions are not being captured" both show both and the agent chooses from their summaries; `not` no longer matches `probe notes`. `probe capture off` is never offered without `probe capture on`, and on a tie `on` comes first. A task that is only flags (`--run`, `--run --json`) lists the commands that take them all, ordered by the flags' words, or any of them when none takes all; flags no command takes find nothing.
+
 ## 0.383.0
 
 - `probe cli search` matches a flag in the task whole: "how do I use --no-capture" now finds `probe install` and `probe wizard` (which take it), and `--from-manifest` finds `probe artifact add`, instead of splitting the flag into words. Only a rare flag (taken by 1 to 10 commands) counts whole; a common one like `--json` counts as its words, so "upload a file --json" still finds `probe artifact add`. Typographic dashes (`—no-capture`) read as `--`.
