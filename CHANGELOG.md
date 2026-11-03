@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Internal: dropped two unused imports in `cli/connection.py` (ruff F401/F811) so the pre-push check passes. No behaviour change; `cli_spec.json` hash regenerated.
 - **Comments X14 s10 (3/N): tighter comments in 4 more agent CLI files** (artifact enqueue, folder import landed count, upload units, classify). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Comments X14 s10 (2/N): tighter comments in 7 more agent CLI files** (write-mode precedence, write gate, folder import walk rows/index/evidence, importer agent confinement). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Restructure, X13 leftovers (agent + tap 0.10.36): the transcript journal's `stage` is cut under 300 lines.** The loop that reads a batch's lines from the cursor is now `Journal._read_batch_lines` (116 lines; `stage` is 218). Same reads, same batches; the tap carries the same file. The session-marker module docstring now names `sdk/marker/` as the place to edit, so the hooks' `_session_marker.py` changes by comment only (plugin release).
