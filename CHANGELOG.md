@@ -2,9 +2,12 @@
 
 ## Unreleased
 
+## 0.378.0
+
 - **`finish()` waits until the server has STORED a run's data, and says what it refused (infra I15d, SDK half).** Queued metrics and steps-batch POSTs carry `X-Probe-Async-Ack: 1` (not to a server known to lack `ingest_async_ack`), so a server with the ingest queue may ack them once durable in its queue (202). A close the server holds until the run's queued data is stored (503 `data_pending`) is waiting, not failing: no attempt charged, no stall clock, nothing set aside, no stall report; the worker retries it after its Retry-After and records the server's pending points, and `finish()`'s line says "the server is still storing N point(s)" with no time cap. Once delivered, `finish()` reads the run until `ingest.is_caught_up` (normally one read) and raises `DeliveryIncomplete` (new outcome `data_refused`, the server's own sentence per refusal kind) for refusals on this attempt; `wait=False` reads nothing. `check_run` adds `pending_points` and `refusals`. A server without the queue, or a team off it (no `ingest` on the run read), behaves exactly as before.
 - **A launcher's `LOCAL_RANK=-1`, `WORLD_SIZE=-1` or `+2` no longer reaches the run's writer lease.** The shared rank reader took a sign since the rank-reader merge, so a negative value was sent where the server requires `local_rank >= 0` and `world_size >= 1`. It again accepts only plain ASCII digits, and the lease sends each field only when valid.
 
+- Internal: the structure guards' own helpers, the private-wheel build helpers and the terminal install-handoff test now follow the naming rules (verb-first functions, question booleans, patches on the defining module); the baseline is lowered by those entries. No behaviour change.
 - **Server-message vocabulary: new code `data_refused` (infra I15d).** The generated `probe.generated.client_messages` (and the tap's copy) list it: the server's sentence for a batch it accepted and refused once it applied it, served on the run read. Nothing in the SDK reads it yet.
 
 ## 0.377.0
