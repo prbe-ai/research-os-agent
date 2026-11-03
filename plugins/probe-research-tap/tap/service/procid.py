@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,12 +82,41 @@ def proc_ps(pid: int) -> Proc | None:
         ppid = int(tokens[0])
     except ValueError:
         return None
-    return Proc(
-        ppid,
-        " ".join(tokens[2:7]),
-        tokens[1].startswith("Z"),
-        frozenset({os.path.basename(tokens[7])}),
-    )
+    names = {os.path.basename(tokens[7])}
+    executable = get_executable_path(pid)
+    if executable:
+        names.add(os.path.basename(executable))
+    return Proc(ppid, " ".join(tokens[2:7]), tokens[1].startswith("Z"), frozenset(names))
+
+
+#: `PROC_PIDPATHINFO_MAXSIZE` (macOS `<sys/proc_info.h>`).
+_PATH_MAX = 4096
+
+
+def get_executable_path(pid: int) -> str | None:
+    """The file a process runs, from the macOS kernel (`proc_pidpath`); None
+    elsewhere or when it cannot be had. `ps`'s `args` cannot say where a path
+    with a space ends: the Claude app keeps Claude Code under `~/Library/
+    Application Support/`, whose first word is `Application`. No file is
+    touched, so no macOS privacy prompt."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import ctypes
+    except ImportError:  # a Python built without it
+        return None
+    for library in ("/usr/lib/libproc.dylib", "/usr/lib/libSystem.B.dylib"):
+        try:
+            pidpath = ctypes.CDLL(library).proc_pidpath
+        except (OSError, AttributeError):
+            continue
+        pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        pidpath.restype = ctypes.c_int
+        buffer = ctypes.create_string_buffer(_PATH_MAX)
+        if pidpath(pid, buffer, _PATH_MAX) <= 0:
+            return None
+        return buffer.value.decode("utf-8", "replace") or None
+    return None
 
 
 def _windows_parents() -> dict:
