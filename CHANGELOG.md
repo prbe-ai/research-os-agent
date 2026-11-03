@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A new Mac's first install no longer stops at "uv is not installed".** The launcher puts uv in `~/.local/bin`, which a new Mac's PATH lacks, and the install looked for uv on PATH alone, so it refused with exit 2 before sign-in (since 0.335.0; seen on 0.371.0, 0.374.0 and 0.375.0). It now looks where updates look (PATH, the recorded copy, `~/.local/bin` and the other usual folders, Probe's own copy) and runs uv by its path.
+
 ## 0.375.0
 
 - **One bootstrap for the Mac app: `probe service start --min-version N --json`.** It installs the CLI for good (at N or the newest release), points the Probe service's `runtime.json` at that install (never uv's throwaway copy, never an install still waiting to switch over), stops a service older than N and starts a current one, then prints `{outcome, service_version, api, caps, socket, message}`. Exit status by outcome: running 0, unavailable 1 (2 while an uninstall runs), confined 3 (no_new_privs, a sandboxed caller, 3 starts a minute), install_waiting 4 (the switch waits for a quiet machine; the service is left alone), unsupported 5 (Windows), busy 75 (an update or an action held the older service for 60 s). Every install entry (the wizard's configure, `probe daemon install`) now ends the same way, so an older service still running from before the install is replaced instead of kept.
