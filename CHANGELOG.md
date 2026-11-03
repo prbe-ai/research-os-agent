@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: a release no longer fails `publish_npm` re-publishing an unchanged launcher. The version check read `npm view`'s stderr warning (npm 11: `Unknown user config "always-auth"`) as the registry version and compared it as older, so it ran `npm publish` over 0.15.0 (run 41727713870); it now reads stdout only, accepts only a whole `X.Y.Z` answer, treats only `404 Not Found` as never published, and its error names npm's error, not the warning.
+
 ## 0.382.0
 
 - **`probe cli search "<task>"` finds the command for a task.** It prints up to 5 matches as JSON (`command`, `summary`), best first, from this CLI's own command tree: no sign-in, no network, no process started. Each command's name, summary and flag help are indexed, a word in the name counting most (per-field BM25, name 3x, summary 1.5x, flag help 1x). Commands this computer cannot run are left out: hidden ones, `probe import wandb` and `probe wandb import-hosted` without the `wandb` package, the daemon's own `probe daemon override|session|task`, and `probe install` where Probe does not install. A command declares such a need in one line (`@run_only_with(RunNeed.X)`, `cli/commands/run_conditions/`). `probe --help` now tells agents to search first; the daemon profile allows it (Claude Code, daemon plugin and pi guards), and the compiled wheel's smoke test runs it. `probe artifact add`'s summary now says it uploads a file, so a search for "upload a file" finds it.
