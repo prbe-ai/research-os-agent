@@ -7,7 +7,6 @@ from contextlib import nullcontext, suppress
 from pathlib import Path
 
 from .. import capture_gate
-from ..sanitizers import claude_code as sanitize
 from ..sanitizers.claude_code import call_models
 from ..transcripts import nesting_exceeds
 MEDIA_SPOOL_CAP_BYTES = 512 * 1024 * 1024
@@ -85,6 +84,7 @@ class StageMixin:
                 ).fetchone()[0]
             else:
                 extract = None
+                spool, room = {}, 0  # unread without `extract`; passed to the line reader
             # A lone event may use the whole ROUTE budget (the protocol's); a
             # packed batch may only use the packing target. A caller that lowers
             # `max_body_bytes` to exercise batching still gets the real solo
@@ -119,114 +119,13 @@ class StageMixin:
             models = _resume_call_models(state, path, sanitize, markers, end) if markers else None
             models_at_start = models.snapshot() if models is not None else None
             kept_models: list[dict | None] = []
-            with call_models(models) if models is not None else nullcontext(), path.open("rb") as handle:
-                handle.seek(end)
-                while True:
-                    # Written while Probe was off: read past, sent as nothing.
-                    skipped = bool(skip) and capture_gate.in_gap(skip, end)
-                    raw = handle.readline(MAX_SOURCE_LINE + 1)
-                    length = len(raw)
-                    if length > MAX_SOURCE_LINE:
-                        # Too long to read (D16): skipped to its newline and
-                        # said, never held, so the capture goes on. It used to
-                        # stop this session's capture for good.
-                        if not raw.endswith(b"\n"):
-                            length = _rest_of_line(handle, length)
-                        raw = b""
-                        if length is None:
-                            if historic:
-                                raise DeliveryPending(
-                                    "historical transcript has an incomplete trailing line"
-                                )
-                            break  # still being written: read it whole next pass
-                        retained = [] if skipped else [oversize_line_event(length)]
-                    else:
-                        if not raw:
-                            break
-                        if not raw.endswith(b"\n"):
-                            if historic:
-                                raise DeliveryPending(
-                                    "historical transcript has an incomplete trailing line"
-                                )
-                            break
-                        line = None
-                        try:
-                            if skipped:
-                                value = None
-                            else:
-                                line = json.loads(raw) if raw.strip() else None
-                                value = sanitize(line) if raw.strip() else None
-                            if value is not None and nesting_exceeds(value):
-                                value = None  # the redactor below would hit the recursion limit
-                        except (ValueError, UnicodeDecodeError):
-                            value = None
-                        except MemoryError:
-                            raise  # may pass; never drop a line for it
-                        except Exception:  # noqa: BLE001
-                            # A sanitizer that trips on one hostile or unforeseen
-                            # line costs that line, never the session: the cursor
-                            # never moves past an exception, so raising here would
-                            # stop this session's capture for good.
-                            value = None
-                        if read_title is not None and line is not None:
-                            named = read_title(line)
-                            if named is not None:
-                                # Kept beside the batch, never in it (`send_title`).
-                                # A /rename outranks the generated title lines that
-                                # keep following it.
-                                state["custom_title" if named[1] else "ai_title"] = named[0]
-                        retained = (
-                            value if isinstance(value, list) else ([] if value is None else [value])
-                        )
-                        if extract is not None and retained:
-                            # A shape the reader did not foresee costs the
-                            # line's images (placeholders), never the line.
-                            with suppress(ValueError, TypeError, KeyError, AttributeError, IndexError):
-                                room = _attach_pasted(extract(line), retained, spool, room)
-                    additions = [
-                        {"line_no": event_no + i, "raw": event} for i, event in enumerate(retained)
-                    ]
-                    if module is None:
-                        increment = len(json.dumps(additions, separators=(",", ":")).encode())
-                        solo = increment
-                    else:
-                        fragment_bytes, event_bytes = _record_bytes(additions)
-                        increment = fragment_bytes + (event_bytes if send_events else 0)
-                        # Events are optional per protocol-3 batch: a record
-                        # that must go alone is held to the budget by its
-                        # fragments, and goes without its events if need be.
-                        solo = fragment_bytes
-                    if size + increment > max_body_bytes:
-                        if not events:
-                            # NOTHING TO PACK IT BESIDE, so the packing target
-                            # does not apply -- only what the route will take.
-                            # Refusing here on `max_body_bytes` rejected batches
-                            # the server would have accepted, and did it
-                            # permanently: one such event stranded its whole
-                            # session on every retry forever.
-                            if solo > solo_limit and module is not None:
-                                # Rare, so exact: the estimate may be high.
-                                solo = _encoded_bytes(
-                                    [_fragment(module, event, version) for event in additions]
-                                )
-                            if solo > solo_limit:
-                                raise DeliveryPending(
-                                    "sanitized event exceeds the gateway batch budget; "
-                                    "source retained"
-                                )
-                        else:
-                            break
-                    events.extend(additions)
-                    event_no += len(additions)
-                    size += increment
-                    end += length
-                    lines += 1
-                    records += bool(additions)
-                    marks.append(_Mark(len(events), end, lines, event_no, size, records))
-                    kept_models.append(models.snapshot() if models is not None else None)
-                    # Bound reads even when the sanitizer drops everything.
-                    if end - state["source_byte_end"] >= 4 * 1024 * 1024:
-                        break
+            end, event_no, lines, records = self._read_batch_lines(
+                end=end, event_no=event_no, events=events, extract=extract, historic=historic,
+                kept_models=kept_models, lines=lines, marks=marks, max_body_bytes=max_body_bytes,
+                models=models, module=module, path=path, read_title=read_title, records=records,
+                room=room, sanitize=sanitize, send_events=send_events, size=size, skip=skip,
+                solo_limit=solo_limit, spool=spool, state=state, version=version,
+            )
             at_end = end == path.stat().st_size
             final = (
                 not events and end == state["source_byte_end"] and at_end and (finalize or historic)
@@ -335,6 +234,124 @@ class StageMixin:
             # with state; no source cursor can pass it until its receipt arrives.
             self._save(state)
             return encoded
+
+
+    def _read_batch_lines(
+        self, *, end, event_no, events, extract, historic, kept_models, lines, marks,
+        max_body_bytes, models, module, path, read_title, records, room, sanitize, send_events,
+        size, skip, solo_limit, spool, state, version,
+    ):
+        """Read the transcript from the cursor into this batch: its events, until the batch is full.
+        Returns (end, event_no, lines, records) where the read stopped."""
+        with call_models(models) if models is not None else nullcontext(), path.open("rb") as handle:
+            handle.seek(end)
+            while True:
+                # Written while Probe was off: read past, sent as nothing.
+                skipped = bool(skip) and capture_gate.in_gap(skip, end)
+                raw = handle.readline(MAX_SOURCE_LINE + 1)
+                length = len(raw)
+                if length > MAX_SOURCE_LINE:
+                    # Too long to read (D16): skipped to its newline and
+                    # said, never held, so the capture goes on. It used to
+                    # stop this session's capture for good.
+                    if not raw.endswith(b"\n"):
+                        length = _rest_of_line(handle, length)
+                    raw = b""
+                    if length is None:
+                        if historic:
+                            raise DeliveryPending(
+                                "historical transcript has an incomplete trailing line"
+                            )
+                        break  # still being written: read it whole next pass
+                    retained = [] if skipped else [oversize_line_event(length)]
+                else:
+                    if not raw:
+                        break
+                    if not raw.endswith(b"\n"):
+                        if historic:
+                            raise DeliveryPending(
+                                "historical transcript has an incomplete trailing line"
+                            )
+                        break
+                    line = None
+                    try:
+                        if skipped:
+                            value = None
+                        else:
+                            line = json.loads(raw) if raw.strip() else None
+                            value = sanitize(line) if raw.strip() else None
+                        if value is not None and nesting_exceeds(value):
+                            value = None  # the redactor below would hit the recursion limit
+                    except (ValueError, UnicodeDecodeError):
+                        value = None
+                    except MemoryError:
+                        raise  # may pass; never drop a line for it
+                    except Exception:  # noqa: BLE001
+                        # A sanitizer that trips on one hostile or unforeseen
+                        # line costs that line, never the session: the cursor
+                        # never moves past an exception, so raising here would
+                        # stop this session's capture for good.
+                        value = None
+                    if read_title is not None and line is not None:
+                        named = read_title(line)
+                        if named is not None:
+                            # Kept beside the batch, never in it (`send_title`).
+                            # A /rename outranks the generated title lines that
+                            # keep following it.
+                            state["custom_title" if named[1] else "ai_title"] = named[0]
+                    retained = (
+                        value if isinstance(value, list) else ([] if value is None else [value])
+                    )
+                    if extract is not None and retained:
+                        # A shape the reader did not foresee costs the
+                        # line's images (placeholders), never the line.
+                        with suppress(ValueError, TypeError, KeyError, AttributeError, IndexError):
+                            room = _attach_pasted(extract(line), retained, spool, room)
+                additions = [
+                    {"line_no": event_no + i, "raw": event} for i, event in enumerate(retained)
+                ]
+                if module is None:
+                    increment = len(json.dumps(additions, separators=(",", ":")).encode())
+                    solo = increment
+                else:
+                    fragment_bytes, event_bytes = _record_bytes(additions)
+                    increment = fragment_bytes + (event_bytes if send_events else 0)
+                    # Events are optional per protocol-3 batch: a record
+                    # that must go alone is held to the budget by its
+                    # fragments, and goes without its events if need be.
+                    solo = fragment_bytes
+                if size + increment > max_body_bytes:
+                    if not events:
+                        # NOTHING TO PACK IT BESIDE, so the packing target
+                        # does not apply -- only what the route will take.
+                        # Refusing here on `max_body_bytes` rejected batches
+                        # the server would have accepted, and did it
+                        # permanently: one such event stranded its whole
+                        # session on every retry forever.
+                        if solo > solo_limit and module is not None:
+                            # Rare, so exact: the estimate may be high.
+                            solo = _encoded_bytes(
+                                [_fragment(module, event, version) for event in additions]
+                            )
+                        if solo > solo_limit:
+                            raise DeliveryPending(
+                                "sanitized event exceeds the gateway batch budget; "
+                                "source retained"
+                            )
+                    else:
+                        break
+                events.extend(additions)
+                event_no += len(additions)
+                size += increment
+                end += length
+                lines += 1
+                records += bool(additions)
+                marks.append(_Mark(len(events), end, lines, event_no, size, records))
+                kept_models.append(models.snapshot() if models is not None else None)
+                # Bound reads even when the sanitizer drops everything.
+                if end - state["source_byte_end"] >= 4 * 1024 * 1024:
+                    break
+        return end, event_no, lines, records
 from .errors import (  # noqa: E402 -- pieces need each other; the front door loads this one first
     DeliveryPending,
     ReconciliationRequired,

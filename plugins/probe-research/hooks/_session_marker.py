@@ -31,13 +31,10 @@ answer from an abandoned one.
 STDLIB ONLY, AND PYTHON 3.9. This file is vendored into the plugin's hooks
 directory, where it executes under the SYSTEM python3 with no `probe` package
 importable — macOS still ships 3.9, so nothing newer than that may appear here.
-Two copies exist on purpose and must stay byte-identical:
-
-    src/probe/sdk/session_marker.py                     (canonical — edit here)
-    plugins/probe-research/hooks/_session_marker.py     (vendored — never edit)
-
-`make sync-session-marker` refreshes the copy, and tests/test_session_marker_parity.py
-fails CI whenever the two differ.
+This file is kept as pieces in src/probe/sdk/marker/ (edit there). `tools/vendor.py`
+joins them into src/probe/sdk/session_marker.py and the hooks' `_session_marker.py`,
+which must stay byte-identical: `make sync-session-marker sync-daemon-plugin` refreshes
+them, and tests/test_session_marker_parity.py fails CI whenever they differ.
 
 FAIL-SOFT THROUGHOUT. Nothing here may raise into a caller: the writer runs beside
 a research write that must survive a full disk, and the reader runs on a render
