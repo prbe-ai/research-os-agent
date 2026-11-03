@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **`run.log_hw()` with no `step` now sends no step, so its points are keyed and charted by the time they were logged, and a resumed run or a second rank no longer loses them.** It used to draw a hardware counter (0, 1, 2…) that every handle on a run restarted at 0, so a resumed process or a second rank logging the same series took the first writer's steps and the server dropped its points; the counter was also a third axis, neither time nor training step, about 29.7M steps from the collector's one-per-minute grid. Now each point's identity is its `wall_clock` (this call's time, unique within the process; give ranks their own dims, e.g. `rank=`), so it never collides with another handle's or the collector's points, and a series of manual points alone charts on time. Two points of one series at an equal explicit `wall_clock=` are one point (the first wins). An explicit `step=` is stored as given. Non-numeric `log_hw` values are still dropped with the same warning, which a non-`model` `log(..., step=None)` now gets too.
+- A run waiting for its session's project (0.371.0) no longer fails in a process with no home directory (a container running an arbitrary uid): it files its request to the Probe daemon under the SDK's stand-in home, as every other SDK path does, instead of raising `Could not determine home directory`.
 
 ## 0.371.0
 
