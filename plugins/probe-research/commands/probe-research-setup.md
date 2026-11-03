@@ -187,7 +187,8 @@ a capability that is configured but does nothing.
 ## Removing it
 
 ```bash
-probe wizard --action configure --no-capture              # stop capture (and the daemon), keep the plugin
+probe capture off                                         # session transcripts off; tracking and the MCP stay on
+probe capture on                                          # back on (a person approves; nothing written while off uploads)
 probe wizard --action configure --no-capture --uninstall  # stop capture AND remove the plugin
 probe wizard --action uninstall                           # remove Probe's plugins from the agents you pick, and sign this device out
 probe wizard --action logout                              # stop imports, revoke this token, clear local config

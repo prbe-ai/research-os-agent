@@ -61,6 +61,14 @@ beats it.
 ONLY written by the wizard (`npx probe-research`). `probe session status`
 reports it as `machine_default_state`.
 
+**Session transcripts, machine-wide**
+
+When the researcher wants this machine's sessions kept out of Probe while Probe
+itself stays on (tracking, search, the MCP), run `probe capture off`; `probe
+capture on` turns them back on (its approval link is the researcher's to
+click). Never `probe wizard --no-capture` for this. Off is a choice, not a
+fault: `probe status` says who turned it off and when.
+
 ## `.probe.config`:
 
 Sets what Probe may do with paths (gitignore syntax), whatever the state: a plain

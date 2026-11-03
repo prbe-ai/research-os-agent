@@ -141,6 +141,9 @@ class Action:
     #: Probe on this computer reads to one workspace (null: the whole team). Its
     #: `result` row's `actual` is `probe workspace limit --json`'s object.
     WORKSPACE_LIMIT = "workspace_limit"
+    #: `{"state": "on"|"off", "agents": [<agent>] | null}`: session transcripts on or
+    #: off (`probe capture`); a `result` row per agent, `actual` its `transcript_state`.
+    CAPTURE = "capture"
 
 
 ACTIONS = frozenset(
@@ -152,6 +155,7 @@ ACTIONS = frozenset(
         Action.UPDATE,
         Action.SESSION_DEFAULT,
         Action.WORKSPACE_LIMIT,
+        Action.CAPTURE,
     }
 )
 

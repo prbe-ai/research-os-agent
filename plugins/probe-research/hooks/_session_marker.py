@@ -154,6 +154,11 @@ _DOT_DEGRADED = "◐"  # ◐
 #: paid by `MAX_SEGMENT_CHARS` below, never by the project name.
 _LABEL_NO_CAPTURE = " " + _SEPARATOR + " not capturing session transcript: "
 
+#: The capture reason for transcripts turned off on purpose (`capture_state.TURNED_OFF_REASON`):
+#: a choice, so it renders as a plain note with the full dot, never as a fault.
+_CHOSEN_OFF_REASON = "turned off"
+_LABEL_TRANSCRIPTS_OFF = " " + _SEPARATOR + " transcripts off"
+
 #: The longest word in `probe.cli.capture_state.REASONS` (`interpreter too old`).
 #: A literal, because nothing of ours may be imported on the render path;
 #: `test_every_reason_in_the_closed_vocabulary_renders_whole_on_the_bare_line`
@@ -3317,7 +3322,9 @@ def message(state: dict | None, *, live: bool = False, tracking: bool = True) ->
     if live:
         text += _ACCENT_TEXT
     reason = _capture_reason(state) if tracking else ""
-    if reason:
+    if reason == _CHOSEN_OFF_REASON:
+        text += "; session transcripts are turned off"
+    elif reason:
         text += ", but not capturing session transcript: " + reason
     return text
 
@@ -4143,13 +4150,25 @@ def render(
     # about a session that is recording, and naming it for one that is not would
     # be an answer to a question nobody asked.
     reason = _capture_reason(state)
+    # Turned off on purpose: nothing is wrong, so the full dot and a plain note.
+    chosen_off = reason == _CHOSEN_OFF_REASON
+    if chosen_off:
+        reason = ""
     head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
     label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason, inline)
 
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
         # Tracking is on, nothing filed yet. State it without inventing a name.
+        if chosen_off:
+            return head + label_bare + _LABEL_TRANSCRIPTS_OFF
         return head + label_bare + _no_capture_clause(reason, label_bare)
+
+    if chosen_off:
+        room = _name_room(label_tracked) + len(_ACCENT_TEXT) - len(_LABEL_TRANSCRIPTS_OFF)
+        if room >= _MIN_SLUG_CHARS_DEGRADED:
+            return head + label_tracked + _elide(project, room) + _LABEL_TRANSCRIPTS_OFF
+        return head + label_bare + _LABEL_TRANSCRIPTS_OFF
 
     if not reason:
         # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves

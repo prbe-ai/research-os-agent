@@ -451,8 +451,9 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
         return {"running": False, "reason": OFF_REASON}
     if not os.path.exists(plugin_dir):
         return {"running": False, "reason": "not installed"}
-    if os.path.exists(os.path.join(plugin_dir, ".disabled")):
-        return {"running": False, "reason": "killswitch"}
+    marker = os.path.join(plugin_dir, ".disabled")
+    if os.path.exists(marker):
+        return {"running": False, "reason": AWAITING_REASON if _awaiting_install(marker) else TURNED_OFF_REASON}
     if _halted(plugin_dir):
         return {"running": False, "reason": "halted"}
 
@@ -475,6 +476,20 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
 
 #: `capture_state.OFF_REASON`: the session's switch reads `off`.
 OFF_REASON = "Probe is off"
+#: `capture_state.TURNED_OFF_REASON` / `AWAITING_REASON`: `.disabled` is a chosen off, or a
+#: sign-in's lock whose exact text is `capture_marker.AWAITING_CONFIRMATION` (pinned by a test).
+TURNED_OFF_REASON = "turned off"
+AWAITING_REASON = "awaiting install"
+_AWAITING_CONFIRMATION = "Awaiting confirmation in the Probe install wizard.\n"
+
+
+def _awaiting_install(marker: str) -> bool:
+    """`.disabled` is a sign-in's lock, not a chosen off (any other text, or none, is an off)."""
+    try:
+        with open(marker, encoding="utf-8") as handle:
+            return handle.read() == _AWAITING_CONFIRMATION
+    except (OSError, ValueError):
+        return False
 
 
 def _switched_off(session_id: str) -> bool:
