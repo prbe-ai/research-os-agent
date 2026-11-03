@@ -17,6 +17,7 @@
 
 ## 0.373.0
 
+- **Comments X14 s11 (1/N): tighter comments in 16 agent files** (folder import choices, classify chunked/passes, upload, walk sampling; transcript import discovery, roots, ledger, lane, upload flow; notes rewrite and targets; artifacts manifest, row checks, add command; project kind alias; service recorders). Comment-only: the comment checker is green on the diff and every file's syntax tree is unchanged; `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Comments X14 s10 (3/N): tighter comments in 4 more agent CLI files** (artifact enqueue, folder import landed count, upload units, classify). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Comments X14 s10 (2/N): tighter comments in 7 more agent CLI files** (write-mode precedence, write gate, folder import walk rows/index/evidence, importer agent confinement). Comment-only: checker green, per-file AST diff clean, `cli_spec.json` hash regenerated. Reaches users with the next CLI release.
 - **Restructure, X13 leftovers (agent + tap 0.10.36): the transcript journal's `stage` is cut under 300 lines.** The loop that reads a batch's lines from the cursor is now `Journal._read_batch_lines` (116 lines; `stage` is 218). Same reads, same batches; the tap carries the same file. The session-marker module docstring now names `sdk/marker/` as the place to edit, so the hooks' `_session_marker.py` changes by comment only (plugin release).
