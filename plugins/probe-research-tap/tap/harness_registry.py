@@ -113,6 +113,9 @@ MARKETPLACE_SOURCE_STRING = "string"
 MARKETPLACE_SOURCE_OBJECT = "object"
 MARKETPLACE_SOURCES = (MARKETPLACE_SOURCE_STRING, MARKETPLACE_SOURCE_OBJECT)
 
+#: The platforms `app_paths` may name (`sys.platform` values).
+APP_PLATFORMS = ("darwin", "linux")
+
 SUPPORTED_VERSION = 1
 
 
@@ -210,6 +213,10 @@ class Harness:
     #: hooks then record "this process runs session X", and a `probe` command
     #: finds its session by walking up to that process.
     process_title: str | None = None
+    #: Where a desktop app bundles this harness's command, per platform: absolute
+    #: (or `~/`) glob patterns, most preferred first (the ChatGPT app's Codex, the
+    #: Claude app's Claude Code). Asked only when PATH has no `binary`.
+    app_paths: Mapping[str, tuple[str, ...]] | None = None
 
     def can(self, capability: str) -> bool:
         """Whether this harness has a CAPABILITY_* (unknown means no)."""
@@ -354,6 +361,23 @@ def _capture(value: Any, where: str) -> Capture | None:
     return capture
 
 
+def _app_paths(value: Any, where: str) -> Mapping[str, tuple[str, ...]] | None:
+    """`{platform: [pattern, ...]}`, each pattern absolute or under `~/`, or null."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise RegistryError(f"{where} must be an object or null")
+    out: dict[str, tuple[str, ...]] = {}
+    for platform, patterns in value.items():
+        if platform not in APP_PLATFORMS:
+            raise RegistryError(f"{where} names an unknown platform {platform!r}")
+        for pattern in _tuple(patterns, f"{where}.{platform}"):
+            if not isinstance(pattern, str) or not (pattern.startswith("/") or pattern.startswith("~/")):
+                raise RegistryError(f"{where}.{platform} patterns must be absolute or start with ~/")
+        out[platform] = tuple(patterns)
+    return out
+
+
 def _str_or_none(value: Any, where: str) -> str | None:
     if value is not None and not isinstance(value, str):
         raise RegistryError(f"{where} must be a string or null")
@@ -436,6 +460,7 @@ def _harness(row: Any, index: int) -> Harness:
         hook_output=hook_output,
         session_id_prefix=_str_or_none(row.get("session_id_prefix"), f"{where}.session_id_prefix"),
         process_title=_str_or_none(row.get("process_title"), f"{where}.process_title"),
+        app_paths=_app_paths(row.get("app_paths"), f"{where}.app_paths"),
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None

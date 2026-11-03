@@ -77,7 +77,14 @@
       "reasoning_setting": "settings-json",
       "hook_output": "claude-json",
       "session_id_prefix": null,
-      "process_title": null
+      "process_title": null,
+      "app_paths": {
+        "darwin": [
+          "~/Library/Application Support/Claude/claude-code/*/*/claude.app/Contents/MacOS/claude",
+          "~/Library/Application Support/Claude-3p/claude-code/*/*/claude.app/Contents/MacOS/claude",
+          "~/Library/Application Support/Claude/claude-code/*/claude"
+        ]
+      }
     },
     {
       "id": "codex",
@@ -148,7 +155,16 @@
       "reasoning_setting": "config-toml",
       "hook_output": "claude-json",
       "session_id_prefix": null,
-      "process_title": null
+      "process_title": null,
+      "app_paths": {
+        "darwin": [
+          "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+          "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+          "~/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+          "/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
+          "/Applications/Codex.app/Contents/Resources/codex"
+        ]
+      }
     },
     {
       "id": "pi",
