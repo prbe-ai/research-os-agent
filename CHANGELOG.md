@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.381.0
+
 ## 0.380.0
 
 - **An update whose first try fails retries on Python 3.13, never on uv's own pick, and every uv command the CLI runs names the uv it found (HANDOFF_VERSION 4).** The frozen hand-off (stage 1 of every update, and the lifeboat) left the Python to uv after a failed pinned try, so on a Mac whose first Python is Homebrew 3.15 a retried update failed on "can't find Rust compiler". Its retries, and a first try with nothing pinned, now ask for `fallback_python` (`installs.PYTHON_REQUEST`, handed in by release code and written to the lifeboat's env.json); an env.json from an older release falls back to the hand-off's own `FALLBACK_PYTHON` (3.13), and v1-v3 copies pass the new key by. Nothing new crosses the exec. The in-place update, the legacy `probe-agent` takeover, `probe daemon install` and the debug bundle ran a bare `uv`, which a Finder-opened app's PATH may not resolve: they run the found uv by its path (`uv_finder.get_uv_executable`); `uv tool upgrade` keeps taking no `--python` (it keeps the env's interpreter, and a request there rebuilds the env in place). A guard test fails on any bare `uv` argv under `agent/src/probe`.
