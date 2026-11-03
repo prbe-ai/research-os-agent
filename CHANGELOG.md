@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Server-message vocabulary: new code `data_refused` (infra I15d).** The generated `probe.generated.client_messages` (and the tap's copy) list it: the server's sentence for a batch it accepted and refused once it applied it, served on the run read. Nothing in the SDK reads it yet.
+
 ## 0.377.0
 
 - **A terminal install runs on the Probe service, so it survives a closed terminal.** After the Review screen the wizard asks for the one browser approval itself and saves the keys, then hands the install to a current Probe service (`action.run configure`) and follows it under a spinner. The request carries exactly what the screens chose (the agents, the four capabilities, capture kept as found on the degraded screen, a changed Who records and the agents it moves). The service's install never opens a browser: a key still missing ends it before anything installs, and the terminal asks once more and sends it again. Ctrl-C during the approval stops the run; after the handoff it detaches ("Install keeps going; run `npx probe-research` to watch it."), and running the command again attaches to that same install, never to one the Mac app started. This computer's workspace, the import offer and the last screen stay in the terminal, after the install. No service, a confined machine, an agent's sandboxed shell, a checkout's CLI or an install still waiting to switch over installs in the terminal as before, with the saved keys (no second approval).

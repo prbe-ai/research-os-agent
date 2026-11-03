@@ -62,6 +62,7 @@ class MessageCode(_StrEnum):
 
     CLIENT_TOO_OLD = "client_too_old"
     WORKSPACE_REQUIRED = "workspace_required"
+    DATA_REFUSED = "data_refused"
     UPDATE_RECOMMENDED = "update_recommended"
     MAINTENANCE = "maintenance"
     INCIDENT = "incident"
