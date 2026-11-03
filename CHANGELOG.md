@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `probe cli search` matches a flag in the task whole: "how do I use --no-capture" now finds `probe install` and `probe wizard` (which take it), and `--from-manifest` finds `probe artifact add`, instead of splitting the flag into words. Only a rare flag (taken by 1 to 10 commands) counts whole; a common one like `--json` counts as its words, so "upload a file --json" still finds `probe artifact add`. Typographic dashes (`—no-capture`) read as `--`.
+
 - Internal: a release no longer fails `publish_npm` re-publishing an unchanged launcher. The version check read `npm view`'s stderr warning (npm 11: `Unknown user config "always-auth"`) as the registry version and compared it as older, so it ran `npm publish` over 0.15.0 (run 41727713870); it now reads stdout only, accepts only a whole `X.Y.Z` answer, treats only `404 Not Found` as never published, and its error names npm's error, not the warning.
 
 ## 0.382.0
