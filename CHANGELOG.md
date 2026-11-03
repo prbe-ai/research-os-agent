@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.375.0
+
 - **One bootstrap for the Mac app: `probe service start --min-version N --json`.** It installs the CLI for good (at N or the newest release), points the Probe service's `runtime.json` at that install (never uv's throwaway copy, never an install still waiting to switch over), stops a service older than N and starts a current one, then prints `{outcome, service_version, api, caps, socket, message}`. Exit status by outcome: running 0, unavailable 1 (2 while an uninstall runs), confined 3 (no_new_privs, a sandboxed caller, 3 starts a minute), install_waiting 4 (the switch waits for a quiet machine; the service is left alone), unsupported 5 (Windows), busy 75 (an update or an action held the older service for 60 s). Every install entry (the wizard's configure, `probe daemon install`) now ends the same way, so an older service still running from before the install is replaced instead of kept.
 - **The Probe service runs `login` (tap 0.10.38).** `action.run login` is `probe wizard --action login --yes --json`: a `device_prompt` while the browser approval waits (`action.cancel` stops it there), then `done`. The Mac app's Sign in can go through the service.
 - **npm launcher (still 0.15.0, not yet published).** With no uv on the machine it installs uv 0.13.1, the Mac app's pin, from an installer saved to a private file and run only when its sha256 matches, instead of `curl | sh`. The pipx route is gone (a pipx run ended in the CLI's "install uv" refusal anyway), `probe --version` gets 5 s, and the floor is 0.374.0 (0.147.0 where Probe's compiled CLI has no build, which keeps running the newest release that installs there).
