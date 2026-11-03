@@ -180,6 +180,7 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "doctor",
   "paper find",
   "docs",
+  "cli search",
   "feedback send",
   "approvals",
   "outbox status",

@@ -1582,10 +1582,11 @@ def daemon_allows_agent(matched: str) -> bool:
 #: person and labels it as from an agent session, never as the researcher.
 #: `session owed` reads the session's own owed ledger (notes parity N3); the
 #: plugin's end-of-turn hook runs it, and the agent may too. `session home show`
-#: prints where this session's runs go, as `session status` does.
+#: prints where this session's runs go, as `session status` does. `cli search`
+#: searches this CLI's own commands, on this computer.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "session send", "ignore check", "run expect", "doctor", "paper find",
-     "docs", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
+     "docs", "cli search", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
      "daemon status", "whoami", "context list", "wandb discover", "wandb key status",
      "update", "status", "flush", "service status", "service start", "service stop", "service check-now",
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
