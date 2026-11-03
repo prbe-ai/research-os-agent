@@ -133,6 +133,8 @@ class Action:
 
     CONFIGURE = "configure"
     RECORDER = "recorder"
+    #: Sign this computer in: one browser approval (`device_prompt`, cancellable), no install.
+    LOGIN = "login"
     LOGOUT = "logout"
     UNINSTALL = "uninstall"
     UPDATE = "update"
@@ -150,6 +152,7 @@ ACTIONS = frozenset(
     {
         Action.CONFIGURE,
         Action.RECORDER,
+        Action.LOGIN,
         Action.LOGOUT,
         Action.UNINSTALL,
         Action.UPDATE,
