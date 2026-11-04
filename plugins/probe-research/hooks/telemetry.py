@@ -7,7 +7,7 @@ One event per funnel step, so drop-off says which fix is needed
     plugin.session_started   SessionStart: plugin installed & running
     plugin.mcp_used          first probe-research MCP tool call this session
     plugin.skill_invoked     a research-tracking skill fired (which one)
-    plugin.probe_write       a `probe` CLI write ran (entity, verb, outcome)
+    plugin.probe_write       a `probe` CLI write ran (entity, verb)
     plugin.session_summary   SessionEnd: the whole funnel as booleans
 
 Contract (mirrors version_check.py, but stricter — this hook has no user-visible
@@ -102,6 +102,10 @@ SEND_TIMEOUT = _core.SEND_TIMEOUT
 ME_CACHE_TTL = _core.ME_CACHE_TTL
 DEFAULT_BASE = _core.DEFAULT_BASE
 STATE_DIR = "/tmp/probe-telemetry"  # per-session funnel flags; pruned after 2 days
+
+#: The `surface` every plugin event carries: one value of the closed list in
+#: contracts/probe_contracts/analytics/surfaces.json (pinned by test_contracts_analytics.py).
+SURFACE = "plugin"
 
 EVENT_SESSION_STARTED = "plugin.session_started"
 EVENT_MCP_USED = "plugin.mcp_used"
@@ -356,23 +360,6 @@ def match_probe_writes(command: str) -> list[tuple[str, str]]:
     return writes
 
 
-def bash_outcome(tool_response) -> str:
-    """success | error | unknown, defensively — the response shape is not ours."""
-    if not isinstance(tool_response, dict):
-        return "unknown"
-    if tool_response.get("interrupted"):
-        return "error"
-    for key in ("exit_code", "exitCode", "code", "returnCode"):
-        v = tool_response.get(key)
-        if isinstance(v, int):
-            return "success" if v == 0 else "error"
-    if tool_response.get("is_error") is True:
-        return "error"
-    if tool_response.get("is_error") is False:
-        return "success"
-    return "unknown"
-
-
 # ---------------------------------------------------------------------------
 # Emission
 # ---------------------------------------------------------------------------
@@ -404,9 +391,9 @@ def spawn_sender(events: list[dict]) -> None:
 def build_batch(events: list[dict], ident: dict, pv: str | None, cv: str | None) -> list[dict]:
     """Enrich observed events into PostHog batch entries — via the shared core,
     so property names can never drift from the CLI's `wizard.*`/`backfill.*`
-    events or app/core/analytics.py."""
+    events or app/core/analytics.py. Every event says it came through the plugin (`surface`)."""
     return _core.build_batch(
-        events,
+        [{**event, "properties": {**(event.get("properties") or {}), "surface": SURFACE}} for event in events],
         ident,
         client_kind="plugin",
         lib="probe-plugin",
@@ -506,7 +493,6 @@ def handle_post_tool(payload: dict) -> None:
         elif tool_name == "Bash":
             writes = match_probe_writes(tool_input.get("command") or "")
             if writes:
-                outcome = bash_outcome(payload.get("tool_response"))
                 prior = state.get("writes", 0)
                 state["writes"] = prior + len(writes)
                 changed = True
@@ -518,7 +504,6 @@ def handle_post_tool(payload: dict) -> None:
                                 "session_id": session_id,
                                 "entity_type": entity,
                                 "verb": verb,
-                                "outcome": outcome,
                                 "via": "cli",
                             },
                         }
