@@ -70,6 +70,12 @@ CREDENTIAL_ENV = frozenset(
 )
 #: `base_url` reaches the child as this variable (`probe.sdk.settings.settings.resolve`).
 BASE_URL_ENV = "PROBE_BASE_URL"
+#: `1` on a child the Probe service starts for a FENCED caller (a sandboxed agent, another network
+#: namespace: `policy.confined`), else `0`: `action.run` sets it, and `cli.run` for a command it
+#: runs. Never the caller's: not in CONTEXT_ENV, so a request's `context` cannot name it.
+#: `probe uninstall` reads it (`probe.cli.install.uninstall.run`): a fenced caller never discards
+#: unsent research, and never forces.
+CALLER_FENCED_ENV = "PROBE_CALLER_FENCED"
 MAX_CONTEXT_VALUE = 4096
 
 #: `hooks.run`'s `lane`s and the hook event each one serves: `hooks/dispatch.py`

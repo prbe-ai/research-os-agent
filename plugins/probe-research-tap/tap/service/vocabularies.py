@@ -158,6 +158,10 @@ class Action:
     #: `{"state": "on"|"off", "agents": [<agent>] | null}`: session transcripts on or
     #: off (`probe capture`); a `result` row per agent, `actual` its `transcript_state`.
     CAPTURE = "capture"
+    #: `probe doctor` (never `--fix`): one `result` row, `actual` `{"output", "truncated"}`.
+    DOCTOR = "doctor"
+    #: `{"app_version": <str> | null}`: `probe doctor --bundle --send --json`'s object as the `result` row's `actual`.
+    DEBUG_LOG = "debug_log"
 
 
 ACTIONS = frozenset(
@@ -171,6 +175,8 @@ ACTIONS = frozenset(
         Action.SESSION_DEFAULT,
         Action.WORKSPACE_LIMIT,
         Action.CAPTURE,
+        Action.DOCTOR,
+        Action.DEBUG_LOG,
     }
 )
 
