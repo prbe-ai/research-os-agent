@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **The daemon's reader and writer no longer poll: an ask wakes them the moment it is filed.** Each daemon process watches its runs' files with the operating system's file events (inotify on Linux, through the standard library; FSEvents and ReadDirectoryChangesW through `watchdog`, now in the `daemon` extra for macOS and Windows), so a `probe ask`, a `probe ask --writer` request, the SDK's project request, a `/probe` switch, an approval answer and a hand-over ask are taken at once instead of at the next 2 s tick (or up to 10 s for an idle run, and always 2 s for a worker process). New transcript lines bring a look at most every 2 s, as before. Timed rules (the 120 s queue age, the writer's least gap, the 60 s request and run-event gaps, backoffs, the reader's check-in, an open ask's 10-minute limit, request timeouts) wake the run at their own deadline. The only timer left is a 60 s heartbeat (the lease renews then); a running writer run re-reads the switch at it too, so `/probe inline` stops it within 60 s even with no file event, and at once with one. A filesystem that sends no events (a network mount) is found by a self-test at start or at the next heartbeat, and that process watches with a 1 s stat pass instead, said once in its log.
+- **A second `probe ask --writer` request waits 60 s since the last request run, no longer the writer's 300 s gap.**
+
 ## 0.401.0
 
 - **The daemon writer no longer indexes a run's new events.** The writer event index (a cheap model writing one line per step for the writer to open events from, daemon cost round 5) is removed: its bench cost tied the raw events and many of its calls failed under load. Every writer run reads its new events as they are. `PROBE_DAEMON_WRITER_EVENTS` and `PROBE_COMPANION_INDEX_MODEL` do nothing now, and a session store's saved `events` setting is ignored.
