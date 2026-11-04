@@ -99,9 +99,13 @@ class Cap:
     #: app's own updater did. An older service launched a hidden copy of the
     #: app instead (`--background-update`) and knows none of these.
     UPDATE_APP = "update.app"
+    #: The service reads settings.json and makes it true (plan app-never-waits): an app that sees this
+    #: writes a setting to the file and never waits on an action for it. An older service would leave
+    #: the file unread, so the app sends today's `action.run` instead.
+    SETTINGS_KEEPER = "settings.keeper"
 
 
-CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP})
+CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER})
 
 
 class NotesMode:
