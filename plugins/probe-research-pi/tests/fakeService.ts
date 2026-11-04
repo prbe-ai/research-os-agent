@@ -47,7 +47,11 @@ export function denial(reason: string): Record<string, unknown> {
   });
 }
 
-export async function fakeService(socket: string, behaviour: () => Behaviour): Promise<FakeService> {
+export async function fakeService(
+  socket: string,
+  behaviour: (request: Record<string, unknown>) => Behaviour,
+  options: { caps?: string[] } = {},
+): Promise<FakeService> {
   rmSync(socket, { force: true });
   const requests: Record<string, unknown>[] = [];
   const open = new Set<Socket>();
@@ -64,10 +68,11 @@ export async function fakeService(socket: string, behaviour: () => Behaviour): P
         buffer = buffer.slice(at + 1);
         requests.push(request);
         if (request.method === "service.hello") {
-          conn.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { api: 1, state: "running" } }) + "\n");
+          const result = { api: 1, state: "running", ...(options.caps ? { caps: options.caps } : {}) };
+          conn.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n");
           continue;
         }
-        const told = behaviour();
+        const told = behaviour(request);
         if ("silent" in told) continue;
         conn.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, ...told }) + "\n");
       }

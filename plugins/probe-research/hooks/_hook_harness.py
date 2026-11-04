@@ -6,6 +6,9 @@ sync-harnesses` puts in this folder. Every hook that used to answer
 `"codex" if ... else "claude_code"` asks here instead.
 
 How the harness is told apart, in order:
+  0. `PROBE_HOOK_HARNESS`, which only the Probe service sets (it drops a caller's): the
+     harness it verified for an event it runs from an extension (pi), under Claude
+     Code's plugin root;
   1. `PROBE_AGENT`, which the hook wrappers in routes.json export, when it names
      a hook-plugin harness;
   2. the harness's own plugin-root variable (`CLAUDE_PLUGIN_ROOT` is Claude
@@ -88,11 +91,21 @@ def _names(raw: dict) -> list:
     return [raw["id"], *(alias.lower() for alias in raw.get("aliases") or [])]
 
 
+#: The harness the Probe service verified for an event it runs (`hooks.run` v2).
+VERIFIED_ENV = "PROBE_HOOK_HARNESS"
+
+
 def current(env=None) -> Row:
     """The harness row for this hook's process."""
     values = os.environ if env is None else env
     document = _document()
     rows = document["harnesses"]
+    # Set by the Probe service alone (a caller's own is dropped): the harness it
+    # verified for a proxied event, whose routes run under Claude Code's root.
+    verified = (values.get(VERIFIED_ENV) or "").strip().lower()
+    for raw in rows:
+        if verified and raw["id"] == verified:
+            return Row(raw)
     wanted = (values.get("PROBE_AGENT") or "").strip().lower()
     named = next((raw for raw in rows if wanted and wanted in _names(raw)), None)
     if named is not None and named.get("family") == "hook-plugin":

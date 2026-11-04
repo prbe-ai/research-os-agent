@@ -71,6 +71,9 @@ class Method:
     #: service that event's record-keeping routes, to run once by its id
     #: (plan D36): `hooks.queue`.
     HOOKS_QUEUE = "hooks.queue"
+    #: pi's extension applied (or could not apply) an answer of `hooks.run` v2 that named a
+    #: delivery receipt: its daemon messages count as shown only now (`hooks.ack`).
+    HOOKS_ACK = "hooks.ack"
     #: The tap asks the service to record a session itself (plan A2): register
     #: it, and run its recorder on a thread here instead of a `tap watch`.
     SESSION_RECORD = "session.record"
@@ -139,6 +142,7 @@ METHODS = frozenset(
         Method.HOOKS_HOST,
         Method.HOOKS_RUN,
         Method.HOOKS_QUEUE,
+        Method.HOOKS_ACK,
         Method.SESSION_RECORD,
         Method.SESSION_RECORDING,
         Method.SESSION_FINISH,

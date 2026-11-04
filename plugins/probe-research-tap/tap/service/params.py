@@ -13,6 +13,8 @@ from .env import (
     HOOK_EVENT_ID_LEN,
     HOOK_LANES,
     HOOK_PROXY_V,
+    HOOK_PROXY_V2,
+    HOOK_REPLY_ACTIONS,
     HOOK_ROUTES_SERVICE,
     HOOK_WAIT_MS,
     MAX_CONTEXT_VALUE,
@@ -277,6 +279,67 @@ def need_hook_proxy(values: dict) -> dict:
     return {**request, "env": need_env(values), "timeout_s": timeout / 1000.0}
 
 
+def need_hook_proxy_v2(values: dict) -> dict:
+    """`hooks.run {routes: "service", v: 2}`'s values, checked (pi's extension,
+    `service/hooks/proxy/DESIGN.md` §6). As v1, but `event` is the extension's
+    own name (lowercase and `_`: `tool_call`), `event_id` (32 lowercase hex)
+    names it for a delivery receipt, and `reply` must be `actions`
+    (HOOK_REPLY_ACTIONS): the answer carries what to do with it.
+
+    -> `{harness, event, payload (dict), env, cwd, timeout_s, event_id, v}`."""
+    if values.get("reply") != HOOK_REPLY_ACTIONS:
+        raise invalid_params(f"reply must be {HOOK_REPLY_ACTIONS!r}")
+    request = _need_extension_fields(values)
+    event_id = values.get("event_id")
+    if event_id is not None and not _is_event_id(event_id):
+        raise invalid_params(f"event_id must be {HOOK_EVENT_ID_LEN} lowercase hex digits")
+    timeout = values.get("timeout_ms", HOOK_WAIT_MS)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= MAX_HOOK_WAIT_MS:
+        raise invalid_params(f"timeout_ms must be an integer from 1 to {MAX_HOOK_WAIT_MS}")
+    return {**request, "env": need_env(values), "timeout_s": timeout / 1000.0, "event_id": event_id}
+
+
+def _need_extension_fields(values: dict) -> dict:
+    """The fields a v2 request and a v2 queue file share: `{v, harness, event, payload (dict), cwd}`."""
+    if values.get("routes") != HOOK_ROUTES_SERVICE:
+        raise invalid_params(f"routes must be {HOOK_ROUTES_SERVICE!r}")
+    if values.get("v") != HOOK_PROXY_V2 or isinstance(values.get("v"), bool):
+        raise invalid_params(f"v must be {HOOK_PROXY_V2}")
+    harness = values.get("harness")
+    if not is_agent_id(harness):
+        raise invalid_params("harness must be a harness registry id")
+    event = values.get("event")
+    if (not isinstance(event, str) or not 0 < len(event) <= MAX_HOOK_EVENT_NAME or not event.isascii()
+            or not event[0].isalpha() or not all(c.islower() or c == "_" for c in event)):
+        raise invalid_params(f"event must be the extension's event name (lowercase and _, at most {MAX_HOOK_EVENT_NAME})")
+    payload = values.get("payload")
+    if not isinstance(payload, str) or len(payload.encode("utf-8", "surrogatepass")) > MAX_HOOK_QUEUE_ITEM:
+        raise invalid_params(f"payload must be the event as a JSON string of at most {MAX_HOOK_QUEUE_ITEM} bytes")
+    try:
+        parsed = json.loads(payload)
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        raise invalid_params("payload must hold a JSON object")
+    return {"v": HOOK_PROXY_V2, "harness": harness, "event": event, "payload": parsed, "cwd": _need_path(values, "cwd")}
+
+
+def need_hook_ack(values: dict) -> dict:
+    """`hooks.ack`'s values: `{receipt, shown}` -- the extension applied (or could
+    not apply) an answer whose `receipt` action named this id. -> the same, checked."""
+    receipt = values.get("receipt")
+    if not _is_event_id(receipt):
+        raise invalid_params(f"receipt must be {HOOK_EVENT_ID_LEN} lowercase hex digits")
+    shown = values.get("shown")
+    if not isinstance(shown, bool):
+        raise invalid_params("shown must be true or false")
+    return {"receipt": receipt, "shown": shown}
+
+
+def _is_event_id(value: object) -> bool:
+    return isinstance(value, str) and len(value) == HOOK_EVENT_ID_LEN and all(c in "0123456789abcdef" for c in value)
+
+
 def need_hook_proxy_queue(values: dict) -> dict:
     """A hook shim's queue file (v1, `service/hooks/proxy/DESIGN.md`): the shim
     found no service to ask and wrote the event into `paths.hook_queue_dir()`
@@ -290,7 +353,8 @@ def need_hook_proxy_queue(values: dict) -> dict:
         or any(c not in "0123456789abcdef" for c in event_id)
     ):
         raise invalid_params(f"id must be {HOOK_EVENT_ID_LEN} lowercase hex digits")
-    request = _need_proxy_fields(values)
+    # A v2 file is an extension's (pi's) event, written when no service took it (DESIGN.md §7).
+    request = _need_extension_fields(values) if values.get("v") == HOOK_PROXY_V2 else _need_proxy_fields(values)
     env = values.get("env")
     if not isinstance(env, dict) or len(env) > MAX_HOOK_QUEUE_ENV or not all(
         isinstance(k, str) and k and "=" not in k and "\0" not in k and isinstance(v, str) and "\0" not in v

@@ -28,7 +28,7 @@ import type { AgentActivityOutcome, SessionShutdownEvent } from "@earendil-works
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { newAskerState, QuestionAsker, feedbackUnsent, spawnFeedbackFlush, type ApprovalsDeps, type AskerState } from "./core/approvals.js";
-import { guardToolCall, sessionInlineReadOnly, sessionIsInline } from "./guard.js";
+import { guardToolCall, PiTool, resolveLikePi, sessionInlineReadOnly, sessionIsInline } from "./guard.js";
 import {
   cliHasInlineBridge,
   forgetInlineShown,
@@ -69,6 +69,8 @@ import { pythonSeen, resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } f
 import { ensureService, lookupServiceSocket } from "./core/service.js";
 import { packageVersion } from "./packageVersion.js";
 import { guardViaService } from "./serviceGuard.js";
+import { answeredEffects, Forwarder, freshForwardState, ranToEnd, showNotices, wasAccepted, type ForwardState } from "./forwarding.js";
+import { ForwardedEvent, piConfigRoot } from "./serviceForward.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
 import { teamItemsHidden } from "./core/workspaceLimit.js";
@@ -250,6 +252,8 @@ export interface SessionState {
   current: { sessionId: string | null };
   /** Whose Probe MCP connection's tools are declared now (a session id), or none. */
   mcp: { declared: string | null };
+  /** This turn's choice between pi's own code and the Probe service (`forwarding.ts`, PR 7). */
+  forward: ForwardState;
 }
 
 /**
@@ -281,6 +285,7 @@ function freshSession(): SessionState {
     questions: newAskerState(),
     current: { sessionId: null },
     mcp: { declared: null },
+    forward: freshForwardState(),
   };
 }
 
@@ -356,6 +361,18 @@ function askServiceSocket(s: SessionState, runtime: TapRuntime): void {
     service.socket = socket;
     if (socket) logLine(`probe service: the guard asks the service at ${socket}`);
   });
+}
+
+/** At most this long, a forwarded session start waits for the socket lookup it needs. */
+const SOCKET_WAIT_MS = 1500;
+
+/** The service's socket, looked up now if unknown (bounded): a forwarded session start needs it. */
+async function waitForSocket(s: SessionState, runtime: TapRuntime): Promise<void> {
+  const found = await Promise.race([
+    lookupServiceSocket(runtime, { execFile: realTrackingExecFile, env: process.env, log: logLine }),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), SOCKET_WAIT_MS).unref?.()),
+  ]);
+  if (found) s.service.socket = found;
 }
 
 /** This package's version, for the service's `service.hello`. */
@@ -662,6 +679,14 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // Read once: the files ship with the package and only change with it.
   const daemonSkills = readDaemonSkills(resourceRoot);
   const asker = new QuestionAsker(s.questions);
+  const forwarder = new Forwarder({
+    state: s.forward, env: process.env, socket: () => s.service.socket, clientVersion: PACKAGE_VERSION, log: logLine,
+    // The one thing a forwarded turn does itself when no service answers: start one.
+    startService: () => {
+      const runtime = resolveTapRuntime(tapRuntimeDeps());
+      if (runtime && checkPairing(process.env).paired) ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });
+    },
+  });
   let active = false;
 
   const tapRuntimeDeps = (): TapRuntimeDeps => ({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir: resourceRoot });
@@ -928,9 +953,6 @@ export function prepareExtension(env: ImplEnv): Candidate {
     await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
     // A resumed session's agent hears again that Probe is inline (`/probe inline`).
     if (sessionId && event.reason === "resume") forgetInlineShown(sessionId);
-    // The server's notices, every start, `/reload` included (the ledger keeps each to once): never
-    // with Probe `off` (no Probe calls), and never awaited.
-    if (!probeIsOff(s)) void startServerNotices(ctx);
 
     if (probeIsOff(s)) {
       // `off` means no Probe calls and nothing injected. Leaving this out was
@@ -967,9 +989,26 @@ export function prepareExtension(env: ImplEnv): Candidate {
         ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });
       }
     }
-    // Feedback for the Probe team the researcher said yes to and that was not
-    // sent yet (offline, or the dialog's own send failed). Not under `off`.
-    if (!probeIsOff(s) && feedbackUnsent(realApprovalsDeps())) spawnFeedbackFlush(realTeamNoteSyncDeps());
+    // THE SERVICE'S SESSION START (PR 7): on a machine that moved pi to the Probe service, its
+    // SessionStart routes give this session's context (every turn's prompt gets it) and the
+    // server's notices, and flush unsent feedback; otherwise (or when it does not take the
+    // event) this extension does the last two itself, as before.
+    const startRuntime = !probeIsOff(s) && !s.service.socket && forwarder.isMarked() ? resolveTapRuntime(tapRuntimeDeps()) : null;
+    if (startRuntime) await waitForSocket(s, startRuntime);
+    forwarder.beginTurn(sessionId, probeIsOff(s));
+    const started = await forwarder.send(ForwardedEvent.SessionStart, ctx, { reason: event.reason });
+    if (started !== null) {
+      // A forwarded turn: the service's routes give the context and the notices; nothing runs here.
+      if (sessionId && wasAccepted(started)) forwarder.keepContext(sessionId, answeredEffects(started));
+      showNotices(ctx, answeredEffects(started));
+    } else if (!probeIsOff(s)) {
+      // The server's notices, every start, `/reload` included (the ledger keeps each to once): never
+      // with Probe `off` (no Probe calls), and never awaited.
+      void startServerNotices(ctx);
+      // Feedback for the Probe team the researcher said yes to and that was not
+      // sent yet (offline, or the dialog's own send failed). Not under `off`.
+      if (feedbackUnsent(realApprovalsDeps())) spawnFeedbackFlush(realTeamNoteSyncDeps());
+    }
 
     // Probe MCP read tools: entirely independent of the capture daemon below
     // (a separate credential — mcp_token, never the tap's ingest/device
@@ -1111,6 +1150,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
       mcpConnection.client.close().catch((err) => logLine(`session_shutdown(${event.reason}): Probe MCP close failed: ${err instanceof Error ? err.message : String(err)}`));
     }
     logLine(`session_shutdown(${event.reason}): stopped capture for ${sessionId}`);
+    // The service's SessionEnd routes (record-keeping); a reload returned above, never an end (D28).
+    await forwarder.send(ForwardedEvent.SessionShutdown, ctx, { reason: event.reason });
   };
 
   // THE DAEMON PROFILE'S SKILLS. pi asks for extra resource paths right after
@@ -1133,6 +1174,38 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // at the turn where recording changes hands -- see daemonNotice.ts. Both
   // belong to the AGENT profile only: in the daemon profile the prompt is the
   // lean set and the model is told nothing about the daemon (profile.ts).
+  /**
+   * The turn's prompt through the service (PR 7, D62): its prompt routes give this turn's
+   * messages (daemon reads, inline and daemon notices, the parent question), with no consent
+   * parsed; the session-start context goes into the prompt. pi keeps the person's dialogs,
+   * its idle poller and the team note. Null: the service did not take it (pi's own code runs).
+   */
+  async function forwardPrompt(event: any, ctx: any, sessionId: string, base: string): Promise<{ systemPrompt: string; message: string | null } | null> {
+    if (!forwarder.hasContext(sessionId)) {
+      // Its record-keeping was queued at the session start already: this asks only for the context.
+      const late = await forwarder.send(ForwardedEvent.SessionStart, ctx, { reason: "startup" }, false);
+      if (wasAccepted(late)) forwarder.keepContext(sessionId, answeredEffects(late));
+    }
+    await askHeldQuestions(ctx, sessionId, true);
+    const answer = await forwarder.send(ForwardedEvent.BeforeAgentStart, ctx, { prompt: event.prompt, agent_dir: piConfigRoot(process.env) });
+    if (!wasAccepted(answer)) return null;
+    const effects = answeredEffects(answer);
+    const parts = [base, forwarder.getContext(sessionId), ...(effects?.systemPrompt ?? [])].filter(Boolean);
+    showNotices(ctx, effects);
+    // The service's routes asked the parent question and told the agent about the daemon this turn.
+    s.probe.parentAsk = null;
+    s.probe.lastTurnInDaemon = s.probe.state === ProbeState.Daemon;
+    if (s.probe.state === ProbeState.Daemon && inDaemonProfile(s, sessionId)) tellResearcherAboutDaemon(s, ctx, sessionId);
+    try {
+      if (mailboxFor(sessionId).served() || heldQuestionsBoardExists()) startReadsPoller(ctx);
+    } catch (err) {
+      logLine(`reads at prompt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Acked once pi has the result (after this handler returns): its messages count as shown then.
+    if (effects?.receipts.length) setImmediate(() => void forwarder.settle(effects, true));
+    return { systemPrompt: parts.join("\n\n"), message: effects?.messages.length ? effects.messages.join("\n\n") : null };
+  }
+
   const onBeforeAgentStart: EventHandler = async (event, ctx) => {
     // Not awaited: the prompt must not wait on a spawn.
     void startPendingCapture(ctx, "before_agent_start");
@@ -1143,6 +1216,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     if (sessionId && ctx && s.probe.state !== ProbeState.Full && inDaemonProfile(s, sessionId) && sessionIsInline(sessionId)) {
       await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
     }
+    forwarder.beginTurn(sessionId, probeIsOff(s) || trackingOffFor(s, sessionId));
     if (trackingOffFor(s, sessionId)) {
       // Capture already started above; tracking adds nothing: no package
       // skill, no Probe MCP tool, nothing injected into the prompt.
@@ -1164,6 +1238,16 @@ export function prepareExtension(env: ImplEnv): Candidate {
     }
     if (probeIsOff(s)) return;
     let systemPrompt = event.systemPrompt;
+    if (sessionId && forwarder.isOn(sessionId)) {
+      // A forwarded turn: the service builds the prompt's additions (the team note included); one
+      // it did not answer goes on with no change.
+      const forwarded = await forwardPrompt(event, ctx, sessionId, systemPrompt);
+      if (forwarded === null || (forwarded.systemPrompt === event.systemPrompt && !forwarded.message)) return;
+      return {
+        ...(forwarded.systemPrompt !== event.systemPrompt ? { systemPrompt: forwarded.systemPrompt } : {}),
+        ...(forwarded.message ? { message: { customType: "probe-daemon", content: forwarded.message, display: false } } : {}),
+      };
+    }
     // Asked again on every prompt (one small config read), not only at
     // session_start: `--team-items hide` set mid-session stops the very next
     // injection. Shown again after being hidden, the note is synced and re-read
@@ -1283,6 +1367,20 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // same ones. No service, an older one, out of time, an unclear answer: guard.ts
   // decides alone, exactly as before. Not under `off`: such a session never
   // reaches the service (A2).
+  /** A tool call as the service's pi routes read it: the path pi will write resolved here, as pi resolves it. */
+  function toolCallFields(event: any, cwd: string): Record<string, unknown> {
+    const fields: Record<string, unknown> = { tool_name: event.toolName, input: event.input, tool_call_id: event.toolCallId };
+    const path = (event.input as Record<string, unknown> | undefined)?.path;
+    if ((event.toolName === PiTool.Write || event.toolName === PiTool.Edit) && typeof path === "string" && path) {
+      try {
+        fields.resolved_path = resolveLikePi(path, cwd);
+      } catch {
+        // a path pi itself would refuse: no service verdict, pi's own guard decides
+      }
+    }
+    return fields;
+  }
+
   const onToolCall: EventHandler = async (event, ctx) => {
     // The session file exists by the first tool call. Not awaited: a tool must
     // not wait on a spawn.
@@ -1291,6 +1389,13 @@ export function prepareExtension(env: ImplEnv): Candidate {
       const sessionId = ctx?.sessionManager?.getSessionId();
       const daemonProfile = inDaemonProfile(s, sessionId);
       const cwd = ctx?.cwd ?? process.cwd();
+      if (sessionId && forwarder.isOn(sessionId)) {
+        // A forwarded turn: the service's pre-tool routes decide; pi's own guard does not run.
+        const block = answeredEffects(await forwarder.send(ForwardedEvent.ToolCall, ctx, toolCallFields(event, cwd)))?.block;
+        if (!block) return;
+        logLine(`guard refused ${event.toolName} (the service's routes): ${block.slice(0, 120)}`);
+        return { block: true, reason: block };
+      }
       let own: string | null = null;
       try {
         own = guardToolCall(event.toolName, event.input, {
@@ -1370,8 +1475,10 @@ export function prepareExtension(env: ImplEnv): Candidate {
         // No session manager on this event: the worker keeps its quiet timer.
       }
     }
+    // The service's turn-end record-keeping (the note's sync among it), else this one's own sync.
     // Read per settle, not cached: one small file, and an opt-out made in the
     // wizard mid-session stops the next sync rather than the next session's.
+    if ((await forwarder.send(ForwardedEvent.AgentSettled, ctx)) !== null) return; // forwarded, or queued
     if (hasProbePointer(process.env) && !teamItemsHidden(process.env)) spawnTeamNoteSync(realTeamNoteSyncDeps());
   };
 
@@ -1383,6 +1490,11 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // continued, by pi's own boundary result.
   const onAgentBeforeSettle: EventHandler = async (event, ctx) => {
     if (event?.outcome !== ActivityOutcome.Completed || probeIsOff(s)) return;
+    const forwarded = await forwarder.send(ForwardedEvent.AgentBeforeSettle, ctx, { outcome: event.outcome });
+    if (forwarded !== null) {
+      const text = answeredEffects(forwarded)?.continueText;
+      return text ? { entries: [{ type: "custom_message", customType: "probe-owed", content: text, display: true }], continue: true } : undefined;
+    }
     try {
       const sid = ctx?.sessionManager?.getSessionId();
       if (!sid || !inDaemonProfile(s, sid) || !sessionIsInline(sid) || !agentOwes(sid)) return;
@@ -1396,9 +1508,10 @@ export function prepareExtension(env: ImplEnv): Candidate {
 
   // A compaction took the inline notice out of the agent's context: the next
   // prompt tells it again (`before_agent_start`).
-  const onSessionCompact: EventHandler = async (_event, ctx) => {
+  const onSessionCompact: EventHandler = async (event, ctx) => {
     const sessionId = ctx?.sessionManager?.getSessionId();
     if (sessionId) forgetInlineShown(sessionId);
+    await forwarder.send(ForwardedEvent.SessionCompact, ctx, { reason: event?.reason });
   };
 
   // THE TRACKING SWITCH. `input` fires on the RAW line, before pi expands
@@ -1426,7 +1539,15 @@ export function prepareExtension(env: ImplEnv): Candidate {
     let applied = false;
     if (intent.direction !== null) {
       const sessionId = ctx.sessionManager.getSessionId();
-      if (sessionId) {
+      // PR 7: a forwarded turn's switch is the service's guard (a typed line, from pi itself).
+      const forwarded = sessionId ? await forwarder.send(ForwardedEvent.Input, ctx, { text: event.text, source: event.source }) : null;
+      if (sessionId && forwarded !== null) {
+        // A forwarded turn: the service's switch; one it did not answer leaves the line unchanged.
+        applied = ranToEnd(forwarded);
+        logLine(`tracking switch: the Probe service ${applied ? "ran it" : `did not (${forwarded.outcome})`}`);
+        if (!applied) return { action: "continue" };
+        await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+      } else if (sessionId) {
         applied = await applyTrackingSwitch(intent.direction, sessionId, {
           spawn: realSwitchSpawn,
           existsSync: fs.existsSync,

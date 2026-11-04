@@ -93,6 +93,11 @@ HOOK_LANES = {
 HOOK_ROUTES_SERVICE = "service"
 #: The proxy contract's version: a request or queue file names it as `v` (1 when left out).
 HOOK_PROXY_V = 1
+#: `hooks.run {routes: "service", v: 2}`: an extension's event (pi), answered with actions (`hook_actions`).
+#: Not frozen (the extension updates with the CLI); v1 above is untouched.
+HOOK_PROXY_V2 = 2
+#: v2's `reply`: the answer carries `actions` beside v1's four keys (`hook_actions`).
+HOOK_REPLY_ACTIONS = "actions"
 #: A proxied event's name (the harness's own `hook_event_name`) is at most this long.
 MAX_HOOK_EVENT_NAME = 64
 #: `hooks.run`'s `timeout_ms` when the caller names none: plan D28's wait, the

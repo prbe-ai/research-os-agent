@@ -1471,11 +1471,17 @@ def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "st
     """Emit this hook's messages, record the ones that went out as shown, and
     tell Probe which of them it held for the session (`report_delivered`).
     Output that never went out: its inbox messages wait again (`return_unshown`),
-    and its server messages' banners go out with the next hook's."""
+    and its server messages' banners go out with the next hook's. Under
+    RECEIPT_ENV (the Probe service, for pi's extension) the output going out is
+    not yet the agent having it: what to settle is written there instead, and
+    settled once the extension acks (`settle_receipt`)."""
     ids = [mid for mid, _text in items]
     banners = take_banners(sid)
     notice = "\n".join(([notice] if notice else []) + [banner for _marker, banner, _claim in banners]) or None
     if _emit(event, [text for _id, text in items], notice):
+        receipt = os.environ.get(RECEIPT_ENV)
+        if receipt and _save_receipt(receipt, sid, event, ids, banners):
+            return
         mark_shown(sid, ids, event)
         report_delivered(sid, ids)
         for _marker, _banner, claim in banners:
@@ -1490,6 +1496,74 @@ def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "st
                 marker.unlink()
             except OSError:
                 pass
+
+
+def _settle(sid: str, event: str, ids: "list[str]", banners: "list[tuple[Path, str | None]]", shown: bool) -> None:
+    """A receipt's half of `_hand_over`: shown, the messages count as delivered and
+    their banners' claims commit; not shown, the inbox messages wait again and the
+    banners' claims and markers go."""
+    ledger = _server_notices()._load("_server_ledger") if any(claim for _m, claim in banners) else None
+    if shown:
+        mark_shown(sid, ids, event)
+        report_delivered(sid, ids)
+    else:
+        return_unshown(sid, ids)
+    for marker, claim_path in banners:
+        if claim_path is not None and ledger is not None:
+            claim = ledger.Claim(Path(claim_path))
+            if shown:
+                claim.commit()
+            else:
+                claim.release()
+        if not shown:
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+
+
+#: Set by the Probe service (pi's extension, `hooks.run` v2): the receipt file this
+#: hook writes instead of settling what it showed. The service runs `--receipt`.
+RECEIPT_ENV = "PROBE_HOOK_RECEIPT_FILE"
+
+
+def _save_receipt(path: str, sid: str, event: str, ids: "list[str]", banners: list) -> bool:
+    """What `_hand_over` would settle, written whole to `path` (0600). False: not
+    written, so it is settled now, as without a receipt."""
+    record = {"v": 1, "sid": sid, "event": event, "ids": ids,
+              "banners": [{"marker": str(marker), "claim": None if getattr(claim, "path", None) is None
+                           else str(claim.path)} for marker, _banner, claim in banners]}
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def settle_receipt(path: str, shown: bool) -> int:
+    """`reads_hook.py --receipt <file> shown|unshown`: settle a receipt
+    `_save_receipt` wrote, once, and remove it. Never raises."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            record = json.load(handle)
+        os.unlink(path)
+    except (OSError, ValueError):
+        return 0
+    try:
+        sid, event, ids = record["sid"], record["event"], [str(i) for i in record["ids"]]
+        banners = [(Path(b["marker"]), b.get("claim")) for b in record["banners"]]
+        _settle(sid, event, ids, banners, shown)
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session
+        return 0
+    return 0
 
 
 def on_prompt(payload: dict) -> int:
@@ -1748,6 +1822,8 @@ def _yields_to_shim() -> bool:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["--receipt"] and len(sys.argv) == 4 and sys.argv[3] in ("shown", "unshown"):
+        return settle_receipt(sys.argv[2], sys.argv[3] == "shown")
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw)

@@ -1223,14 +1223,16 @@ def main(argv: list[str], payload: "bytes | None" = None, miss: "Miss | None" = 
     `payload`: the event, when the caller read it already (`run`, the host).
     `miss`: no warm host took this event (`serve`); its record-keeping routes
     go to the Probe service when it takes them (`Miss.queue`).
-    argv: `dispatch.py <lane> [UNSHOWN] [RECORD_KEEPING]`; RECORD_KEEPING (the
-    service running a queued event) runs only the record-keeping routes."""
+    argv: `dispatch.py <lane> [UNSHOWN] [RECORD_KEEPING | WAITING]`; RECORD_KEEPING (the
+    service running a queued event) runs only the record-keeping routes, WAITING
+    (pi's turn end, whose record-keeping comes with its own later event) only the others."""
     if len(argv) < 2 or argv[1] not in LANE_EVENT:
         return 0
     lane = argv[1]
     if payload is None:
         payload = sys.stdin.buffer.read()
     kept_only = RECORD_KEEPING in argv[2:]
+    waiting_only = not kept_only and WAITING in argv[2:]
     waiting = not kept_only and waiting_after_tool(lane, argv[2:])
     if lane in TOOL_LANES and not waiting and not could_route(lane, payload):
         return 0
@@ -1255,6 +1257,8 @@ def main(argv: list[str], payload: "bytes | None" = None, miss: "Miss | None" = 
     chosen = routes(lane, parsed, wiring)
     if kept_only:
         chosen = [h for h in chosen if record_keeping(h)]
+    elif waiting_only:
+        chosen = [h for h in chosen if not record_keeping(h)]
     elif lane == "post-tool" and not waiting:
         # The tool lanes' only catch-all is the reads route behind this same
         # fast path (tests/test_hook_dispatch.py holds that): nothing waits,
@@ -1489,6 +1493,9 @@ def run_hosted(argv: list, payload: bytes) -> None:
 #: routes only (`main`). The service hands it to the host's child, or to
 #: `dispatch.sh`, which passes every argument on.
 RECORD_KEEPING = "--record-keeping"
+#: The other half: every route but the record-keeping ones (pi's `agent_before_settle`,
+#: whose record-keeping runs on its `agent_settled`, `--record-keeping`).
+WAITING = "--waiting"
 #: A miss gives the Probe service this long, from the connect, to take its
 #: record-keeping routes (`hooks.queue`).
 QUEUE_WAIT_S = 0.3

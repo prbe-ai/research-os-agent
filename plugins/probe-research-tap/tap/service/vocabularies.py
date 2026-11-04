@@ -108,9 +108,12 @@ class Cap:
     #: routes, and drains the shim's queue files. A migration to the shim checks
     #: it (and one capability call) before it removes a harness's old plugins.
     HOOKS_PROXY = "hooks.proxy.v1"
+    #: `hooks.run {routes: "service", v: 2, reply: "actions"}` and `hooks.ack`: pi's extension
+    #: forwards its events here and applies the actions; without it, pi runs its own code.
+    HOOKS_PROXY_V2 = "hooks.proxy.v2"
 
 
-CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER, Cap.HOOKS_PROXY})
+CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER, Cap.HOOKS_PROXY, Cap.HOOKS_PROXY_V2})
 
 
 class NotesMode:

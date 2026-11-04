@@ -257,6 +257,9 @@ INLINE = _session_marker.INLINE_WORD
 #: Set by harness_io for a hook whose output the harness drops (Kimi's typed
 #: `/probe`): nothing said there reaches the model, so nothing is marked told.
 QUIET_ENV = "PROBE_HOOK_QUIET"
+#: Set by the Probe service for an extension's event on a lane no person types on
+#: (pi's prompt, after `/skill:` expansion): no switch is parsed from it (D57).
+NO_CONSENT_ENV = "PROBE_HOOK_NO_CONSENT"
 
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -2524,6 +2527,26 @@ def _refuse(reason: str) -> None:
     )
 
 
+def _is_no_consent() -> bool:
+    """PROBE_HOOK_NO_CONSENT: the Probe service runs this event for an extension
+    (pi) on a lane no person types on, so nothing in it moves the switch (D57)."""
+    return os.environ.get(NO_CONSENT_ENV) == "1"
+
+
+def _typed_direction(prompt: object) -> "tuple[str | None, str, str]":
+    """`prompt_direction`, or no invocation at all under PROBE_HOOK_NO_CONSENT."""
+    if _is_no_consent():
+        return None, SHAPE_EXPANDED, ""
+    return prompt_direction(prompt)
+
+
+def _tool_direction(tool_name: object, tool_input: object) -> "tuple[str | None, str]":
+    """`toggle_direction`, or none under PROBE_HOOK_NO_CONSENT."""
+    if _is_no_consent():
+        return None, ""
+    return toggle_direction(tool_name, tool_input)
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -2547,7 +2570,7 @@ def main() -> None:
                 return
             _deny_daemon_profile(payload, session_id)
         elif hook_event == "UserPromptSubmit":
-            direction, shape, slug = prompt_direction(payload.get("prompt"))
+            direction, shape, slug = _typed_direction(payload.get("prompt"))
             if direction is not None:
                 landed = _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
                 _announce("UserPromptSubmit", landed, daemon=True, session_id=session_id)
@@ -2557,7 +2580,7 @@ def main() -> None:
         elif hook_event == "PostToolUse":
             landed = None
             if payload.get("tool_name") in ("Skill", "SlashCommand"):
-                direction, slug = toggle_direction(payload.get("tool_name"), payload.get("tool_input"))
+                direction, slug = _tool_direction(payload.get("tool_name"), payload.get("tool_input"))
                 if direction is not None:
                     landed = _apply_direction(direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload))
             if landed:
@@ -2568,7 +2591,7 @@ def main() -> None:
                 _announce_inline_once("PostToolUse", session_id)
         return
     if hook_event == "UserPromptSubmit":
-        direction, shape, slug = prompt_direction(payload.get("prompt"))
+        direction, shape, slug = _typed_direction(payload.get("prompt"))
         if direction is None:
             notice = _daemon_notice(session_id, _payload_cwd(payload))
             if notice:
@@ -2588,7 +2611,7 @@ def main() -> None:
         return
     tool_name = payload.get("tool_name")
     if tool_name in ("Skill", "SlashCommand"):
-        direction, slug = toggle_direction(tool_name, payload.get("tool_input"))
+        direction, slug = _tool_direction(tool_name, payload.get("tool_input"))
         if direction is None:
             return
         landed = _apply_direction(
