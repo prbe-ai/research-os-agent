@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.397.0
+
 - **Fix: a rank's final console log is no longer cut to its first half-second and uploaded as complete.** Every process of a run on one machine reserves its local log under the run's id (`<run-id>.log`, `.2.log` ...). Once a process queued its log it deleted the local copy but kept the empty `.stopped` marker beside it, so a process starting later (a DDP rank that came up after another rank had finished, a resumed attempt) was handed the same name with that marker in place. Its log helper read the marker as its own stop: it took the log half a second in, kept forwarding to the terminal, and the short file went up as `probe/run.rank<N>.log` with stats and no `log_incomplete` flag (the SDK stress smoke: one rank in each of 4 loaded runs kept 7-12 KB of 212 KB printed). A tee now removes a stop marker, stats or ready flag left on its path before its helper starts, so a reused name logs everything. Logs already uploaded short stay as they are.
 - **Fix: GPU memory from DCGM is stored in bytes.** dcgm-exporter reports `DCGM_FI_DEV_FB_USED` in MiB, and the SDK stored the number as `hw/gpu/memory_used_bytes`, so a host read through DCGM showed GPU memory 1,048,576 times too small beside NVML hosts, which report bytes. Mapping entries now take a `scale` (exporter unit to the key's unit), and FB_USED scales by 1,048,576. The other default mappings (DCGM utilization %, temperature C, power W; node_exporter and cAdvisor bytes, seconds, periods) already matched. Series written by older SDKs are not rewritten.
 
