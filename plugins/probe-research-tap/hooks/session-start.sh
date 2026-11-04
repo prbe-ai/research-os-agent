@@ -14,6 +14,7 @@
 # First of all, before stdin is read.
 if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
     tap_run_installed "${BASH_SOURCE[0]}" "$@"
+    tap_yields_to_shim "${BASH_SOURCE[0]}" && exit 0
 fi
 
 set -euo pipefail

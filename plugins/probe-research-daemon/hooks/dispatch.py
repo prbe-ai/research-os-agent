@@ -72,6 +72,13 @@ touch `$XDG_STATE_HOME/probe/hooks/alive/<session>`. The capture plugin's prompt
 hook (probe-research-tap, hooks/probe-hooks-trust.sh) tells the researcher to
 approve Probe's hooks in `/hooks` while a session that expects this file has
 none. Keep the path and the session-id rule in step with that file.
+
+Yield (codex-capture-fixes D35): where an agent moved to the frozen hook shim
+(`probe-hooks`, which hands every event to the Probe service), this plugin
+stays installed for its skills, commands and MCP, and an event of an agent
+process born after the switch is the shim's: `run` steps aside
+(`yields_to_shim`, `_hook_switches.py`). reads_hook.py's Stop wake and the
+tap's hooks do the same.
 """
 
 from __future__ import annotations
@@ -2154,9 +2161,68 @@ def serve(argv: list, payload: "bytes | None" = None) -> int:
     return code
 
 
+def _load_by_path(name: str):
+    """A module beside this file, by explicit path (never a bare import: the
+    user's project may carry a same-named one)."""
+    import importlib.util  # noqa: PLC0415
+
+    key = f"_probe_hooks.{name}"
+    if key in sys.modules:
+        return sys.modules[key]
+    spec = importlib.util.spec_from_file_location(key, os.path.join(HERE, name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _agent_row(env) -> "dict | None":
+    """The harness registry row of the agent running this event: the one whose
+    plugin folder variable it set (`root_variable`)."""
+    import json
+
+    with open(os.path.join(HERE, "harnesses.json"), encoding="utf-8") as handle:
+        rows = json.load(handle).get("harnesses") or []
+    wanted = root_variable(env)
+    return next((row for row in rows if (row.get("plugin") or {}).get("root_env") == wanted), None)
+
+
+def yields_to_shim() -> bool:
+    """Does this event belong to the frozen hook shim instead (codex-capture-fixes
+    D35)? A machine whose agent moved to it keeps this plugin installed (its
+    skills, commands and MCP), so both fire on every event: an agent process
+    born after the switch is the shim's, and this plugin steps aside. Never in
+    the service's or the runner's own run of these files (`PROBE_HOOK_VIA`).
+    One listdir when no machine here ever switched; any doubt: run."""
+    try:
+        if os.environ.get("PROBE_HOOK_VIA"):
+            return False
+        # Free when nothing switched (the hot path: every tool call): one listdir, no import.
+        # `_hook_switches.get_service_root`'s rule (tests hold them equal).
+        root = os.path.join(os.path.expanduser("~"), ".local", "state", "probe", "service")
+        try:
+            names = os.listdir(root)
+        except OSError:
+            return False
+        if not any(os.path.isfile(os.path.join(root, name, "hooks", "migrations.json")) for name in names):
+            return False
+        switches = _load_by_path("_hook_switches")
+        sp = _service_paths()  # the machine key: only once some machine here switched
+        row = _agent_row(os.environ)
+        if row is None:
+            return False
+        return switches.should_yield(sp.service_dir(), row["id"], row.get("home"),
+                                     (row.get("binary"), row.get("process_title")))
+    except Exception:  # noqa: BLE001 - fail open: run the event here
+        return False
+
+
 def run(argv: list) -> None:
     """The entry point: `dispatch.sh` imports this module (so its compiled
-    bytecode is cached, ~6ms saved on every event) and calls run([lane])."""
+    bytecode is cached, ~6ms saved on every event) and calls run([lane]). An
+    event the frozen hook shim answers (`yields_to_shim`) ends here, unread."""
+    if yields_to_shim():
+        sys.exit(0)
     hand_over(argv)
     sys.exit(serve(argv))
 

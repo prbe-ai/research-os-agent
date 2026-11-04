@@ -223,6 +223,19 @@ SERVICE_TIMEOUT_S = 4.0
 #: `off`: never ask the service (a test, a fault being chased); `_service_rpc`
 #: also reads PROBE_HOOK_SERVICE.
 SERVICE_ENV = "PROBE_READS_SERVICE"
+#: The Probe service runs a frozen hook shim's Stop wake (codex-capture-fixes D38)
+#: as slices of at most a minute, the shim calling again while each says "not
+#: yet": the wait's id (the shim's own for the hook, the same on every slice) and
+#: this slice's length. One wait's turn, waiter and start carry over between
+#: slices in `turns/<sid>.wait-<id>.json`, so its ceilings count from the Stop.
+WAIT_ID_ENV = "PROBE_READS_WAIT_ID"
+SLICE_ENV = "PROBE_READS_SLICE_S"
+#: A slice's exit when it ended with nothing to say and something still to wait for.
+SLICE_OVER = 75
+#: The Claude Code process a slice waits for (the service's pipes never hang up when it exits).
+OWNER_ENV = "PROBE_READS_OWNER_PID"
+#: Set by the Probe service on the routes it runs (`_hook_switches.VIA_ENV`).
+VIA_ENV = "PROBE_HOOK_VIA"
 #: `probe.service.protocol.Topic.MAILBOX_CHANGED`.
 TOPIC_MAILBOX_CHANGED = "mailbox.changed"
 #: A claim through the service (`mailbox.claim`) carries a deadline this far
@@ -688,7 +701,18 @@ def harness_gone() -> bool:
     """Claude Code closed its end of this hook's output: it exited or was killed.
     A background hook outlives it (it is re-parented, not killed), and a waiter
     that went on would claim the next alert into a session nobody reads. Its
-    stderr is a socket (or pipe) whose peer hangs up when Claude Code goes."""
+    stderr is a socket (or pipe) whose peer hangs up when Claude Code goes. Run as
+    the Probe service's slice (OWNER_ENV), its stderr is the service's: the
+    process it names is looked at instead."""
+    owner = os.environ.get(OWNER_ENV) or ""
+    if owner.isdigit() and int(owner) > 1:
+        try:
+            os.kill(int(owner), 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            pass
+        return False
     try:
         import select  # noqa: PLC0415 -- only the Stop waiter needs it
 
@@ -1489,48 +1513,101 @@ def on_tool(payload: dict) -> int:
     return 0
 
 
+def _wait_state_path(sid: str, wait_id: str) -> Path:
+    return _turn_path(sid).with_name(f"{_safe(sid)}.wait-{_safe(wait_id)}.json")
+
+
+def _load_wait(sid: str, wait_id: str) -> "dict | None":
+    """A sliced wait's carried state (`turn`, `me`, `started`, `gone`), or None: its first slice."""
+    data = _read_json(_wait_state_path(sid, wait_id))
+    if not data or not isinstance(data.get("turn"), str) or not isinstance(data.get("me"), str):
+        return None
+    if not isinstance(data.get("started"), (int, float)):
+        return None
+    return data
+
+
+def _end_wait(sid: str, wait_id: "str | None") -> None:
+    if wait_id:
+        try:
+            _wait_state_path(sid, wait_id).unlink()
+        except OSError:
+            pass
+
+
+def _slice_options() -> dict:
+    """`on_stop`'s slice options from the service's environment (WAIT_ID_ENV,
+    SLICE_ENV), or none: the whole wait in this process, as Claude Code runs it."""
+    wait_id = (os.environ.get(WAIT_ID_ENV) or "").strip()
+    try:
+        seconds = float(os.environ.get(SLICE_ENV) or 0)
+    except ValueError:
+        seconds = 0.0
+    return {"wait_id": wait_id, "slice_s": seconds} if wait_id and seconds > 0 else {}
+
+
 def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_POLL_S,
             alert_max_s: float = ALERT_WAKE_MAX_S, alert_poll_s: float = ALERT_POLL_S,
             worker_grace_s: float = WORKER_GONE_GRACE_S, request_max_s: float = REQUEST_WAKE_MAX_S,
-            recheck_s: float = SERVICE_RECHECK_S, retry_s: float = SERVICE_RETRY_S) -> int:
+            recheck_s: float = SERVICE_RECHECK_S, retry_s: float = SERVICE_RETRY_S,
+            wait_id: "str | None" = None, slice_s: "float | None" = None) -> int:
+    """The Stop wake: 2 with the wake's text on stderr, else 0. A slice
+    (`wait_id`, `slice_s`: the service's run of a frozen hook shim's wake) may
+    also end SLICE_OVER: nothing yet, its state kept for the next slice."""
     sid = _session(payload)
     if not sid or no_wake() or not attended() or from_helper_agent(payload):
         return 0
+    state = _load_wait(sid, wait_id) if wait_id else None
     asks = set(open_asks(sid))
     # Run alerts and inbox messages come from the worker of a session the reader
     # serves. A worker restarting right now still counts: the loop gives it
     # WORKER_GONE_GRACE_S.
     alerts = _served(sid)
     if not asks and not alerts and not any(m["kind"] == KIND_SERVER and _is_for_agent(m) for _p, m in waiting(sid)):
+        _end_wait(sid, wait_id)
         return 0  # a server message waiting is told at once, whoever else waits
     # The next prompt's shell writes a new token here even when nothing waits
     # (routes.json); the folder must exist for that write to land.
     _turn_path(sid).parent.mkdir(parents=True, exist_ok=True)
-    turn = current_turn(sid)
-    me = _take_waiter(sid)
+    if state is None:
+        state = {"turn": current_turn(sid), "me": _take_waiter(sid), "started": time.time(), "gone": None}
     # Subscribed before the first look: what lands after the service's
     # baseline is an event, what landed before it this first look finds.
     holder = [ServiceWatch.open(sid)]
     try:
-        return _wait(sid, turn, me, asks, alerts, holder, max_s=max_s, poll_s=poll_s, alert_max_s=alert_max_s,
-                     alert_poll_s=alert_poll_s, worker_grace_s=worker_grace_s, request_max_s=request_max_s,
-                     recheck_s=recheck_s, retry_s=retry_s)
+        code = _wait(sid, state["turn"], state["me"], asks, alerts, holder, max_s=max_s, poll_s=poll_s,
+                     alert_max_s=alert_max_s, alert_poll_s=alert_poll_s, worker_grace_s=worker_grace_s,
+                     request_max_s=request_max_s, recheck_s=recheck_s, retry_s=retry_s,
+                     carry=state if wait_id else None, slice_s=slice_s)
     finally:
         if holder[0] is not None:
             holder[0].close()
+    if code == SLICE_OVER:
+        try:
+            _write_atomic(_wait_state_path(sid, wait_id), json.dumps(state))
+        except OSError:
+            return 0  # its state cannot be kept: the wait ends here, as a lapse does
+    else:
+        _end_wait(sid, wait_id)
+    return code
 
 
 def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: list, *, max_s: float,
           poll_s: float, alert_max_s: float, alert_poll_s: float, worker_grace_s: float, request_max_s: float,
-          recheck_s: float, retry_s: float) -> int:
+          recheck_s: float, retry_s: float, carry: "dict | None" = None, slice_s: "float | None" = None) -> int:
     """The Stop waiter's loop. Each pass looks at the files; between passes it
     sleeps on the service's watch (`holder[0]`) when it has one: woken by
     `mailbox.changed`, at most `recheck_s`, never past a hold's lapse or a
     ceiling. Without one it sleeps its poll interval, and asks the service
-    again every `retry_s`."""
-    started = time.monotonic()
-    retry_at = started + retry_s
+    again every `retry_s`. A slice (`slice_s`) returns SLICE_OVER at its end,
+    the wait's clock and the worker's absence kept in `carry` (wall seconds)."""
+    now = time.monotonic()
+    started = now - max(0.0, time.time() - carry["started"]) if carry else now
+    retry_at = now + retry_s
+    slice_end = now + slice_s if slice_s else None
     worker_gone_since: "float | None" = None
+    if carry and isinstance(carry.get("gone"), (int, float)):
+        worker_gone_since = now - max(0.0, time.time() - carry["gone"])
     while True:
         if harness_gone():
             return 0  # Claude Code is gone: nothing claimed now would be read
@@ -1584,16 +1661,21 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             alerts = waited < alert_max_s and gone_for < worker_grace_s
         if not asks and not alerts:
             return 0  # timed out, nothing left to wait for, or the worker stayed gone
+        if slice_end is not None and time.monotonic() >= slice_end:
+            if carry is not None:
+                carry["gone"] = None if worker_gone_since is None else time.time() - (time.monotonic() - worker_gone_since)
+            return SLICE_OVER
         if holder[0] is None and time.monotonic() >= retry_at:
             holder[0] = ServiceWatch.open(sid)
             retry_at = time.monotonic() + retry_s
             if holder[0] is not None:
                 continue  # baselined now: one look at once, then sleep on it
         watch = holder[0]
+        left = float("inf") if slice_end is None else max(0.05, slice_end - time.monotonic())
         if watch is None:
-            time.sleep(poll_s if asks and waited < max_s else alert_poll_s)
+            time.sleep(min(left, poll_s if asks and waited < max_s else alert_poll_s))
             continue
-        pause = recheck_s
+        pause = min(recheck_s, left)
         if asks:
             ceiling = max_s if waited < max_s else request_max_s
             pause = min(pause, ceiling - waited, _next_lapse(sid, asks) or pause)
@@ -1653,6 +1735,18 @@ def hand_over_stop(raw: str) -> None:
         return
 
 
+def _yields_to_shim() -> bool:
+    """The Stop wake from claude-reads.json, outside dispatch.py: it steps aside
+    as dispatch.py's events do (`dispatch.yields_to_shim`, codex-capture-fixes
+    D35) for an agent process the frozen hook shim answers."""
+    try:
+        import dispatch
+
+        return dispatch.yields_to_shim()
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session: wait here
+        return False
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -1668,6 +1762,10 @@ def main() -> int:
         if event == "PostToolUse":
             return on_tool(payload)
         if event == "Stop":
+            if os.environ.get(VIA_ENV):
+                return on_stop(payload, **_slice_options())
+            if _yields_to_shim():
+                return 0  # the frozen hook shim's wake runs for this process
             hand_over_stop(raw)
             return on_stop(payload)
     except Exception:  # noqa: BLE001 -- a hook never breaks the session

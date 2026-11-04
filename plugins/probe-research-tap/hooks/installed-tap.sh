@@ -322,4 +322,32 @@ tap_run_installed() {
     TAP_TARGET=""
     return 0
 }
+
+# Does this event belong to the frozen hook shim instead (codex-capture-fixes
+# D35)? Where the agent moved to it (`probe-hooks`, which hands every event to the
+# Probe service), this tap stays installed and both fire: an agent process born
+# after the switch is the shim's, and this script steps aside. 0: step aside.
+# Never inside the service's own run of these scripts (PROBE_HOOK_VIA). The
+# common case costs one glob (no machine here ever switched); otherwise one
+# python start (`tap/hook_switches.py`, which reads the machine's switch ledger
+# and the agent process's birth). Any doubt: run (1).
+tap_yields_to_shim() {
+    local self="${1:-}" hooks root py harness ledgers
+    [ -z "${PROBE_HOOK_VIA:-}" ] || return 1
+    case "${OSTYPE:-}" in msys* | cygwin* | win*) return 1 ;; esac
+    case "$self" in /*) ;; *) return 1 ;; esac
+    hooks="${self%/*}"
+    root="${hooks%/*}"
+    [ -f "$root/tap/hook_switches.py" ] || return 1
+    shopt -s nullglob
+    ledgers=("$HOME"/.local/state/probe/service/*/hooks/migrations.json)
+    shopt -u nullglob
+    [ ${#ledgers[@]} -gt 0 ] || return 1
+    py="$(command -v python3)" || return 1
+    # The scripts' own SOURCE rule; Kimi Code's events always name theirs.
+    [ -z "${KIMI_PLUGIN_ROOT:-}" ] || [ -n "${PROBE_TAP_SOURCE:-}" ] || return 1
+    harness="${PROBE_TAP_SOURCE:-claude_code}"
+    "$py" -S -B "$root/tap/hook_switches.py" yield "$root/tap/service/paths.py" \
+        "$root/tap/harnesses.json" "$harness" </dev/null >/dev/null 2>&1
+}
 :
