@@ -54,6 +54,13 @@ It also records which harness process runs this session
 for a harness with a `process_title`: that is how a `probe` command the harness
 starts finds its session.
 
+Under the frozen hook shim (`probe-hooks`, codex-capture-fixes PR 6) the Probe
+service runs this file from its own copy of the plugin (`PROBE_HOOK_VIA` set):
+no hand-over (that copy is current), and what the Kimi process LOADED is the
+copy its plugin list records beside the shim's folder (`PROBE_HOOK_CALLER_ROOT`),
+never the service's copy. A queued event's `--record-keeping` goes on to the
+dispatcher, so a late TurnStarted can never flip the switch.
+
 FAIL-OPEN: anything unexpected here runs the hooks with the raw payload and
 passes their output through, and a missing dispatcher runs nothing; a broken
 adapter must never block the harness.
@@ -101,8 +108,15 @@ _JSON_OUTPUT_TOOLS = ("AskUserQuestion",)
 EVENT_FLAG = "--event"
 #: Passed on to the dispatcher as is (`dispatch.UNSHOWN`, which a test keeps equal).
 UNSHOWN_FLAG = "--unshown"
+#: Passed on as is: only the lane's record-keeping routes run (`dispatch.RECORD_KEEPING`,
+#: which a test keeps equal; the Probe service running a queued event).
+RECORD_KEEPING_FLAG = "--record-keeping"
 #: Tells a hook its output reaches no model (`tracking_guard.QUIET_ENV`).
 _QUIET_ENV = "PROBE_HOOK_QUIET"
+#: Set when the Probe service runs this file for the frozen hook shim
+#: (`proxy.VIA_ENV`); then `_CALLER_ROOT_ENV` names the shim's own folder.
+_VIA_ENV = "PROBE_HOOK_VIA"
+_CALLER_ROOT_ENV = "PROBE_HOOK_CALLER_ROOT"
 
 
 #: The event a typed skill arrives as (see the module docstring), and Kimi's
@@ -263,6 +277,8 @@ def _record(payload: dict, row) -> None:
                         _LOADED_ROOT, str(payload.get("hook_event_name") or ""), str(payload.get("source") or ""))
                 except Exception:  # noqa: BLE001 -- no record: the restart line stays
                     loaded = None
+                if loaded is not None and os.environ.get(_VIA_ENV):
+                    loaded["hooks_via"] = "shim"  # its hooks ran through the frozen shim
             _session_marker.record_harness_process(row.id, session_id, titles, loaded=loaded)
 
 
@@ -400,7 +416,7 @@ def run_event(argv: "list[str]") -> int:
     the dispatcher (`dispatch.serve`: warm host, else here), on the payload put
     in Claude's shape once; its merged output translated once."""
     event = argv[0] if argv else ""
-    options = [a for a in argv[1:] if a == UNSHOWN_FLAG]
+    options = [a for a in argv[1:] if a in (UNSHOWN_FLAG, RECORD_KEEPING_FLAG)]
     raw_in = sys.stdin.buffer.read()
     adapted = _adapt(raw_in)
     if adapted is None:
@@ -485,12 +501,30 @@ def hand_over(argv: "list[str]") -> None:
     sys.exit(entry(argv))
 
 
+def shim_loaded_root() -> str:
+    """Run for the frozen shim: the copy of this plugin the Kimi process loaded (for
+    its skills and MCP), the one its plugin list records in the `managed/` folder the
+    shim's own copy sits in; "" when that cannot be read. This folder is the service's
+    copy, which no Kimi process loaded."""
+    shim = os.environ.get(_CALLER_ROOT_ENV) or ""
+    if not shim:
+        return ""
+    try:
+        roots = _hook_harness.load_sibling("_kimi_live").recorded_roots(shim)
+    except Exception:  # noqa: BLE001 -- no record: the restart line stays
+        return ""
+    return roots.get(os.path.basename(os.path.dirname(_HERE)), "")
+
+
 def main(argv: "list[str]") -> int:
     global _LOADED_ROOT
     if not argv:
         return 0
     # Before `hand_over` takes it: the folder the session's entry ran from.
-    _LOADED_ROOT = os.environ.get(HANDED_OVER) or os.environ.get("KIMI_PLUGIN_ROOT") or ""
+    if os.environ.get(_VIA_ENV):
+        _LOADED_ROOT = shim_loaded_root()
+    else:
+        _LOADED_ROOT = os.environ.get(HANDED_OVER) or os.environ.get("KIMI_PLUGIN_ROOT") or ""
     if argv[0] == EVENT_FLAG:
         hand_over(argv)
         return run_event(argv[1:])
