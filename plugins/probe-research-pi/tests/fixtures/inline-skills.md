@@ -46,9 +46,10 @@ A session can hold both: record the ML part only.
 ## Every write
 
 - Everything a person reads (slugs, names, questions, summaries, reasons, tags, metric keys, notes) is short and plain, and leads with the most recent or most important thing. No hashes, uuids, timestamps, ticket numbers, command lines, parameter piles, bare counters or private abbreviations.
+- Fields (names, descriptions, questions, conclusions, dead ends, reasons): a short ELI10 TL;DR in plain words. No results, settings, run names or formulas: the dashboard already shows them. Detail goes in notes. Digits that are part of a name stay (CIFAR-10, Llama 3 8B).
 - Exact and machine-shaped: `--external-id`, `probe link` keys, `--config`, `--spec`, an artifact's `--name` (its relative path), a paper's real title.
 - Slug: 3 lowercase hyphenated words naming the thing, permanent. `--name`: a plain title, always set, never the slug re-cased.
-- A name or description the researcher chose for a project, experiment or run: write it with `--authored-by human`, in a command of its own (never with words you wrote).
+- A name or description the researcher chose for a project, experiment or run: write it verbatim with `--authored-by human`, in a command of its own (never with words you wrote).
 - A path `.probe.config` sets to `read`: use it, record nothing about it. Set to `hash`: run the work on it as usual (`probe exec`); Probe records only each file's hash and row count. Never print its contents.
 - Read an entity's notes and Markdown before writing to it.
 
@@ -97,8 +98,8 @@ Every run needs an owner that keeps it alive:
 Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
-- When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
-    - A dead end (its approach dropped, or shown not to pan out): also `probe experiment set EXP --dead-end "<why, with the numbers>"`; `--clear-dead-end` when work on it resumes. It still ranks.
+- When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer in one short, plain sentence. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
+    - A dead end (its approach dropped, or shown not to pan out): also `probe experiment set EXP --dead-end "<why, in plain words>"`; `--clear-dead-end` when work on it resumes. It still ranks.
 - A better experiment to use than the pick? Set it (`probe project set P --best EXP --reason "..."`) and tell the researcher in one line.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.

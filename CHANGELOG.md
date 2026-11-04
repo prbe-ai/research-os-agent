@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Agents write conclusions, dead ends and other fields as a short plain-words summary, with no numbers.** track-work asked for "the answer and its evidence, with both sides' numbers", so conclusions came out as 600-character paragraphs of run names, fitted formulas and open questions. Names, descriptions, questions, conclusions, dead ends and reasons are now a short ELI10 summary in plain words: the dashboard already shows the numbers, and detail goes in notes. Digits that are part of a name stay (CIFAR-10). The `instrument-code` example follows suit. Tap 0.10.44 carries the new rules.
+
 ## 0.398.0
 
 - **Terminal settings commands write settings.json too, and `probe capture off` no longer waits for a running setup.** `probe session default`, `probe capture on|off`, `probe workspace limit`, and the recorder and automatic-updates actions the Mac app and the Probe service run, now record the choice in `settings.json` and apply it themselves, so the file is always the newest truth and the app, a terminal and the service never race. An off drops its markers with the choice and takes only the capture switches' own lock, so it never waits up to 10 minutes for a setup; a setup never lifts a marker the newest choice keeps off. A choice a running setup holds back is saved and the Probe service finishes it ("saved; Probe finishes it after the setup"). The service's own actions carry their revision and do nothing once a newer choice replaced it.

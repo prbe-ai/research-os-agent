@@ -47,7 +47,7 @@ never rewrites it. `--conclusion` sets the answer; `--conclusion ""` clears it.
 | field | shape |
 |---|---|
 | question | one testable question, ≤30 words: the change and what it might move. Never the outcome you expect |
-| conclusion | the answer and its evidence: "decay wins real-dev F1, 0.71 vs 0.66"; "dead end: OOM at batch 64 on 80 GB". Never a plan or a guess |
+| conclusion | the answer in plain words: "weight decay improves dev F1"; "dead end: runs out of GPU memory". Never a plan or a guess |
 
 Explain acronyms. Use product or milestone names only when given - never
 invent or expand a codename. Checkpoints, paths, commands and parameters go in

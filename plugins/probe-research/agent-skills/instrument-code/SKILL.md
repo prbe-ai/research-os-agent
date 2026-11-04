@@ -11,15 +11,15 @@ Example:
 
 ```python
 import probe
-probe.init(project="folding", description="dockq sweep, temperature 0.7", tags=["dockq"],
-           config=args, intent="does 0.7 beat 1.0 on DockQ?")
+probe.init(project="folding", description="DockQ sweep over sampling temperature", tags=["dockq"],
+           config=args, intent="does a lower sampling temperature improve DockQ?")
 # Every run needs a project. In the `daemon` state a run on this machine naming none
 # goes to this session's project, which the daemon sets (`probe session home show`
 # prints it); before it is set, probe.init() waits for it (up to 90 s, said on stderr).
 # Pass project= to choose another, and on another machine pass one. None fits?
 # `probe project create <slug> --kind <kind>` first; the daemon may rename it or move the run.
 # `on` state: name the experiment you created too, e.g.
-# probe.init(project="folding", experiment="dockq-sweep", question="does temperature 0.7 beat 1.0 on DockQ?")
+# probe.init(project="folding", experiment="dockq-sweep", question="does a lower sampling temperature improve DockQ?")
 probe.log({"loss": 0.42}, step=42)   # ambient: no handle to thread through call frames
 probe.finish()
 ```
