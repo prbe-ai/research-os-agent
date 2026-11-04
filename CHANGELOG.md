@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- **`npx probe-research` runs a fixed CLI at once.** The launcher (npm 0.16.0) runs an installed `probe` at or above 0.385.0, the first CLI whose sign-in opens the browser at once, with no version check first (its updater keeps it current). An older one, or none, gets the published latest pinned exactly (`==`), downloaded once and reused from uv's cache; only probe-research's index is read again (`--refresh-package`), never every package (`--refresh`). Offline, an installed `probe` at or above 0.374.0 still runs as it is; `npx probe-research repair` still asks for the newest. The CLI's own pinned install now reads the compiled CLI's index again too when uv's copy misses the version (`probe-research[all]==X` pins `probe-research-cli==X`).
 - **Settings get a file of their own, `settings.json`, beside Probe's config.** It holds what each of the Mac app's five settings should be (new-session default, automatic updates, transcripts, who records, workspace), who chose it and what was applied, so a setting can be saved in milliseconds without waiting for the Probe service. This release adds the file and its rules (`foundation/settings_file`, `shared/live_homes`); nothing writes it yet. `@probe/core` 0.2.2 carries its schema and examples.
+
+## 0.388.0
+
+- **`npx probe-research` runs a fixed CLI at once.** The launcher (npm 0.16.0) runs an installed `probe` at or above 0.385.0, the first CLI whose sign-in opens the browser at once, with no version check first (its updater keeps it current). An older one, or none, gets the published latest pinned exactly (`==`), downloaded once and reused from uv's cache; only probe-research's index is read again (`--refresh-package`), never every package (`--refresh`). Offline, an installed `probe` at or above 0.374.0 still runs as it is; `npx probe-research repair` still asks for the newest. The CLI's own pinned install now reads the compiled CLI's index again too when uv's copy misses the version (`probe-research[all]==X` pins `probe-research-cli==X`).
 
 ## 0.387.0
 
