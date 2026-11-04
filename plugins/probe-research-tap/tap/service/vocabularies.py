@@ -103,9 +103,14 @@ class Cap:
     #: writes a setting to the file and never waits on an action for it. An older service would leave
     #: the file unread, so the app sends today's `action.run` instead.
     SETTINGS_KEEPER = "settings.keeper"
+    #: `hooks.run {routes: "service"}` v1 (`service/hooks/proxy/DESIGN.md`): the
+    #: service runs a frozen hook shim's events from its own copy of Probe's
+    #: routes, and drains the shim's queue files. A migration to the shim checks
+    #: it (and one capability call) before it removes a harness's old plugins.
+    HOOKS_PROXY = "hooks.proxy.v1"
 
 
-CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER})
+CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER, Cap.HOOKS_PROXY})
 
 
 class NotesMode:
@@ -408,9 +413,11 @@ class Client:
     CLI = "cli"
     #: A training process's SDK handing off its background work (plan Q5).
     SDK = "sdk"
+    #: A frozen hook shim handing over a harness's hook event (`hooks.run {routes: "service"}`).
+    HOOK = "hook"
 
 
-CLIENTS = frozenset({Client.APP, Client.TAP, Client.PI, Client.CLI, Client.SDK})
+CLIENTS = frozenset({Client.APP, Client.TAP, Client.PI, Client.CLI, Client.SDK, Client.HOOK})
 
 
 class Mode:

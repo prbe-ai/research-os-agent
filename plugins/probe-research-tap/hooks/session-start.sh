@@ -330,8 +330,13 @@ fi
 # BEFORE the already-running check on purpose: a session resumed in a new agent
 # process must hand the surviving daemon its new owner, or the old process's
 # exit would end a live session. Fail-open: no record means "owner unknown".
+# Run by the Probe service for a frozen hook shim (`hooks.run {routes: "service"}`),
+# this hook sits below the service, not the agent: the walk starts at the shim,
+# the caller the service names (PROBE_HOOK_PARENT_PID, set by the service only).
+OWNER_FROM="$$"
+case "${PROBE_HOOK_PARENT_PID:-}" in '' | *[!0-9]*) ;; *) OWNER_FROM="$PROBE_HOOK_PARENT_PID" ;; esac
 PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
-    "$PY" -m tap owner --session-id "$SESSION_ID" --from-pid "$$" </dev/null >/dev/null 2>&1 || true
+    "$PY" -m tap owner --session-id "$SESSION_ID" --from-pid "$OWNER_FROM" </dev/null >/dev/null 2>&1 || true
 
 PID_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
 # The tap version the live wrapper was started from, written beside its pid

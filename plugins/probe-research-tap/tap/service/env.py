@@ -86,6 +86,15 @@ HOOK_LANES = {
     "stop": "Stop",
     "turn-started": "TurnStarted",
 }
+#: `hooks.run {routes: "service"}` (codex-capture-fixes PR 3): the service runs
+#: the event from its own copy of Probe's routes, for a frozen hook shim
+#: (`service/hooks/proxy/DESIGN.md` holds the v1 contract). `routes` is the field
+#: that tells this shape from the `plugin_root` one.
+HOOK_ROUTES_SERVICE = "service"
+#: The proxy contract's version: a request or queue file names it as `v` (1 when left out).
+HOOK_PROXY_V = 1
+#: A proxied event's name (the harness's own `hook_event_name`) is at most this long.
+MAX_HOOK_EVENT_NAME = 64
 #: `hooks.run`'s `timeout_ms` when the caller names none: plan D28's wait, the
 #: one a dispatcher gives a warm host before it runs the event itself.
 HOOK_WAIT_MS = 300

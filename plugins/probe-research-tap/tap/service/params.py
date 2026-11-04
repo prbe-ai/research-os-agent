@@ -12,8 +12,11 @@ from .env import (
     CONTEXT_ENV,
     HOOK_EVENT_ID_LEN,
     HOOK_LANES,
+    HOOK_PROXY_V,
+    HOOK_ROUTES_SERVICE,
     HOOK_WAIT_MS,
     MAX_CONTEXT_VALUE,
+    MAX_HOOK_EVENT_NAME,
     MAX_HOOK_ENV,
     MAX_HOOK_ENV_VALUE,
     MAX_HOOK_PATH,
@@ -220,6 +223,89 @@ def need_hook_run(params: dict) -> dict:
         "cwd": cwd,
         "timeout_s": timeout / 1000.0,
     }
+
+
+def _need_proxy_fields(values: dict) -> dict:
+    """The fields a proxied event (`hooks.run {routes: "service"}`) and a shim's
+    queue file share: `{harness, event, payload (str), env, cwd}` checked. The
+    payload is the hook's stdin as the harness wrote it, a string the service
+    parses (it must be a JSON object), so the shim never parses it itself."""
+    if values.get("routes") != HOOK_ROUTES_SERVICE:
+        raise invalid_params(f"routes must be {HOOK_ROUTES_SERVICE!r}")
+    version = values.get("v", HOOK_PROXY_V)
+    if version != HOOK_PROXY_V or isinstance(version, bool):
+        raise invalid_params(f"v must be {HOOK_PROXY_V}")
+    harness = values.get("harness")
+    if not is_agent_id(harness):
+        raise invalid_params("harness must be a harness registry id")
+    event = values.get("event")
+    if not isinstance(event, str) or not 0 < len(event) <= MAX_HOOK_EVENT_NAME or not event.isascii() or not event.isalpha():
+        raise invalid_params(f"event must be the harness's hook event name (letters, at most {MAX_HOOK_EVENT_NAME})")
+    payload = values.get("payload")
+    if not isinstance(payload, str) or len(payload.encode("utf-8", "surrogatepass")) > MAX_HOOK_QUEUE_ITEM:
+        raise invalid_params(f"payload must be the hook's stdin as a string of at most {MAX_HOOK_QUEUE_ITEM} bytes")
+    try:
+        parsed = json.loads(payload)
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        raise invalid_params("payload must hold a JSON object")
+    named = parsed.get("hook_event_name")
+    if named is not None and named != event:
+        raise invalid_params(f"payload.hook_event_name must be {event!r}")
+    return {"harness": harness, "event": event, "payload": parsed, "cwd": _need_path(values, "cwd")}
+
+
+def need_hook_proxy(values: dict) -> dict:
+    """`hooks.run {routes: "service"}`'s values, checked (v1, frozen with the
+    hook shim: `service/hooks/proxy/DESIGN.md`):
+
+        routes      "service"
+        v           1 (optional)
+        harness     the harness registry id the shim was written for
+        event       the harness's hook event name (`SessionStart`, `SubagentStart`, ...)
+        payload     the hook's stdin, as a string holding a JSON object
+        env         the session's environment (at most MAX_HOOK_ENV strings)
+        cwd         the session's folder (absolute)
+        timeout_ms  how long the caller waits (default HOOK_WAIT_MS)
+
+    -> `{harness, event, payload (dict), env, cwd, timeout_s}`."""
+    request = _need_proxy_fields(values)
+    timeout = values.get("timeout_ms", HOOK_WAIT_MS)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= MAX_HOOK_WAIT_MS:
+        raise invalid_params(f"timeout_ms must be an integer from 1 to {MAX_HOOK_WAIT_MS}")
+    return {**request, "env": need_env(values), "timeout_s": timeout / 1000.0}
+
+
+def need_hook_proxy_queue(values: dict) -> dict:
+    """A hook shim's queue file (v1, `service/hooks/proxy/DESIGN.md`): the shim
+    found no service to ask and wrote the event into `paths.hook_queue_dir()`
+    for the next one: `{v, id, routes: "service", harness, event, payload, env,
+    cwd, at}` -> `{id, harness, event, payload (dict), env, cwd, at}`. Its env
+    keeps only `hook_queue_env`'s names, as a dispatcher's queued event."""
+    event_id = values.get("id")
+    if (
+        not isinstance(event_id, str)
+        or len(event_id) != HOOK_EVENT_ID_LEN
+        or any(c not in "0123456789abcdef" for c in event_id)
+    ):
+        raise invalid_params(f"id must be {HOOK_EVENT_ID_LEN} lowercase hex digits")
+    request = _need_proxy_fields(values)
+    env = values.get("env")
+    if not isinstance(env, dict) or len(env) > MAX_HOOK_QUEUE_ENV or not all(
+        isinstance(k, str) and k and "=" not in k and "\0" not in k and isinstance(v, str) and "\0" not in v
+        for k, v in env.items()
+    ):
+        raise invalid_params(f"env must be an object of at most {MAX_HOOK_QUEUE_ENV} string variables")
+    at = values.get("at")
+    if not isinstance(at, (int, float)) or isinstance(at, bool) or at != at or at in (float("inf"), float("-inf")):
+        raise invalid_params("at must be a number (epoch seconds)")
+    return {**request, "id": event_id, "env": hook_queue_env(env), "at": float(at)}
+
+
+def is_proxy_queue_item(item: object) -> bool:
+    """Is this queue file's object a hook shim's (`routes: "service"`), not a dispatcher's?"""
+    return isinstance(item, dict) and item.get("routes") == HOOK_ROUTES_SERVICE
 
 
 def need_hook_queue(params: dict) -> dict:

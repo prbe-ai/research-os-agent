@@ -112,6 +112,16 @@ def _last_primary(handle, size: int) -> dict | None:
     return None
 
 
+
+def _spawn_parent(payload: dict) -> str | None:
+    """A Codex sub-agent's parent thread, from its header's
+    `source.subagent.thread_spawn.parent_thread_id` (codex-cli 0.166), or None."""
+    node = payload.get("source")
+    for key in ("subagent", "thread_spawn"):
+        node = node.get(key) if isinstance(node, dict) else None
+    parent = node.get("parent_thread_id") if isinstance(node, dict) else None
+    return str(parent) if parent else None
+
 def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -> dict:
     try:
         expected = str(UUID(session_id))
@@ -163,9 +173,12 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
             payload = _header_fields(headers[0], nested)
             native = payload.get("id")
             source_cwd = payload.get("cwd")
-            for key in ("forked_from_id", "parentSession", "parent_session_id"):
+            for key in ("forked_from_id", "parentSession", "parent_session_id", "parent_thread_id"):
                 if payload.get(key):
                     lineage.append(str(payload[key]))
+            parent = _spawn_parent(payload)
+            if parent and parent not in lineage:
+                lineage.append(parent)
             if any(
                 _header_fields(r, nested).get("id") != native
                 for r in headers
