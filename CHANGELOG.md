@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the daemon's working-folder check moved from `probe.daemon.session.session` to `probe.daemon.folders.folders` (the old path forwards to it for one release). The folders every walk skips (`probe.foundation.walk_skips`) and find's writing actions, find's leading options and the ls/du value letters (`probe.shared.shell_inspect`) are now defined once; every walk's and every shell check's effective lists are unchanged.
+
 ## 0.386.0
 
 - **The Probe service reports a stopped daemon worker (`worker/not_running`) only when work is waiting for it.** A session whose daemon lease lapsed with no worker running now counts as a problem only when its daemon store holds events no writer run has covered or that one deferred, a writer run paused for the next to finish (an update's hand-over pauses one), or a chat log, SDK message file or reader log that the store's cursor has not read to the end (another size, or another inode where one was saved). An idle or empty session, such as the ones an update leaves without a worker until their next prompt, sends no report (one Mac sent 13 in 7 days). A store that cannot be read still reports, as before. The watch opens the store read-only. `hung` and `lease_<reason>` reports are unchanged.
