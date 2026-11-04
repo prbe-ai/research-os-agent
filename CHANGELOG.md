@@ -3,8 +3,11 @@
 ## Unreleased
 
 - **The daemon writer no longer indexes a run's new events.** The writer event index (a cheap model writing one line per step for the writer to open events from, daemon cost round 5) is removed: its bench cost tied the raw events and many of its calls failed under load. Every writer run reads its new events as they are. `PROBE_DAEMON_WRITER_EVENTS` and `PROBE_COMPANION_INDEX_MODEL` do nothing now, and a session store's saved `events` setting is ignored.
-- **The `summary` view is the dashboard's Summary tab.** `entity view="summary"` on a project or experiment now returns the Summary page as Markdown (`markdown`, `version`, `edited_at`, `edited_by`), the same page `view="overview"` returns as HTML with chart data; it used to return only the person-written block inside that page, empty on most projects, so agents reported a full Summary as empty. A page withheld from the caller reads `markdown: null` with an `unreadable` line instead of `""`. The tool schema and description now say which view is the Summary tab.
 - **Live console logs no longer hold a server slot while the server stores them.** The log shipper's `POST /v1/runs/{id}/log-chunks` now sends `X-Probe-Async-Ack: 1`, as queued metrics POSTs do, unless the client knows its server lacks `ingest_async_ack`. A server with the ingest queue answers 202 once the chunk is durable in its queue instead of waiting for it to be stored (p50 1.76 s per chunk at the SDK stress test's C0 drill, 98% of the door's busy time). `finish()` already waits for queued chunks; a chunk the server later refuses is reported by `finish()` like a refused point, and the final `probe/run.log` still holds that output.
+
+## 0.400.0
+
+- **The `summary` view is the dashboard's Summary tab.** `entity view="summary"` on a project or experiment now returns the Summary page as Markdown (`markdown`, `version`, `edited_at`, `edited_by`), the same page `view="overview"` returns as HTML with chart data; it used to return only the person-written block inside that page, empty on most projects, so agents reported a full Summary as empty. A page withheld from the caller reads `markdown: null` with an `unreadable` line instead of `""`. The tool schema and description now say which view is the Summary tab.
 
 ## 0.399.0
 
