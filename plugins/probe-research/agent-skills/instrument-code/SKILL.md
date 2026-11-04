@@ -77,7 +77,9 @@ program as a container's PID 1): write to lasting storage there.
 On SIGTERM (a preemption, `docker stop`, a deleted pod) the SDK spends up to
 `PROBE_SIGTERM_FLUSH_SECONDS` (20 s; `0` turns it off) sending what is queued,
 closes the run `failed` (`probe_finish.reason` = `preempted`), then exits by
-SIGTERM. A SIGTERM handler installed before `probe.init()` runs first.
+SIGTERM. A `kill` from another process of yours on the machine (stopping your own
+job) closes it `canceled` instead (`reason` = `stopped`). A SIGTERM handler
+installed before `probe.init()` runs first.
 `log()` queues to local disk and returns; the run's rows go out every
 `PROBE_SEND_INTERVAL_SEC` (5 s; `0` sends at once), so the page trails by that
 much, and `finish()` sends the rest without waiting. A power cut can lose the
