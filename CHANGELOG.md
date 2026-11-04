@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.389.0
+
 - **`probe notes write` replaces any note from text, pinned to the version it was read at.** It takes `--text` (literal, instead of FILE or stdin) and `--experiment`, `--run` and `--note` (a sub-note), where it was project-only, and `--base-version N`: if the note has moved past the version your text was written from, nothing is written and it says to read it again. Without `--base-version` it pins to the version it reads itself, which guards only the command's own read and write. It used to force (`base_version=None`), overwriting anything written since. A paged `entity(view="notes")` read now carries `notes_version` on its first page. An empty replacement, and text Probe's credential scrubber would rewrite (which could store `<redacted>` in place of the whole note), are refused before any request. The JSON now carries `target`, `label` and `version` like `notes edit` (`project` stays for a project).
 - **Settings get a file of their own, `settings.json`, beside Probe's config.** It holds what each of the Mac app's five settings should be (new-session default, automatic updates, transcripts, who records, workspace), who chose it and what was applied, so a setting can be saved in milliseconds without waiting for the Probe service. This release adds the file and its rules (`foundation/settings_file`, `shared/live_homes`); nothing writes it yet. `@probe/core` 0.2.2 carries its schema and examples.
 
