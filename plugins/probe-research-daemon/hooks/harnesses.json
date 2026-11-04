@@ -148,7 +148,7 @@
       "capabilities": {
         "root_skills": false, "prompt_context": false,
         "wake": false,
-        "follows_updates": true,
+        "follows_updates": false,
         "scoped_installs": false
       },
       "statusline": null,

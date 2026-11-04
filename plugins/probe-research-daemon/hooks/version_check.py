@@ -1198,7 +1198,7 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     """`(follows, agent)`: do this agent's open sessions follow the update with
     no restart (`probe.cli.updater.follows_without_restart`, before it runs)?
     An agent whose open sessions follow updates (the registry's
-    `follows_updates`: Claude Code, Codex; never one with `loaded_records`, Kimi
+    `follows_updates`: Claude Code, not Codex; never one with `loaded_records`, Kimi
     Code, whose answer needs the release installed first), every install at user scope where
     its ledger has scopes (`scoped_installs`: Claude Code's), the tap it
     updates to handing its sessions to the Probe
