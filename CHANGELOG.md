@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.395.0
+
 ## 0.394.0
 
 - **Claude Code moves onto the frozen hook plugin, one machine at a time, without losing an open window.** Each update cycle takes one step (plan codex-capture-fixes PR 5): once Codex moved on this machine (or is not set up there), it refuses where a Probe plugin is installed for a project only, installs `probe-hooks` for the user once the marketplace lists it, checks that its folder is the frozen one, that every installed Probe plugin can step aside and that the running Probe service can run Claude Code's events (`hooks.ready`), and only then switches. Windows opened from then on run the service's current routes; windows already open keep Probe's own hooks until they close (the Claude Code process's birth against the machine's append-only switch ledger). Probe's own plugins stay installed for their skills, commands and MCP; their hooks (the dispatcher, the Stop wake and the tap's four scripts) step aside for a shim-owned window. The service runs nothing for a window that is not the shim's, and skips the dispatcher or the tap where the project switched that plugin off. A later failed check switches new windows back. The Stop wake runs in the service as slices of up to a minute (`wait: "reads"`). `probe status` (`hook_shim`) and `probe doctor` say where the hooks stand. Tap 0.10.42.
