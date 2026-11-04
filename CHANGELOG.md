@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A Mac app that quits with an update waiting is updated about 20 seconds later.** The app never installs on its way out or restarts itself hidden (desktop 0.1.85+), so the Probe service now starts its closed-app install soon after the app's last connection closes (and looks once more two minutes later if the app was still exiting), instead of at its next 6-hourly check. An app opened again meanwhile, an update already running or automatic updates off wait.
+
 ## 0.389.0
 
 - **`probe notes write` replaces any note from text, pinned to the version it was read at.** It takes `--text` (literal, instead of FILE or stdin) and `--experiment`, `--run` and `--note` (a sub-note), where it was project-only, and `--base-version N`: if the note has moved past the version your text was written from, nothing is written and it says to read it again. Without `--base-version` it pins to the version it reads itself, which guards only the command's own read and write. It used to force (`base_version=None`), overwriting anything written since. A paged `entity(view="notes")` read now carries `notes_version` on its first page. An empty replacement, and text Probe's credential scrubber would rewrite (which could store `<redacted>` in place of the whole note), are refused before any request. The JSON now carries `target`, `label` and `version` like `notes edit` (`project` stays for a project).
