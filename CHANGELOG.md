@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.384.0
+
 - `probe cli search` returns both halves of an opposite pair together (`probe capture on` / `off`, `probe session track` / `untrack`), so "do not capture my transcript" and "my sessions are not being captured" both show both and the agent chooses from their summaries; `not` no longer matches `probe notes`. `probe capture off` is never offered without `probe capture on`, and on a tie `on` comes first. A task that is only flags (`--run`, `--run --json`) lists the commands that take them all, ordered by the flags' words, or any of them when none takes all; flags no command takes find nothing.
 
 ## 0.383.0
