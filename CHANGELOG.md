@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- Internal: the daemon's working-folder check moved from `probe.daemon.session.session` to `probe.daemon.folders.folders` (the old path forwards to it for one release). The folders every walk skips (`probe.foundation.walk_skips`) and find's writing actions, find's leading options and the ls/du value letters (`probe.shared.shell_inspect`) are now defined once; every walk's and every shell check's effective lists are unchanged.
 - **`npx probe-research` runs a fixed CLI at once.** The launcher (npm 0.16.0) runs an installed `probe` at or above 0.385.0, the first CLI whose sign-in opens the browser at once, with no version check first (its updater keeps it current). An older one, or none, gets the published latest pinned exactly (`==`), downloaded once and reused from uv's cache; only probe-research's index is read again (`--refresh-package`), never every package (`--refresh`). Offline, an installed `probe` at or above 0.374.0 still runs as it is; `npx probe-research repair` still asks for the newest. The CLI's own pinned install now reads the compiled CLI's index again too when uv's copy misses the version (`probe-research[all]==X` pins `probe-research-cli==X`).
+
+## 0.387.0
+
+- Internal: the daemon's working-folder check moved from `probe.daemon.session.session` to `probe.daemon.folders.folders` (the old path forwards to it for one release). The folders every walk skips (`probe.foundation.walk_skips`) and find's writing actions, find's leading options and the ls/du value letters (`probe.shared.shell_inspect`) are now defined once; every walk's and every shell check's effective lists are unchanged.
 
 ## 0.386.0
 
