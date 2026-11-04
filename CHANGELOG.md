@@ -4,6 +4,7 @@
 
 - **The order of harness moves to the frozen hook shim is the order only.** A harness moves once every earlier one (Codex, then Claude Code, Kimi Code, pi) on the machine has moved with its check passed, is not installed, was refused there, or waits for its agent to close; no waiting period between them. The ledger's times are for display.
 - **Codex keeps Probe's hooks in its open threads across updates.** Codex now runs one Probe hooks plugin whose files never change (`probe-hooks`); it hands each event to the Probe service, which runs the current routes. The plugin update moves Codex to it once, with every Codex window closed, and checks the move at every update after; the old plugins keep their skills and MCP with their hooks switched off. When the service cannot take an event, the hook runs it with the CLI's own runner or queues it, and never runs one event twice.
+- **A setting that needs a browser approval stops at once instead of waiting an hour.** When the Probe service applies a Mac app setting (turning session transcripts on, say) and Probe needs the person's browser approval for it, nobody could see that approval: the setting showed "Applying…" until the action's 60-minute limit and was then tried again. The service now stops the action at its approval and records `approval_required`, so the app can say so; the app's next click runs it with the approval on screen, and the setting is marked applied once it is true.
 
 ## 0.392.0
 
