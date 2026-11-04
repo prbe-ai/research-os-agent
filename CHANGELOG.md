@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.398.0
+
 - **Terminal settings commands write settings.json too, and `probe capture off` no longer waits for a running setup.** `probe session default`, `probe capture on|off`, `probe workspace limit`, and the recorder and automatic-updates actions the Mac app and the Probe service run, now record the choice in `settings.json` and apply it themselves, so the file is always the newest truth and the app, a terminal and the service never race. An off drops its markers with the choice and takes only the capture switches' own lock, so it never waits up to 10 minutes for a setup; a setup never lifts a marker the newest choice keeps off. A choice a running setup holds back is saved and the Probe service finishes it ("saved; Probe finishes it after the setup"). The service's own actions carry their revision and do nothing once a newer choice replaced it.
 
 ## 0.397.0
