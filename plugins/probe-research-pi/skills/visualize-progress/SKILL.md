@@ -34,7 +34,7 @@ STATUS  ·  bird-sql-agentic-rl — RL fine-tuning for SQL agents
 | `missing` | what SHOULD exist and does not - no question, no summary, a running run with no snapshot, an undelivered outbox | `browse` + the cards |
 | `attention` | the sharpest live caveat, one line. Omit rather than INVENT | the project card's notes excerpt - `view="notes"` for the whole document |
 | `tracking` | ONLY when it is not the quiet default - tracking OFF, or a run live. If OFF say so and render the rest ANYWAY | `probe session status` |
-| `tracked` | ONLY on the first render of a project - counts orient an arrival and are noise on a redraw | `browse`, and `view="summary"` for the authored Markdown |
+| `tracked` | ONLY on the first render of a project - counts orient an arrival and are noise on a redraw | `browse`, and `view="summary"` for the Summary tab's text |
 | `code` | ONLY when actionable - a suggested repo waiting for confirm, or no code source at all. A commit count is trivia, and a repo is never GUESSED from prose | the project card's `code` block |
 
 Nothing to put on any line means nothing is wrong - just omit it from the
