@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.404.0
+
 ## 0.403.0
 
 - **The Probe service queues an action behind any other instead of answering busy, and runs the Mac app's checks, debug log and uninstall flags.** An action asked for while another action or a desktop change holds the one mutating slot used to be refused as `busy` (only an update's hold queued it). Now it is accepted at once, answered `{action_id, queued: true, holder}` (`holder`: what holds the slot, else the oldest action queued ahead), and runs when the slot is free, in the order asked (service-only plan D12); only an Update during an update (the same work) and a full queue of 16 still answer busy. `action.cancel` now also cancels a queued action: it ends at once as cancelled (exit 130) and never runs. New `action.run` actions for the Mac app, which no longer runs the CLI itself: `doctor` (`probe doctor`, never `--fix`; its report as the `result` row's `actual.output`, cut at 256 KiB of its event line) and `debug_log` (`probe doctor --bundle --send --json`'s object as `actual`, `app_version` in the log). Both run beside the slot, as the watch's report does: they never hold off Sign in or settings, and an update or uninstall and they wait for each other. A cancel also ends an action whose child has not started yet. `uninstall` takes the refusal buttons' flags: `force`, `offline` and `unsent` (`discard` or `backup`), the same `probe uninstall` run. Once fenced callers are served (#4279), an uninstall they start backs up unsent research instead of discarding it, and ignores `force` (the service marks their children `PROBE_CALLER_FENCED=1`; `probe uninstall` reads it).
