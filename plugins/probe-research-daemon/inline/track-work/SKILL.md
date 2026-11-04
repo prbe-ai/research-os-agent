@@ -53,7 +53,6 @@ A session can hold both: record the ML part only.
 - Exact and machine-shaped: `--external-id`, `probe link` keys, `--config`, `--spec`, an artifact's `--name` (its relative path), a paper's real title.
 - Slug: 3 lowercase hyphenated words naming the thing, permanent. `--name`: a plain title, always set, never the slug re-cased.
 - A name or description the researcher chose for a project, experiment or run: write it verbatim with `--authored-by human`, in a command of its own (never with words you wrote).
-- A path `.probe.config` sets to `read`: use it, record nothing about it. Set to `hash`: run the work on it as usual (`probe exec`); Probe records only each file's hash and row count. Never print its contents.
 - Read an entity's notes and Markdown before writing to it.
 
 ## Where things go

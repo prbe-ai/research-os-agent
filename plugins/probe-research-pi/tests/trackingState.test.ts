@@ -84,17 +84,22 @@ describe("initializeTrackingState", () => {
   });
 
   it.each([
-    { sent: { context: "`.probe.config` blocks Probe from recording: x.", ask: "Ask the researcher once" },
-      read: { context: "`.probe.config` blocks Probe from recording: x.", ask: "Ask the researcher once" } },
-    { sent: { context: null, ask: null }, read: { context: null, ask: null } },
-    { sent: { context: 3, ask: "" }, read: { context: null, ask: null } },
+    {
+      sent: "Probe no longer reads .probe.config (removed 2026-11-04): folders it marked off are recorded.",
+      read: "Probe no longer reads .probe.config (removed 2026-11-04): folders it marked off are recorded.",
+    },
+    { sent: null, read: undefined },
+    { sent: "", read: undefined },
+    { sent: 3, read: undefined },
     { sent: undefined, read: undefined },
-    { sent: "nope", read: undefined },
-  ])("reads the .probe.config block $sent leniently", async ({ sent, read }) => {
+  ])("reads the retired-config notice $sent leniently", async ({ sent, read }) => {
     const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
       callback(
         null,
-        JSON.stringify({ session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine", probe_config: sent }),
+        JSON.stringify({
+          session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine",
+          retired_config_notice: sent,
+        }),
         "",
       );
     };
@@ -106,7 +111,7 @@ describe("initializeTrackingState", () => {
       log: () => {},
     });
     expect(state?.tracking).toBe(true);
-    expect(state?.probeConfig).toEqual(read);
+    expect(state?.retiredConfigNotice).toBe(read);
   });
 
   it("fails open when the CLI does not return a valid tracking state", async () => {

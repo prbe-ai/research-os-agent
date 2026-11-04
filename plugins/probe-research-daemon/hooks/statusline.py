@@ -179,10 +179,6 @@ def segment(payload: dict) -> str:
         # `on (inline)`: the researcher set Probe inline (`/probe inline`).
         inline=marker.is_inline(session_id, switch),
     )
-    # `· .probe.config: ask`: a `.probe.config` above the launch folder awaits
-    # the researcher's follow / ignore (`probe session parent`).
-    if rendered and tracking and marker.parent_question_open(session_id):
-        rendered += " · " + marker.PARENT_STATUS_ASK
     return rendered
 
 

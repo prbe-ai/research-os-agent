@@ -1522,35 +1522,6 @@ def _hook_harness():
     return module
 
 
-def _parent_matters(state: "str | None", daemon_reads: bool) -> bool:
-    """Does the parent question change anything in this state? Under `on` the
-    answer changes what is recorded; under `read` with the daemon reading
-    (`read only (daemon)`), what the daemon may see (`read` vs `off` paths)."""
-    if state in (_session_marker.STATE_FULL, _session_marker.STATE_DAEMON):
-        return True
-    return daemon_reads and state == _session_marker.STATE_READ_ONLY
-
-
-def _ask_parent_on_prompt(session_id: str, cwd: "str | None") -> None:
-    """In a session the Probe daemon records or reads for, Probe is at work from
-    the first message, so the parent question goes out with it (once)."""
-    try:
-        state = _state(session_id, cwd)
-        if state != _session_marker.STATE_DAEMON and not (
-            daemon_profile() and state == _session_marker.STATE_READ_ONLY
-            and not _session_marker.is_inline(session_id, state)
-        ):
-            return
-        if not _inline_reaches_model("UserPromptSubmit"):
-            return  # never marked asked unheard: the first held call asks instead
-        pc = _session_marker.probe_config()
-        ask = _parent_ask(session_id, (pc.UNASKED,))
-    except Exception:
-        return
-    if ask:
-        _emit_context("UserPromptSubmit", ask)
-
-
 def _announce_inline_once(hook_event: str, session_id: str) -> None:
     """Manual or trusted confirmed-quota inline is active and the
     agent has not been told about this stretch: tell it now, once, where this
@@ -1608,23 +1579,6 @@ def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, se
     else:
         notices = DAEMON_PROFILE_FLIP_NOTICE if daemon else FLIP_NOTICE
         notice = notices.get(landed) if landed else None
-        if (
-            notice
-            and session_id
-            and _parent_matters(landed, daemon)
-            and hook_event == "UserPromptSubmit"
-            and _inline_reaches_model(hook_event)
-        ):
-            # The switch moved to `on` (or, with the daemon reading, `read`): a
-            # `.probe.config` above the launch folder is the researcher's to
-            # follow or set aside, so ask now.
-            try:
-                pc = _session_marker.probe_config()
-                ask = _parent_ask(session_id, (pc.UNASKED, pc.PENDING))
-            except Exception:
-                ask = None
-            if ask:
-                notice = notice + "\n\n" + ask
     if not notice:
         return
     sys.stdout.write(
@@ -2452,67 +2406,6 @@ def _switch_move(payload: dict) -> "str | None":
     return None
 
 
-#: `probe` commands the parent question never holds back: the agent needs them
-#: to see the question, record the answer, or test a path.
-_PARENT_EXEMPT = frozenset({"session parent", "session status", "ignore check"})
-
-
-def _probe_call(payload: dict) -> "str | None":
-    """The Probe call this tool use makes (`probe <words>` or the MCP tool's
-    name), or None. Cheap first: a Bash line without `probe` in it is not one."""
-    tool_name = payload.get("tool_name")
-    if is_probe_mcp_tool(tool_name):
-        return tool_name
-    if tool_name != "Bash":
-        return None
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str) or "probe" not in command:
-        return None
-    for args in _probe_invocations(command):
-        if _asks_help(args):
-            continue
-        words = _session_marker.command_words(list(args))
-        if " ".join(words[:2]) in _PARENT_EXEMPT:
-            continue
-        return "probe " + " ".join(words[:2]) if words else "probe"
-    return None
-
-
-def _parent_ask(session_id: str, statuses: "tuple[str, ...]") -> "str | None":
-    """The parent question (marked asked), or None: `take_parent_ask`."""
-    return _session_marker.take_parent_ask(session_id, statuses)
-
-
-def _parent_files(session_id: str) -> str:
-    _status, parents = _session_marker.parent_config_status(session_id)
-    return _session_marker.parent_files_label(parents)
-
-
-def _parent_hold(payload: dict, session_id: str) -> bool:
-    """Hold back the session's first Probe call so the parent question comes
-    first (`on`, and `read` while the daemon reads: the other states touch
-    nothing the answer could change). True when refused."""
-    try:
-        state = _state(session_id, _payload_cwd(payload))
-        reads = daemon_profile() and not _session_marker.is_inline(session_id, state)
-        if not _parent_matters(state, reads):
-            return False
-        matched = _probe_call(payload)
-        if not matched:
-            return False
-        pc = _session_marker.probe_config()
-        if not pc.launch_dir(_session_marker.sessions_dir(), session_id):
-            return False
-        ask = _parent_ask(session_id, (pc.UNASKED,))
-        if ask is None:
-            return False
-        _refuse(_session_marker.PARENT_ASK_DENY.format(matched=matched, files=_parent_files(session_id)))
-        return True
-    except Exception:
-        return False  # a broken check never blocks a call
-
-
 def _refuse(reason: str) -> None:
     sys.stdout.write(
         json.dumps(
@@ -2566,8 +2459,6 @@ def main() -> None:
         if _session_marker.session_profile(session_id) is None:
             _session_marker.mark_session_profile(session_id, _session_marker.RECORDER_DAEMON)
         if hook_event == "PreToolUse":
-            if _parent_hold(payload, session_id):
-                return
             _deny_daemon_profile(payload, session_id)
         elif hook_event == "UserPromptSubmit":
             direction, shape, slug = _typed_direction(payload.get("prompt"))
@@ -2576,7 +2467,6 @@ def main() -> None:
                 _announce("UserPromptSubmit", landed, daemon=True, session_id=session_id)
             else:
                 _announce_inline_once("UserPromptSubmit", session_id)
-                _ask_parent_on_prompt(session_id, _payload_cwd(payload))
         elif hook_event == "PostToolUse":
             landed = None
             if payload.get("tool_name") in ("Skill", "SlashCommand"):
@@ -2596,8 +2486,6 @@ def main() -> None:
             notice = _daemon_notice(session_id, _payload_cwd(payload))
             if notice:
                 _emit_context("UserPromptSubmit", notice)
-            else:
-                _ask_parent_on_prompt(session_id, _payload_cwd(payload))
             return
         landed = _apply_direction(
             direction, session_id, shape, slug, _payload_cwd(payload)
@@ -2605,8 +2493,6 @@ def main() -> None:
         _announce("UserPromptSubmit", landed, session_id=session_id)
         return
     if hook_event == "PreToolUse":
-        if _parent_hold(payload, session_id):
-            return
         _deny(payload, session_id)
         return
     tool_name = payload.get("tool_name")

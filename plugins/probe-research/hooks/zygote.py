@@ -91,7 +91,7 @@ GO_WAIT_S = 1.0
 KILL_GRACE_S = 1.0
 #: Modules every event's routes import, loaded once here.
 PRELOAD = ("json", "re", "subprocess", "threading", "signal", "runpy", "io", "hashlib",
-           "_session_marker", "_hook_harness", "harness_io", "_probe_config", "_telemetry_core",
+           "_session_marker", "_hook_harness", "harness_io", "_telemetry_core",
            "_harness_registry")
 #: What a child changes when it starts: this host's own files, so a change shows.
 WATCHED = ("dispatch.py", "routes.json", "zygote.py")

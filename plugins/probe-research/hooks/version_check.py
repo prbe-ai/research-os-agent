@@ -417,9 +417,6 @@ def _seed_tracking_signal() -> None:
         return  # PreCompact carries no id; the session was seeded at its start.
     if _daemon_profile():
         _session_marker.mark_session_profile(session_id, _session_marker.RECORDER_DAEMON)
-    # Where the session started, once (a resume keeps the first): it decides
-    # which `.probe.config` files are ABOVE the session (`probe session parent`).
-    _session_marker.record_launch_dir(session_id, os.environ.get(SESSION_CWD_ENV) or "")
     try:
         # The signal is the live state. Once present, even discovering the cwd
         # default is both wasted ancestor I/O and a risk of live-reloading a
@@ -514,13 +511,6 @@ def _tracking_off() -> bool:
         return False
 
 
-def _excluded_context() -> str | None:
-    """`.probe.config` paths that reach this session, as one line, or None."""
-    return _session_marker.excluded_context(
-        os.environ.get(SESSION_ID_ENV) or "", os.environ.get(SESSION_CWD_ENV) or None
-    )
-
-
 def _start_context() -> str | None:
     """What to inject at a session start, or None.
 
@@ -571,9 +561,6 @@ def _start_context() -> str | None:
         return None
     parts: list[str] = []
     tracking_off = not _session_marker.state_allows_writes(state)
-    excluded = None if tracking_off else _excluded_context()
-    if excluded:
-        parts.append(excluded)
     if tracking_off:
         parts.append(TRACKING_OFF_CONTEXT)
     elif state == _session_marker.STATE_DAEMON and not _session_marker.companion_key_held():
@@ -1030,16 +1017,17 @@ def _inline_reminder() -> str | None:
     return f"{notice}\n\n{part}" if part else notice
 
 
-def _daemon_profile_excluded() -> str | None:
-    """The one agent-facing line the daemon profile keeps (Richard 2026-10-09):
-    which paths `.probe.config` blocks Probe from recording, so the agent never
-    records them itself. Only while something records (not `read` or `off`),
-    and never during a compaction."""
+def _retired_config_notice() -> str | None:
+    """The researcher's one line when this session starts under the retired per-folder config
+    file (removed 2026-11-04): once per session, only while something records, and never
+    during a compaction."""
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
     if not _session_marker.state_allows_writes(_probe_state()):
         return None
-    return _excluded_context()
+    return _session_marker.take_retired_config_notice(
+        os.environ.get(SESSION_ID_ENV) or "", os.environ.get(SESSION_CWD_ENV) or None
+    )
 
 
 def _daemon_profile_notice() -> str | None:
@@ -1101,22 +1089,23 @@ def _final(obj: dict) -> NoReturn:
 
     In the daemon profile nothing reaches the agent -- `additionalContext` is
     dropped and the researcher gets the reports as a systemMessage line -- but
-    the `.probe.config` line (`_daemon_profile_excluded`), an inline
-    session's notice after a compaction or resume (`_inline_reminder`) and the
-    server's notices (`_server_notices`), which reach both profiles' agents.
+    an inline session's notice after a compaction or resume (`_inline_reminder`)
+    and the server's notices (`_server_notices`), which reach both profiles' agents.
+    Both profiles' researchers see the retired-config notice (`_retired_config_notice`).
     """
     notices = _server_notices()
     _SHOWING.claims.extend(notices.claims)
-    if notices.person_lines:
+    person_lines = [*notices.person_lines, *filter(None, [_retired_config_notice()])]
+    if person_lines:
         prior = obj.get("systemMessage")
-        obj["systemMessage"] = "\n".join(([prior] if prior else []) + notices.person_lines)
+        obj["systemMessage"] = "\n".join(([prior] if prior else []) + person_lines)
     if _daemon_profile():
         obj.pop("hookSpecificOutput", None)
         notice = _daemon_profile_notice()
         if notice:
             prior = obj.get("systemMessage")
             obj["systemMessage"] = f"{prior}\n{notice}" if prior else notice
-        context = [c for c in (_daemon_profile_excluded(), _inline_reminder(), *notices.agent_lines) if c]
+        context = [c for c in (_inline_reminder(), *notices.agent_lines) if c]
         if context:
             obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(context)}
         _emit(obj)

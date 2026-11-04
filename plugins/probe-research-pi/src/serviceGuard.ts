@@ -16,8 +16,7 @@
  * so the Python-only rules still hold. And since the Python guard fails OPEN (a route that broke
  * exits 0 with nothing to say), an allow from the service never overrides a
  * refusal of `guard.ts`'s. The service can only add refusals: the Python
- * rules `guard.ts` has not ported (a `probe` write in a `read` session, the
- * `.probe.config` question held before the first Probe call).
+ * rules `guard.ts` has not ported (a `probe` write in a `read` session).
  *
  * THE FOLDER is the one this package ships beside, in both install shapes (the
  * public mirror pi installs, and this monorepo): `../probe-research` in the

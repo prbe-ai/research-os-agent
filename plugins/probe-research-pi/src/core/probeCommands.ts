@@ -173,9 +173,7 @@ export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
 export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "ask",
   "session status",
-  "session parent",
   "session send",
-  "ignore check",
   "run expect",
   "doctor",
   "paper find",

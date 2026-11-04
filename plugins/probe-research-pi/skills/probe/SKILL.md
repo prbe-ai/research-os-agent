@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w) - and `.probe.config` (what Probe may read and record, per path).
+description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w).
 ---
 # Probe
 
@@ -68,22 +68,3 @@ itself stays on (tracking, search, the MCP), run `probe capture off`; `probe
 capture on` turns them back on (its approval link is the researcher's to
 click). Never `probe wizard --no-capture` for this. Off is a choice, not a
 fault: `probe status` says who turned it off and when.
-
-## `.probe.config`:
-
-Sets what Probe may do with paths (gitignore syntax), whatever the state: a plain
-line is `off` (Probe never reads or records it), `<pattern> @probe read` lets the
-daemon look but records nothing, `!pattern` or `<pattern> @probe on` turns a path
-back on. `@probe <level>` alone on the first line sets every line's level. An
-`off` folder is closed, as in git: to keep one file in it, write `folder/*` then
-that file. Folders inherit their parents' file; where nothing matches, the state
-decides. Your own Probe lookups are unaffected. `probe ignore check PATH` names
-the level and the line.
-
-- Create or edit one when the researcher asks, or when you judge a path should
-  not be recorded; loosen or remove a rule only when they ask. Tell them each
-  change (file and line). Whole folder: `*` in its own file. Only some repos:
-  `/*` then `!/repo-a/` in the parent's.
-- One above where this session started is followed unless the researcher says
-  otherwise. When a notice asks, put that to them once and record their answer
-  as it says; never choose.

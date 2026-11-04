@@ -221,13 +221,6 @@ export interface SessionState {
      * session that just LEFT it runs it once more to clear the notified record.
      */
     lastTurnInDaemon: boolean;
-    /**
-     * `.probe.config` (paths Probe never records), from `session initialize`:
-     * the line that goes into the prompt while Probe records, and the question
-     * about files above the launch folder, delivered once with the next turn.
-     */
-    configContext: string | null;
-    parentAsk: string | null;
   };
   /**
    * This machine's Probe service socket, for the guard's `hooks.run` (plan D38):
@@ -277,8 +270,6 @@ function freshSession(): SessionState {
       trackingOff: undefined,
       daemonHealth: undefined,
       lastTurnInDaemon: false,
-      configContext: null,
-      parentAsk: null,
     },
     service: { socket: null, asked: false },
     reads: { poller: null },
@@ -538,13 +529,19 @@ function realTeamNoteSyncDeps(): TeamNoteSyncDeps {
  * Read the session's state back from the CLI (`probe session initialize`) and
  * draw the footer from it. A reading that comes back after pi switched to
  * another session is the old one's: never committed over the new one's (its
- * switch, profile, `.probe.config` context and footer). `keepOnFailure`: a
+ * switch, profile and footer). `keepOnFailure`: a
  * read that fails leaves the last reading, not an unknown one (a re-read after
  * the start, `recheckUntilClaimed`). True when a reading was committed.
  */
 async function refreshTrackingStatus(
   s: SessionState,
-  ctx: { hasUI: boolean; ui: { setStatus: (key: string, value: string | undefined) => void } },
+  ctx: {
+    hasUI: boolean;
+    ui: {
+      setStatus: (key: string, value: string | undefined) => void;
+      notify?: (message: string, level?: "info" | "warning" | "error") => void;
+    };
+  },
   sessionId: string,
   cwd: string,
   opts: { keepOnFailure?: boolean } = {},
@@ -577,8 +574,17 @@ async function refreshTrackingStatus(
   }
   s.probe.state = state.state;
   s.probe.tracking = { tracking: state.tracking, capture: state.capture };
-  s.probe.configContext = state.probeConfig?.context ?? null;
-  if (state.probeConfig?.ask) s.probe.parentAsk = state.probeConfig.ask;
+  if (state.retiredConfigNotice) {
+    // The researcher's, once (the CLI marked it given): never the agent's prompt.
+    logLine(state.retiredConfigNotice);
+    if (ctx.hasUI) {
+      try {
+        ctx.ui.notify?.(state.retiredConfigNotice, "warning");
+      } catch {
+        // a notice is best effort
+      }
+    }
+  }
   s.probe.profile = { sessionId, profile: state.profile };
   if (ctx.hasUI) {
     try {
@@ -1192,8 +1198,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     const effects = answeredEffects(answer);
     const parts = [base, forwarder.getContext(sessionId), ...(effects?.systemPrompt ?? [])].filter(Boolean);
     showNotices(ctx, effects);
-    // The service's routes asked the parent question and told the agent about the daemon this turn.
-    s.probe.parentAsk = null;
+    // The service's routes told the agent about the daemon this turn.
     s.probe.lastTurnInDaemon = s.probe.state === ProbeState.Daemon;
     if (s.probe.state === ProbeState.Daemon && inDaemonProfile(s, sessionId)) tellResearcherAboutDaemon(s, ctx, sessionId);
     try {
@@ -1262,7 +1267,6 @@ export function prepareExtension(env: ImplEnv): Candidate {
     if (s.note.text && !hiddenNow) {
       systemPrompt += renderTeamNoteForPrompt(s.note.text, teamNoteDocumentPath(process.env));
     }
-    if (s.probe.configContext) systemPrompt += `\n\n${s.probe.configContext}`;
     const inDaemon = s.probe.state === ProbeState.Daemon;
     let notice: string | null = null;
     if (daemonProfile) {
@@ -1340,10 +1344,6 @@ export function prepareExtension(env: ImplEnv): Candidate {
       } catch (err) {
         logLine(`reads at prompt: ${err instanceof Error ? err.message : String(err)}`);
       }
-    }
-    if (s.probe.parentAsk) {
-      notice = [notice, s.probe.parentAsk].filter(Boolean).join("\n\n");
-      s.probe.parentAsk = null;
     }
     if (systemPrompt === event.systemPrompt && !notice) return;
     return {
