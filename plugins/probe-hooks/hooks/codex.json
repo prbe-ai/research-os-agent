@@ -1,0 +1,136 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event SessionStart --timeout 60'",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event SubagentStart --timeout 30'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event UserPromptSubmit --timeout 10'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event PreToolUse --timeout 6'",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event PermissionRequest --timeout 10'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event PostToolUse --timeout 6'",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event PreCompact --timeout 11'",
+            "timeout": 11
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event PostCompact --timeout 11'",
+            "timeout": 11
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event SubagentStop --timeout 16'",
+            "timeout": 16
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event Stop --timeout 16'",
+            "timeout": 16
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event SessionEnd --timeout 3'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness codex --event Interrupt --timeout 3'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

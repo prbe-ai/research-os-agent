@@ -24,6 +24,14 @@
       "type": "plugin",
       "source": "./plugins/probe-research-tap",
       "description": "Ships client-sanitized per-session transcripts to Probe Research with source-bound device authentication."
+    },
+    {
+      "id": "probe-hooks",
+      "name": "probe-hooks",
+      "displayName": "Probe hooks",
+      "type": "plugin",
+      "source": "./plugins/probe-hooks",
+      "description": "Probe's hook proxy, installed by `probe wizard`: hands each hook event to the Probe service on this machine."
     }
   ]
 }

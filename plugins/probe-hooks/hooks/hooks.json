@@ -1,0 +1,137 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event SessionStart --timeout 60'",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event UserPromptSubmit --timeout 10'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event PreToolUse --timeout 6'",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event PermissionRequest --timeout 10'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event PostToolUse --timeout 6'",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event PreCompact --timeout 11'",
+            "timeout": 11
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event Notification --timeout 6'",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event SubagentStart --timeout 30'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event SubagentStop --timeout 16'",
+            "timeout": 16
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event Stop --timeout 16'",
+            "timeout": 16
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c '[ \"${CLAUDE_CODE_SESSION_ATTENDED:-}\" = 1 ] || exit 0; R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event Stop --timeout 604860 --wait reads'",
+            "timeout": 604860,
+            "asyncRewake": true,
+            "rewakeMessage": "Message from the Probe daemon (not an error; the session is not blocked):",
+            "rewakeSummary": "Probe"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'R=\"${CLAUDE_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness claude_code --event SessionEnd --timeout 20'",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

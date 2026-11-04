@@ -1735,9 +1735,12 @@ _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O"})
 #: Probe's hook programs whose event decides a consent: the answer to a held
 #: question and the permission mode (`approvals_hook.py`), the Probe switch
 #: (`tracking_guard.py`), and what runs any route (`dispatch.py`/`dispatch.sh`,
-#: Kimi Code's `harness_io.py`, the warm host `zygote.py`).
+#: Kimi Code's `harness_io.py`, the warm host `zygote.py`, the frozen hook shim's
+#: `hook.py`, plan D56).
 _HOOK_PROGRAMS = frozenset({"approvals_hook.py", "tracking_guard.py", "dispatch.py", "dispatch.sh",
-                            "harness_io.py", "zygote.py"})
+                            "harness_io.py", "zygote.py", "hook.py"})
+#: The shim's local runner, run as `python -m <it>`: any route, from the CLI's own copy (D56).
+_HOOK_RUNNER_MODULE = "probe.service.hooks.proxy.local"
 #: The ones no researcher's own program is plausibly called: refused by name,
 #: under a `hooks/` folder, where a path cannot be followed (a variable the
 #: guard cannot see, a quote its tokenizer cannot read).
@@ -1862,6 +1865,19 @@ def _command_start(tokens: "list[str]") -> int:
 
 def _runs_code(head: str) -> bool:
     return bool(_INTERPRETERS.match(head)) or head in _SHELLS or head in _CODE_RUNNERS
+
+
+def _runs_module(tokens: "list[str]", start: int, module: str) -> bool:
+    """Does this Python command run `module` (`-m module`, `-Im module`, ...)?"""
+    for index in range(start + 1, len(tokens) - 1):
+        word = tokens[index]
+        if not word.startswith("-") or word.startswith("--"):
+            if not word.startswith("-"):
+                return False
+            continue
+        if word.endswith("m") and tokens[index + 1] == module:
+            return True
+    return False
 
 
 def _python_operand(tokens: "list[str]", start: int) -> "tuple[str, str | None]":
@@ -2088,10 +2104,14 @@ def _mailbox_in(command: str, depth: int, methods=_MAILBOX_METHOD, quoted_method
 
 
 def _is_probe_hooks(folder: str) -> bool:
-    """A Probe plugin's hooks folder: this file's own, or one holding
-    `routes.json` and `_session_marker.py`."""
+    """A Probe plugin's hooks folder: this file's own, one holding `routes.json`
+    and `_session_marker.py`, or the frozen hook shim's (`hook.py` beside
+    `codex.json`, under a `.codex-plugin` manifest)."""
     folder = os.path.realpath(folder)
     if folder == os.path.realpath(_HOOKS_HERE):
+        return True
+    if os.path.isfile(os.path.join(folder, "hook.py")) and os.path.isfile(os.path.join(folder, "codex.json")) \
+            and os.path.isfile(os.path.join(os.path.dirname(folder), ".codex-plugin", "plugin.json")):
         return True
     return os.path.isfile(os.path.join(folder, "routes.json")) and os.path.isfile(
         os.path.join(folder, "_session_marker.py"))
@@ -2141,7 +2161,7 @@ def runs_probe_hook(command: str, cwd: "str | None" = None) -> "str | None":
     programs is not running them. Where a path cannot be followed, the names no
     researcher's script plausibly has (`_HOOK_NAMES_ALONE`) under `hooks/` are
     refused by name."""
-    if not isinstance(command, str) or not any(name in command for name in _HOOK_PROGRAMS):
+    if not isinstance(command, str) or not any(name in command for name in (*_HOOK_PROGRAMS, _HOOK_RUNNER_MODULE)):
         return None
     base = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
     return _hook_in(command, base, {}, 0, base)
@@ -2191,6 +2211,8 @@ def _hook_in(command: str, base: "str | None", names: dict, depth: int, origin: 
         if head in ("source", "."):
             script = next((t for t in tokens[start + 1 :] if t not in _REDIRECTIONS), None)
         elif _INTERPRETERS.match(head):
+            if _runs_module(tokens, start, _HOOK_RUNNER_MODULE):
+                return _HOOK_RUNNER_MODULE
             kind, script = _python_operand(tokens, start)
             script = script if kind == "file" and script != "-" else None
         elif head in _SHELLS:

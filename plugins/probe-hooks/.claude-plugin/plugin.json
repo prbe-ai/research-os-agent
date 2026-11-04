@@ -1,0 +1,12 @@
+{
+  "name": "probe-hooks",
+  "version": "1.0.0",
+  "description": "Probe's hook proxy: hands each hook event to the Probe service on this machine. Its files never change.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT"
+}

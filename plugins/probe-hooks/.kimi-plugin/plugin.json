@@ -1,0 +1,59 @@
+{
+  "name": "probe-hooks",
+  "version": "1.0.0",
+  "description": "Probe's hook proxy: hands each hook event to the Probe service on this machine. Its files never change.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "interface": {
+    "displayName": "Probe hooks",
+    "developerName": "Probe",
+    "websiteURL": "https://research.prbe.ai"
+  },
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event SessionStart --timeout 60'",
+      "timeout": 60
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event UserPromptSubmit --timeout 10'",
+      "timeout": 10
+    },
+    {
+      "event": "PreToolUse",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event PreToolUse --timeout 6'",
+      "timeout": 6
+    },
+    {
+      "event": "PostToolUse",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event PostToolUse --timeout 6'",
+      "timeout": 6
+    },
+    {
+      "event": "PreCompact",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event PreCompact --timeout 11'",
+      "timeout": 11
+    },
+    {
+      "event": "Stop",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event Stop --timeout 16'",
+      "timeout": 16
+    },
+    {
+      "event": "SessionEnd",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event SessionEnd --timeout 20'",
+      "timeout": 20
+    },
+    {
+      "event": "TurnStarted",
+      "command": "/bin/bash -c 'R=\"${KIMI_PLUGIN_ROOT:-}\"; R=\"${R%/}\"; [ -f \"$R/hooks/hook.py\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 -S -B \"$R/hooks/hook.py\" --harness kimi_code --event TurnStarted --timeout 6'",
+      "timeout": 6
+    }
+  ]
+}

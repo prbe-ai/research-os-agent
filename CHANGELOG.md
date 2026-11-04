@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Codex keeps Probe's hooks in its open threads across updates.** Codex now runs one Probe hooks plugin whose files never change (`probe-hooks`); it hands each event to the Probe service, which runs the current routes. The plugin update moves Codex to it once, with every Codex window closed, and checks the move at every update after; the old plugins keep their skills and MCP with their hooks switched off. When the service cannot take an event, the hook runs it with the CLI's own runner or queues it, and never runs one event twice.
+
 ## 0.392.0
 
 - **`probe doctor` and `probe status` say when the Codex thread they run in is dark.** A Codex window open across a Probe update runs none of Probe's hooks in the threads it held, or opened before the new hooks were approved, until Codex restarts, approved or not, so nothing records them and nothing warned (11-04: four threads of one researcher's work, `probe doctor` saying "all approved" inside one). Run inside Codex with Probe's tracking plugin on there, both now check that thread: whether it is recorded, and whether Probe's hooks ran for its newest turn (the hooks' heartbeat against the turn's start in Codex's session file; a helper thread is checked under its root thread, whose id Codex gives its hooks). A dark thread is named with the fix, restarting Codex; transcripts turned off on purpose is never called dark. `probe status --json` carries it as `codex_hooks.thread`, and `probe doctor --send` keeps the verdict while withholding a thread id the account cannot vouch for.

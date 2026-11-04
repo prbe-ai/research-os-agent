@@ -23,6 +23,11 @@
       "name": "probe-research-tap",
       "source": "./plugins/probe-research-tap",
       "description": "Ships client-sanitized per-session Claude Code or Codex transcripts to Research OS with source-bound device authentication."
+    },
+    {
+      "name": "probe-hooks",
+      "source": "./plugins/probe-hooks",
+      "description": "Probe's hook proxy, installed by `probe wizard`: hands each hook event to the Probe service on this machine. Its files never change."
     }
   ]
 }
