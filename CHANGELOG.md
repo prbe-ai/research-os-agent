@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.399.0
+
 - **Agents write conclusions, dead ends and other fields as a short plain-words summary, with no numbers.** track-work asked for "the answer and its evidence, with both sides' numbers", so conclusions came out as 600-character paragraphs of run names, fitted formulas and open questions. Names, descriptions, questions, conclusions, dead ends and reasons are now a short ELI10 summary in plain words: the dashboard already shows the numbers, and detail goes in notes. Digits that are part of a name stay (CIFAR-10). The `instrument-code` example follows suit. Tap 0.10.44 carries the new rules.
 
 ## 0.398.0
