@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.390.0
+
 - **A Mac app that quits with an update waiting is updated about 20 seconds later.** The app never installs on its way out or restarts itself hidden (desktop 0.1.85+), so the Probe service now starts its closed-app install soon after the app's last connection closes (and looks once more two minutes later if the app was still exiting), instead of at its next 6-hourly check. An app opened again meanwhile, an update already running or automatic updates off wait.
 
 ## 0.389.0
