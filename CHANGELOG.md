@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.385.0
+
 - **Sign-in opens the browser at once.** `probe wizard --action login` (the Mac app's Sign in) and the wizard's own sign-in now ask for the code, show it and open the browser first, then send the writes queued under the old sign-in while you approve; the exchange still waits for them, because it releases that sign-in on the server. A failed or slow send still lets the sign-in finish, and a Cancel (SIGINT) during it still ends the run. `--no-browser` and `--token` are unchanged.
 - **The wizard's screens no longer wait for setup.** The permanent CLI install, the identity check and the install health check (`--action configure` over the same version) run in the background, and the guided install readies the Probe service while you approve. The run waits for them only where it needs them (before installing for a coding agent, at the hand-off to the service, and before it ends), showing "Finishing setup…" if they are still running. A refused install (an uninstall running, no uv) still ends `--action configure` with exit 2 and its message, said from the disk check before any screen. In `--json` the `persistent_install` step can now come after `sign_in`, always before the first install step and before `done`.
 - **Installs reuse what is on disk.** An installed CLI already at the version wanted is read from its dist-info (no `probe --version`, no installer). A pinned install builds from uv's cache and reads the package index again (`--refresh-package`) only when uv's copy lacks that version; `@latest` still reads it, and `UV_OFFLINE` never does.
