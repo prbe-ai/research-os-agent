@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.408.0
+
 - An Update now gives each coding agent with Probe's plugin its sandbox's entry for the Probe service's drop folder (Codex `writable_roots`, Claude Code's sandbox settings), as `probe wizard` does. Agents set up before 0.406.0 had none, so since 0.407.0 a `probe` command an agent ran inside its sandbox could not reach the service. An entry the person took out stays out.
 - A `probe` command whose sandbox may not write the drop folder now says the fix: run `probe wizard` once from your own terminal, or run the command outside the sandbox. It used to print a reinstall link.
 - A sandboxed `probe` command that no Probe service takes now fails after a minute, saying to run any `probe` command from your own terminal. It used to wait up to 30 minutes, as long as an answer may take.
