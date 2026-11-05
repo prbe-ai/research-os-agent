@@ -157,12 +157,10 @@ def _safe_sid(session_id: str) -> str:
 
 def lock_held(path: Path) -> bool:
     """Does a live worker hold this session lock (`<daemon>/<sid>.lock`, for its
-    whole life)? A shared probe released at once. Unknown (no flock here, an
-    unreadable file) reads as free: the worker's own wait is bounded."""
-    try:
-        import fcntl
-    except ImportError:
-        return False
+    whole life)? A shared probe released at once. Unknown (an unreadable
+    file) reads as free: the worker's own wait is bounded."""
+    import fcntl
+
     try:
         handle = open(path, "rb")  # noqa: SIM115 -- closed below
     except OSError:
@@ -229,8 +227,8 @@ class Supervisor:
     def _open_socket(self) -> None:
         """Listen for SDK messages (a UNIX datagram socket): nothing to accept, nothing
         to block on, and a sender with no listener fails at once."""
-        if self.sock is not None or not hasattr(socket, "AF_UNIX"):
-            return  # (Windows: no datagram socket; the daemon reads the session log alone)
+        if self.sock is not None:
+            return
         path = socket_path(self.session_id)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

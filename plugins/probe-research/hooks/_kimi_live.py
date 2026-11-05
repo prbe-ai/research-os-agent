@@ -205,8 +205,6 @@ def live_records(harness: str, titles=(), marker=None) -> "list[dict | None] | N
     one of `titles` (the registry's `process_title` and `binary`) with no
     readable record of this harness -- one Probe cannot prove anything about.
     None (the whole answer) when processes cannot be listed here."""
-    if os.name == "nt":
-        return None
     marker = marker or _session_marker()
     table = _processes(marker)
     if table is None:
@@ -273,7 +271,7 @@ def _pid_in(path: str) -> "int | None":
         info = os.lstat(path)
     except OSError:
         return None
-    if not stat.S_ISREG(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
         return None
     try:
         with open(path, encoding="utf-8") as handle:

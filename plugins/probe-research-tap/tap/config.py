@@ -151,30 +151,19 @@ def watcher_prefix() -> str:
     return sources.harness(current_source()).capture.watcher_prefix
 
 
-#: The folder of the watcher files, when it names an absolute one, on every OS
-#: (tap 0.10.19; Windows only before): every reader honours it, the hooks,
-#: `probe` (`capture_state`), the status line, `tap_handover` and pi
-#: (`watcherDir`). Windows: the hooks' own `/tmp`, as Git Bash maps it
-#: (`cygpath -w /tmp`), set by session-start.sh for everything it starts, the
-#: service's recorder of the session included (its environment). The temp
-#: folder Python finds there need not be the one Git Bash maps, and a sentinel
-#: the hooks touch in one folder is never seen in the other. Elsewhere unset
-#: but by a test, which keeps its files out of the shared `/tmp`.
+#: The folder of the watcher files, when it names an absolute one (tap 0.10.19):
+#: every reader honours it, the hooks, `probe` (`capture_state`), the status
+#: line, `tap_handover` and pi (`watcherDir`). Unset but by a test, which keeps
+#: its files out of the shared `/tmp`.
 WATCHER_DIR_ENV = "PROBE_TAP_WATCHER_DIR"
 
 
 def _watcher_dir() -> Path:
     """Where the hooks keep a session's watcher files: the folder
-    WATCHER_DIR_ENV names, else `/tmp`. On Windows the hooks' Git Bash maps
-    `/tmp` to a folder of its own, which Python's `Path("/tmp")` (`C:\\tmp`)
-    is not: there, unset, the user's temp folder."""
+    WATCHER_DIR_ENV names, else `/tmp`."""
     given = os.environ.get(WATCHER_DIR_ENV, "")
     if given and os.path.isabs(given):
         return Path(given)
-    if os.name == "nt":
-        import tempfile
-
-        return Path(tempfile.gettempdir())
     return Path("/tmp")
 
 

@@ -293,7 +293,7 @@ def write_runtime(python: str, cli_version: str) -> bool:
     try:
         with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
             json.dump(wanted, handle)
-        paths.replace(tmp, target)
+        os.replace(tmp, target)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -330,7 +330,7 @@ def _write_starts(starts: list) -> None:
     try:
         with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
             json.dump({"starts": starts}, handle)
-        paths.replace(tmp, target)
+        os.replace(tmp, target)
     except OSError:
         pass
     finally:

@@ -40,11 +40,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: Windows (plan R3): the service's folder is under %LOCALAPPDATA% (private to
-#: the user by default), and it listens on a named pipe, not a UNIX socket
-#: (`pipe_name`, `winpipe.py`).
-WINDOWS = os.name == "nt"
-
 #: A UNIX socket path is at most 108 bytes on Linux and 104 on macOS; past
 #: this the socket moves to a private folder under /tmp (API v1, "Transport").
 MAX_SOCKET_PATH = 100
@@ -181,27 +176,10 @@ def _darwin_uuid() -> str | None:
     return None
 
 
-def _windows_guid() -> str | None:
-    """Windows's machine id: HKLM\\SOFTWARE\\Microsoft\\Cryptography MachineGuid."""
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
-                            winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)) as key:
-            value, _kind = winreg.QueryValueEx(key, "MachineGuid")
-        return str(value).strip() or None
-    except (ImportError, OSError):
-        return None
-
-
 def machine_id() -> str:
     """This machine's own id as the OS keeps it: Linux's machine-id, macOS's
-    hardware UUID, Windows's MachineGuid, else the hostname (never empty)."""
-    if WINDOWS:
-        found = _windows_guid()
-        if found:
-            return found
-    elif sys.platform == "darwin":
+    hardware UUID, else the hostname (never empty)."""
+    if sys.platform == "darwin":
         found = _darwin_uuid()
         if found:
             return found
@@ -256,17 +234,12 @@ def get_root_override() -> str | None:
 def root_dir() -> Path:
     """`~/.local/state/probe/service`: every machine's folder, and the files
     that describe the install rather than one machine; `PROBE_SERVICE_ROOT`
-    when set (an absolute path). On Windows `%LOCALAPPDATA%\\probe\\service`
-    (private to the user there)."""
+    when set (an absolute path)."""
     if _root_override:
         return Path(_root_override[0])
     named = os.environ.get(SERVICE_ROOT_ENV)
     if named and os.path.isabs(named):
         return Path(named)
-    if WINDOWS:
-        local = os.environ.get("LOCALAPPDATA")
-        base = Path(local) if local else home() / "AppData" / "Local"
-        return base / "probe" / SERVICE_DIRNAME
     return state_dir() / SERVICE_DIRNAME
 
 
@@ -397,10 +370,6 @@ def uninstall_plan_path() -> Path:
 
 
 def fallback_python() -> Path:
-    if WINDOWS:
-        appdata = os.environ.get("APPDATA")
-        base = Path(appdata) if appdata else home() / "AppData" / "Roaming"
-        return base / "uv" / "tools" / "probe-research" / "Scripts" / "python.exe"
     return home().joinpath(*UV_TOOL_PYTHON)
 
 
@@ -413,8 +382,8 @@ def _socket_in(folder: Path) -> Path:
     (`ensure_dirs`), in its own private folder, so each folder keeps its own socket.
     """
     path = folder / SOCKET_NAME
-    if WINDOWS or len(os.fsencode(str(path))) <= MAX_SOCKET_PATH:
-        return path  # (never listened on, on Windows: `pipe_name`)
+    if len(os.fsencode(str(path))) <= MAX_SOCKET_PATH:
+        return path
     try:
         short = os.readlink(folder / SOCKET_LINK_NAME)
     except OSError:
@@ -462,16 +431,8 @@ def _make_short_socket_dir(folder: Path) -> Path:
 
 
 def socket_path() -> Path:
-    """This machine's service socket (see `_socket_in`). POSIX: Windows
-    serves `pipe_name()` instead."""
+    """This machine's service socket (see `_socket_in`)."""
     return _socket_in(service_dir())
-
-
-def pipe_name() -> str:
-    """Windows: this user's service pipe on this machine (`winpipe.pipe_name`)."""
-    from . import winpipe
-
-    return winpipe.pipe_name(machine_key(), os.path.normcase(str(service_dir())))
 
 
 def legacy_socket_path() -> Path:
@@ -479,7 +440,7 @@ def legacy_socket_path() -> Path:
     their own rule (a too-long path: `/tmp/probe-<uid>/service-<hash>.sock`, which
     `private_dir` and `require_private` refuse when another user made the folder)."""
     path = root_dir() / SOCKET_NAME
-    if WINDOWS or len(os.fsencode(str(path))) <= MAX_SOCKET_PATH:
+    if len(os.fsencode(str(path))) <= MAX_SOCKET_PATH:
         return path
     digest = hashlib.sha256(os.fsencode(str(root_dir()))).hexdigest()[:16]
     return Path("/tmp") / f"probe-{os.getuid()}" / f"service-{digest}.sock"
@@ -496,26 +457,10 @@ def legacy_lock_path() -> Path:
     return root_dir() / LOCK_NAME
 
 
-#: Windows locks one byte this far into the file (`probe._shared.oscompat`'s
-#: offset): its byte-range locks are mandatory, and a lock on byte 0 would
-#: stop readers of what a lock file carries (a pid).
-_WIN_LOCK_OFFSET = 0x7FFFFFFF
-
-
 def try_lock(fd: int, *, shared: bool = False) -> bool:
     """Take the whole-file advisory lock on `fd` without waiting: True when
-    taken, False when another holds it. `fcntl.flock` on POSIX (exclusive or
-    shared); one byte with `msvcrt.locking` on Windows (exclusive only), per
-    open handle in both: a second open in the same process conflicts."""
-    if WINDOWS:
-        import msvcrt
-
-        try:
-            os.lseek(fd, _WIN_LOCK_OFFSET, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            return True
-        except OSError:
-            return False
+    taken, False when another holds it. `fcntl.flock` (exclusive or shared),
+    per open handle: a second open in the same process conflicts."""
     import fcntl
 
     try:
@@ -526,40 +471,12 @@ def try_lock(fd: int, *, shared: bool = False) -> bool:
 
 
 def unlock(fd: int) -> None:
-    if WINDOWS:
-        import msvcrt
-
-        try:
-            os.lseek(fd, _WIN_LOCK_OFFSET, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
-        return
     import fcntl
 
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
     except OSError:
         pass
-
-
-def replace(src, dst) -> None:
-    """`os.replace`; on Windows retried for up to a second while a reader has
-    the target open (Python opens files without FILE_SHARE_DELETE there)."""
-    if not WINDOWS:
-        os.replace(src, dst)
-        return
-    import time
-
-    deadline = time.monotonic() + 1.0
-    while True:
-        try:
-            os.replace(src, dst)
-            return
-        except PermissionError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.02)
 
 
 def private_dir(path: Path) -> Path:
@@ -570,8 +487,6 @@ def private_dir(path: Path) -> Path:
     folder around it must not be anyone else's to plant files in.
     """
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if WINDOWS:
-        return path  # under %LOCALAPPDATA%, which only this user (and admins) can open
     # Checked and made 0700 through a descriptor of the folder itself, never a link
     # (`O_DIRECTORY|O_NOFOLLOW`, `fchmod`): a swap after the check changes nothing it does.
     try:
@@ -601,10 +516,6 @@ def require_private(path: Path) -> None:
     the folder is not there (no service has run).
     """
     st = path.lstat()
-    if WINDOWS:
-        if not stat.S_ISDIR(st.st_mode):
-            raise PermissionError(f"{path} is not a folder")
-        return
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
         raise PermissionError(f"{path} is not a private folder of this user")
 
@@ -614,14 +525,12 @@ def ensure_dirs() -> Path:
     Returns the socket path."""
     private_dir(root_dir())
     private_dir(service_dir())
-    if not WINDOWS:
-        private_dir(get_drop_dir())
-        private_dir(get_drop_requests_dir())
-        private_dir(get_drop_answers_dir())
+    private_dir(get_drop_dir())
+    private_dir(get_drop_requests_dir())
+    private_dir(get_drop_answers_dir())
     sock = socket_path()
-    if not WINDOWS:
-        if len(os.fsencode(str(service_dir() / SOCKET_NAME))) > MAX_SOCKET_PATH:
-            _make_short_socket_dir(service_dir())
-            sock = socket_path()
-        private_dir(sock.parent)
+    if len(os.fsencode(str(service_dir() / SOCKET_NAME))) > MAX_SOCKET_PATH:
+        _make_short_socket_dir(service_dir())
+        sock = socket_path()
+    private_dir(sock.parent)
     return sock

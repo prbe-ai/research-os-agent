@@ -9,8 +9,8 @@ session) and the team note's sync (`version_check.py` at a session's start,
 its own schedule; nothing is spawned when this says no (service-only plan,
 task 14: the work waits for the next ask):
 
-    no service       no socket file (none runs), Windows, or a socket folder
-                     that is not this user's alone
+    no service       no socket file (none runs), or a socket folder that is
+                     not this user's alone
     no stand-in      this environment carries what a request's context cannot
                      (a credential: `PROBE_TOKEN`, ...), so the service's
                      child would not act as this hook's would
@@ -82,8 +82,6 @@ def stands_in(env=None) -> bool:
 
 def call(method: str, params: dict, *, timeout: float = TIMEOUT_S):
     """`method`'s result (a dict), or None on anything else. Never raises."""
-    if os.name != "posix":
-        return None
     try:
         paths = _paths()
         path = paths.socket_path()

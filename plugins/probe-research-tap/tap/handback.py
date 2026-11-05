@@ -97,7 +97,7 @@ RESTARTING_S = 10.0
 #: later (live run 39946691999, Windows: 6 to 10 s). Past the window a service
 #: still not answering is likely gone for longer: once a minute is enough. At
 #: most 1 + SOON_FOR_S / SOON_S asks in the window, each a connect to a socket
-#: (or pipe) that is not there, or one call bounded by CALL_TIMEOUT_S.
+#: that is not there, or one call bounded by CALL_TIMEOUT_S.
 #: The same window and interval for a transcript that has not proven whose it
 #: is yet (`HandBack.young`): nothing is offered before it does, and a session
 #: just started has no line (live run 40004468897: each late session's first

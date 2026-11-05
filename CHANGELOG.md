@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The Probe service's Windows code is deleted (service-only D16, tap 0.10.51).** Probe has not installed on Windows since #4084, so the named-pipe transport (`winpipe.py`, in the CLI and the tap), the Windows branches of the service's folder, locks, process identity, keeper, actions, updater and hook routes, the status-line hook's Windows liveness check and the tap's Git Bash pid and watcher-folder handling are gone, with `test_service_windows.py` and the dormant `service-windows` workflow. Nothing changes on Linux or macOS.
+
 ## 0.408.0
 
 - An Update now gives each coding agent with Probe's plugin its sandbox's entry for the Probe service's drop folder (Codex `writable_roots`, Claude Code's sandbox settings), as `probe wizard` does. Agents set up before 0.406.0 had none, so since 0.407.0 a `probe` command an agent ran inside its sandbox could not reach the service. An entry the person took out stays out.

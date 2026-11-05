@@ -30,14 +30,14 @@
                 a restarted service is noticed (EOF) and re-told at once.
 
 ONE source, byte-identical copies: the tap (`tap/service/`) and, through the
-tap's `python -m tap service ...`, pi carry this folder's eleven files because
+tap's `python -m tap service ...`, pi carry this folder's ten files because
 neither can import `probe` (it lives in the CLI's uv tool env, they run under
 the system python). `make sync-service-client` copies them under the same
 names; `tests/test_service_client_sync.py` fails on drift. Stdlib only,
-imports between the eleven relative.
+imports between the ten relative.
 
-There is no switch: the service runs on every Linux, macOS and (since R3,
-over a named pipe: `winpipe.py`) Windows machine with a new enough CLI. A session whose Probe mode is `off` never starts or holds it.
+There is no switch: the service runs on every Linux and macOS machine with a new enough CLI (Probe does
+not run on Windows, service-only D16). A session whose Probe mode is `off` never starts or holds it.
 """
 
 from __future__ import annotations
@@ -107,8 +107,6 @@ class Connection:
         (the first error) only when that one is absent or unlistened too; its
         own timeout or foreign folder is raised as itself, never read as no
         service."""
-        if paths.WINDOWS:  # this user's named pipe (`winpipe.py`); no older service there
-            return cls._at(None, timeout)
         try:
             return cls._at(paths.socket_path(), timeout)
         except (FileNotFoundError, ConnectionRefusedError) as first:
@@ -119,10 +117,6 @@ class Connection:
 
     @classmethod
     def _at(cls, path, timeout: float) -> Connection:
-        if paths.WINDOWS:
-            from . import winpipe
-
-            return cls(winpipe.connect(paths.pipe_name(), timeout))
         paths.require_private(path.parent)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout)
@@ -137,13 +131,9 @@ class Connection:
         return self.sock.fileno()
 
     def wait_readable(self, timeout: float) -> bool:
-        """Has the service sent something (or closed), within `timeout`?
-        `select` on POSIX; the pipe's own poll on Windows, which `select`
-        cannot wait on."""
+        """Has the service sent something (or closed), within `timeout`? (`select`)"""
         if self._buffer:
             return True
-        if paths.WINDOWS:
-            return self.sock.readable(timeout)
         import select
 
         readable, _, _ = select.select([self.sock.fileno()], [], [], max(0.0, timeout))

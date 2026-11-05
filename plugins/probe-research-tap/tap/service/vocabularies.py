@@ -308,8 +308,7 @@ class DeferReason:
     SETUP_RUNNING = "setup_running"
     #: An `action.run` of this service is running.
     ACTION_RUNNING = "action_running"
-    #: This system's CLI is not updated by the service (Windows, R3: its files
-    #: cannot be replaced or moved while it runs; the CLI updates itself there).
+    #: Sent by no service since Windows went (service-only D16); kept because API v1 only grows.
     UNSUPPORTED = "unsupported"
 
 

@@ -421,14 +421,6 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
     wrapper gave up or was killed, and the session may have moved to the
     service since, which leaves its marker beside that pid file.
 
-    Windows: the watcher files are in the folder the hooks named
-    (`_watcher_dir`), a pid is never probed with `os.kill` (signal 0 is
-    CTRL_C_EVENT, sent to a whole process group), and the marker's pid must be
-    the one the service wrote into its lock file, still that same process
-    (`_alive_nt`), as `capture_state._hosted_pid` reads it there. A wrapper's
-    pid file names a Git Bash (MSYS) pid, which no Windows call can ask, so
-    there only the marker can say running.
-
     A marker naming the service is not taken as "running" on its own: the
     service is asked what its recorder of the session does (`service.status`,
     `_recorder_reading`), as `capture_state` asks it: `not recording` while a
@@ -450,9 +442,8 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
 
     plugin_dir = _tap_plugin_dir(source)
     if _switched_off(session_id):
-        if os.name != "nt" and os.path.exists(plugin_dir):
-            pid = _own_pid(os.path.join(_watcher_dir(source), _watcher_prefix(source) + "-watcher-" + session_id)
-                           + ".pid")
+        if os.path.exists(plugin_dir):
+            pid = _own_pid(os.path.join(_watcher_dir(), _watcher_prefix(source) + "-watcher-" + session_id) + ".pid")
             if pid is not None and pid > 0:
                 try:
                     os.kill(pid, 0)
@@ -468,15 +459,14 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
     if _halted(plugin_dir):
         return {"running": False, "reason": "halted"}
 
-    stem = os.path.join(_watcher_dir(source), _watcher_prefix(source) + "-watcher-" + session_id)
-    if os.name != "nt":
-        pid = _own_pid(stem + ".pid")
-        if pid is not None and pid > 0:
-            try:
-                os.kill(pid, 0)
-                return {"running": True, "reason": "running"}
-            except OSError:
-                pass
+    stem = os.path.join(_watcher_dir(), _watcher_prefix(source) + "-watcher-" + session_id)
+    pid = _own_pid(stem + ".pid")
+    if pid is not None and pid > 0:
+        try:
+            os.kill(pid, 0)
+            return {"running": True, "reason": "running"}
+        except OSError:
+            pass
     if not _is_the_service(_own_pid(stem + ".hosted")):
         return {"running": False, "reason": "not started"}
     reading = _recorder_reading(session_id)
@@ -516,39 +506,16 @@ def _switched_off(session_id: str) -> bool:
         return False
 
 
-#: Mirrors `tap.config.WATCHER_DIR_ENV`: on Windows, Git Bash's `/tmp` as a
-#: Windows path, which session-start.sh exports for what it starts ...
+#: Mirrors `tap.config.WATCHER_DIR_ENV`: the folder the tap keeps its watcher files in.
 _WATCHER_DIR_ENV = "PROBE_TAP_WATCHER_DIR"
-#: ... and keeps in the tap's state folder for what it does not start, this
-#: refresh included (`capture_state.WATCHER_DIR_FILE`).
-_WATCHER_DIR_FILE = ".watcher_dir"
 
 
-def _watcher_dir(source: str | None = None) -> str:
+def _watcher_dir() -> str:
     """Where the tap's hooks keep a session's watcher files: `/tmp`, or the
-    folder `_WATCHER_DIR_ENV` names (every OS, as the tap from 0.10.19). On
-    Windows the folder Git Bash's `/tmp` is: the one session-start.sh recorded
-    in the tap's state folder (`_WATCHER_DIR_FILE`), else `_WATCHER_DIR_ENV`,
-    else the user's temp folder. Mirrors `capture_state._watcher_dir`."""
-    if os.name != "nt":
-        given = os.environ.get(_WATCHER_DIR_ENV, "")
-        return given if given and os.path.isabs(given) else "/tmp"
-    if os.name == "nt":
-        if source:
-            try:
-                with open(os.path.join(_tap_plugin_dir(source), _WATCHER_DIR_FILE), encoding="utf-8") as handle:
-                    saved = handle.read(4096).strip()
-            except (OSError, ValueError):
-                saved = ""
-            if saved and os.path.isabs(saved):
-                return saved
-        given = os.environ.get(_WATCHER_DIR_ENV, "")
-        if given and os.path.isabs(given):
-            return given
-        import tempfile  # noqa: PLC0415
-
-        return tempfile.gettempdir()
-    return "/tmp"
+    folder `_WATCHER_DIR_ENV` names (as the tap from 0.10.19). Mirrors
+    `capture_state._watcher_dir`."""
+    given = os.environ.get(_WATCHER_DIR_ENV, "")
+    return given if given and os.path.isabs(given) else "/tmp"
 
 
 #: One `service.status` per refresh process, at most every this many seconds:
@@ -619,7 +586,7 @@ def _own_pid(path: str) -> int | None:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             return None
-        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        if info.st_uid != os.getuid():
             return None
         return int(os.read(fd, 32).decode("ascii", "replace").strip())
     except (OSError, ValueError):
@@ -641,52 +608,12 @@ def _service_lock() -> str:
     return str(_service_paths.lock_path())
 
 
-def _alive_nt(pid: int, start: str) -> bool:
-    """Windows: is the process (pid, start) still running? `procid.alive`'s
-    Windows branch, stdlib only: OpenProcess, its exit code still STILL_ACTIVE
-    (259), and its creation FILETIME the start the service wrote. Never
-    `os.kill`: on Windows that ends the process (signal 0 is CTRL_C_EVENT)."""
-    try:
-        import ctypes  # noqa: PLC0415
-        from ctypes import wintypes  # noqa: PLC0415
-
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.OpenProcess.restype = wintypes.HANDLE
-        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        k32.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        try:
-            code = wintypes.DWORD()
-            times = [wintypes.FILETIME() for _ in range(4)]
-            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:
-                return False
-            if not k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-                return False
-            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-        finally:
-            k32.CloseHandle(handle)
-    except (OSError, AttributeError, ValueError):
-        return False
-    return str(created) == start
-
-
 def _is_the_service(pid: int | None) -> bool:
     """Is `pid` this user's Probe service, alive? Its `/proc` command line names
     `probe.service` (Linux); with no `/proc`, it is the pid the service holding
-    its lock wrote there (`server._name_holder`), and alive. On Windows that
-    lock line's start time must match too (`_alive_nt`): no `/proc`, and no
-    `os.kill`."""
+    its lock wrote there (`server._name_holder`), and alive."""
     if pid is None or pid <= 1:
         return False
-    if os.name == "nt":
-        try:
-            with open(_service_lock(), encoding="utf-8") as handle:
-                pid_s, _, start = handle.read(64).strip().partition(" ")
-        except (OSError, ValueError):
-            return False
-        return pid_s == str(pid) and bool(start) and _alive_nt(pid, start)
     try:
         with open(os.path.join(_PROC_DIR, str(pid), "cmdline"), "rb") as handle:
             return b"probe.service" in handle.read()

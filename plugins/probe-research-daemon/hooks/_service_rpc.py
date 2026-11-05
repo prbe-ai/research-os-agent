@@ -47,7 +47,7 @@ def _paths():
 
 
 def enabled() -> bool:
-    return os.name == "posix" and not any(os.environ.get(name) == "off" for name in SERVICE_ENVS)
+    return not any(os.environ.get(name) == "off" for name in SERVICE_ENVS)
 
 
 class Rpc:

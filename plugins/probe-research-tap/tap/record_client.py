@@ -50,10 +50,8 @@ TAP_ENV_NAMES = frozenset({
     "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "PLUGIN_ROOT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
-    # Windows: where the profile and temp folders are (Path.home() reads
-    # USERPROFILE there, not HOME), and what a Python process needs to run.
-    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "TEMP", "TMP",
-    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "USERNAME", "USERDOMAIN",
+    # Python reads these on every OS (`tempfile`'s folder, `getpass.getuser`).
+    "TEMP", "TMP", "USERNAME",
 })
 TAP_ENV_PREFIXES = ("PROBE_", "PRBE_", "CLAUDE_", "CODEX_", "KIMI_", "PI_", "XDG_", "LC_")
 #: All of `record`, a service start and a restart onto this tap included.
@@ -78,7 +76,7 @@ def tap_env(environ=None) -> dict:
 
 
 def enabled() -> bool:
-    return os.name in ("posix", "nt") and os.environ.get(HOSTED_ENV, "1") != "0"
+    return os.environ.get(HOSTED_ENV, "1") != "0"
 
 
 #: What `ensure` answers when a service is, or is about to be, there to wait for (`start.Ensured`):
@@ -155,7 +153,7 @@ def hosted_pid(sid: str) -> int | None:
     `kill -0`, the process's command line."""
     path = cfg.hosted_file(sid)
     try:
-        if hasattr(os, "getuid") and path.lstat().st_uid != os.getuid():
+        if path.lstat().st_uid != os.getuid():
             return None
         pid = int(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
@@ -170,18 +168,8 @@ def hosted_pid(sid: str) -> int | None:
 
 
 def _is_service(pid: int) -> bool:
-    """Is `pid` this user's Probe service? Its command line names it on POSIX;
-    on Windows (no other process's command line to read) it is the process
-    that named itself in the service's lock file, still running."""
-    if os.name != "nt":
-        return "probe.service" in _cmdline(pid)
-    from tap.service import paths, procid
-
-    try:
-        pid_s, _, start = paths.lock_path().read_text(encoding="utf-8").strip().partition(" ")
-    except OSError:
-        return False
-    return pid_s == str(pid) and bool(start) and procid.alive(pid, start) is True
+    """Is `pid` this user's Probe service? Its command line names it."""
+    return "probe.service" in _cmdline(pid)
 
 
 def _params(args) -> dict:
