@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fix: `probe uninstall` works again on a Mac whose Probe service launchd started.** Since 0.407.0 the uninstall runs inside the service, and its first step unloaded the launchd agent that runs that service: the service stopped with the uninstall in it (`the Probe service stopped while running this command`, exit 70) and nothing was removed. The app's Uninstall had the same fault. Run inside the service, the uninstall now deletes the agent's plist (on Linux, the activation units after they stop) and unloads it once the service has exited.
 ## 0.413.0
 
 - **Kimi Code 2.4's hook output and skill text are no longer read as the researcher's prompt (tap 0.10.56).** Kimi 2.1 wrote a UserPromptSubmit hook's output and an activated skill's body as messages of their own, which capture dropped. 2.4 puts them first in the prompt itself, as parts tagged `meta.source` (`user prompt submit hook`, `skill activation`), so every prompt that carried a Probe hint or reader message was captured, indexed and shown with that text on top, and the daemon read it as the researcher's words. Capture now drops the tagged parts (a prompt that is only those ships nothing) and the daemon reads them as hook output; the same text typed by the researcher, untagged, stays their prompt. A blocking hook's reason, which 2.4 writes as an assistant message, is no longer captured as the agent's reply.
