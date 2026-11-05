@@ -86,7 +86,7 @@ CALLER_FENCED_ENV = "PROBE_CALLER_FENCED"
 FENCE_ENDPOINT_NAMES = frozenset({
     "PROBE_CONFIG_PATH", "PROBE_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy",
     "https_proxy", "no_proxy", "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
-    "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO",
+    "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO", "XDG_CONFIG_HOME",
 })
 #: What only the service sets on a `probe` command it runs (`cli.run`): the shim it serves and
 #: that shim's start time (`probe.foundation.caller`), whether its caller is fenced, and its
@@ -202,12 +202,10 @@ def hook_queue_env(env: dict) -> dict:
     return kept
 
 #: `outbox.drain` / `box.watch`'s `env`: the caller's environment as far as
-#: the SDK's drainer and box watcher read it (its PROBE_* settings and knobs,
-#: where config and state live, the interpreter's own variables, the network's
-#: proxy and certificates), so the child runs as the detached one the caller
-#: would have forked. Never a credential (`secret_env`): the drainer delivers
-#: with the stored login, as the outbox's ops already pin it, and a caller
-#: holding a credential in its environment keeps forking its own drainer.
+#: the service's drain and box watcher read it (its PROBE_* settings and knobs,
+#: where config and state live, the network's proxy and certificates). A
+#: credential travels only by its own name (`CREDENTIAL_ENV`, plan D11): into
+#: that child's environment, never stored; `secret_env` names stay refused.
 RUNTIME_ENV_NAMES = frozenset(
     {
         "PATH",
@@ -243,6 +241,28 @@ def secret_env(name: str) -> bool:
 def runtime_env_name(name: str) -> bool:
     """A variable `outbox.drain` / `box.watch` take in `env`."""
     return (name in RUNTIME_ENV_NAMES or name.startswith(RUNTIME_ENV_PREFIXES)) and not secret_env(name)
+
+
+#: What a fenced caller's request may never set for the service's work (plan D25, H-2): where its
+#: HTTP goes and whom it trusts (proxies, CAs, the API's address, the config that names it, by
+#: PROBE_CONFIG_PATH or by XDG_CONFIG_HOME, which moves the same file). The service's own are used
+#: instead. One list for every gate: `api.call`, `outbox.drain`, `box.watch`, and the machine
+#: service's `Fence` (lane L1).
+#: `FENCE_ENDPOINT_NAMES` (above), and every name of these shapes, in either case (`https_proxy`, `SSL_*`).
+FENCE_ENDPOINT_SUFFIXES = ("_PROXY",)
+FENCE_ENDPOINT_PREFIXES = ("SSL_",)
+
+
+def is_fence_endpoint_name(name: str) -> bool:
+    """A variable a fenced caller's request may not pass on (`FENCE_ENDPOINT_NAMES`)."""
+    upper = name.upper()
+    return upper in FENCE_ENDPOINT_NAMES or upper.endswith(FENCE_ENDPOINT_SUFFIXES) or upper.startswith(
+        FENCE_ENDPOINT_PREFIXES)
+
+
+def drop_fence_endpoint_names(env: dict) -> dict:
+    """`env` without what a fenced caller may not set (`is_fence_endpoint_name`)."""
+    return {name: value for name, value in env.items() if not is_fence_endpoint_name(name)}
 
 
 #: `session.register`'s optional `report_env` (crash-report plan B2): whether

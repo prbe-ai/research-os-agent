@@ -31,6 +31,7 @@ Stdlib only, and synced byte-for-byte into the tap (`tap/service/paths.py`,
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import socket
@@ -51,6 +52,9 @@ MAX_SOCKET_PATH = 100
 #: service (D13), or the SDK's fallback on a read-only home (D9). Absolute; every client and the
 #: service read it.
 SERVICE_ROOT_ENV = "PROBE_SERVICE_ROOT"
+#: In a folder whose socket path is too long: a symlink to the short folder the
+#: socket lives in, made with `mkdtemp` (this user's, a name nobody can take first).
+SOCKET_LINK_NAME = "socket-dir"
 
 #: A fenced caller's requests and their answers, in this machine's folder (`get_drop_dir`): the
 #: requests in `requests/` (the only files there: launchd starts the service while it holds any),
@@ -96,6 +100,10 @@ APP_UPDATE_NAME = "app-update.json"
 #: CLI reads it on its every-command path, which has loaded this module
 #: already and must not pay for `children`'s asyncio import.
 SERVICE_CHILD_ENV = "PROBE_SERVICE_CHILD"
+#: Set by the service on itself, so every process it runs inherits it: its role
+#: (`vocabularies.ServiceRole`). An SDK under a service sends its own HTTP; one
+#: anywhere else sends it through the service (`sdk/delivery/transport/relay.py`).
+SERVICE_ROLE_ENV = "PROBE_SERVICE_ROLE"
 #: Hook events' record-keeping routes, queued for the service to run once
 #: (plan D36; `hookqueue.py`): `<event id>.json` waits, `<event id>.done` marks
 #: one taken. `drained-by` holds the version of the service that drains it: a
@@ -230,11 +238,28 @@ def is_copy_root() -> bool:
     return bool(named) and os.path.isabs(named) and Path(named).parent.name == COPIES_DIRNAME
 
 
+#: This process's own state root, when it picked one (`set_root`): an SDK on a read-only home, or
+#: beside an older machine service (C1). A value, never `os.environ`: threads pick it (L-4).
+_root_override: list = []
+
+
+def set_root(path: str | None) -> None:
+    """Use `path` (absolute) as this process's state root from now on; None: back to the default.
+    The services it starts get it as PROBE_SERVICE_ROOT (`start._clean_env`)."""
+    _root_override[:] = [os.path.abspath(path)] if path else []
+
+
+def get_root_override() -> str | None:
+    return _root_override[0] if _root_override else None
+
+
 def root_dir() -> Path:
     """`~/.local/state/probe/service`: every machine's folder, and the files
     that describe the install rather than one machine; `PROBE_SERVICE_ROOT`
     when set (an absolute path). On Windows `%LOCALAPPDATA%\\probe\\service`
     (private to the user there)."""
+    if _root_override:
+        return Path(_root_override[0])
     named = os.environ.get(SERVICE_ROOT_ENV)
     if named and os.path.isabs(named):
         return Path(named)
@@ -381,17 +406,59 @@ def fallback_python() -> Path:
 
 def _socket_in(folder: Path) -> Path:
     """`<folder>/service.sock`, or, when that is too long for a UNIX socket,
-    `/tmp/probe-<uid>/service-<hash>.sock`.
-
-    The hash names the folder, so two HOMEs of one user (a test, a second
-    checkout of a dotfile setup) never share one socket while each holds its
-    own `service.lock`: the identity stays the folder, as above.
+    `service.sock` in the short folder `<folder>/socket-dir` links to (a
+    `mkdtemp` folder under /tmp: this user's, unguessable, never one another
+    user made first). No link yet: the long path, which no client can
+    connect to (no service runs). The link is made by the service
+    (`ensure_dirs`), in its own private folder, so each folder keeps its own socket.
     """
     path = folder / SOCKET_NAME
     if WINDOWS or len(os.fsencode(str(path))) <= MAX_SOCKET_PATH:
         return path  # (never listened on, on Windows: `pipe_name`)
-    digest = hashlib.sha256(os.fsencode(str(folder))).hexdigest()[:16]
-    return Path("/tmp") / f"probe-{os.getuid()}" / f"service-{digest}.sock"
+    try:
+        short = os.readlink(folder / SOCKET_LINK_NAME)
+    except OSError:
+        return path
+    return Path(short) / SOCKET_NAME if os.path.isabs(short) else path
+
+
+def _make_short_socket_dir(folder: Path) -> Path:
+    """The short folder `_socket_in` names for `folder`, made now when missing. Two processes
+    making it at once agree (M8): the link is made with `symlink`, and the one that finds it made
+    already keeps the winner's. A folder /tmp's sweep removed is made again at the same place (a
+    `mkdir` there fails when anyone else got it first, and then the link moves to a fresh one)."""
+    import tempfile
+
+    link = folder / SOCKET_LINK_NAME
+    try:
+        current = Path(os.readlink(link))
+    except OSError:
+        current = None
+    if current is not None and current.is_absolute():
+        with contextlib.suppress(FileExistsError, FileNotFoundError):
+            os.mkdir(current, 0o700)  # swept from /tmp: made again where the link points
+        try:
+            require_private(current)
+            return current
+        except OSError:
+            pass  # someone else's: the link moves to a fresh folder below
+    made = Path(tempfile.mkdtemp(prefix=f"probe-{os.getuid()}-", dir="/tmp"))
+    if current is None:
+        try:
+            os.symlink(str(made), link)
+            return made
+        except FileExistsError:
+            with contextlib.suppress(OSError):
+                os.rmdir(made)
+            winner = Path(os.readlink(link))
+            require_private(winner)
+            return winner
+    temporary = folder / f"{SOCKET_LINK_NAME}.{os.getpid()}"
+    with contextlib.suppress(OSError):
+        os.unlink(temporary)
+    os.symlink(str(made), temporary)
+    os.replace(temporary, link)
+    return made
 
 
 def socket_path() -> Path:
@@ -408,8 +475,14 @@ def pipe_name() -> str:
 
 
 def legacy_socket_path() -> Path:
-    """Where clients from before the machine key connect: `root_dir()`'s socket."""
-    return _socket_in(root_dir())
+    """Where clients from before the machine key connect: `root_dir()`'s socket, by
+    their own rule (a too-long path: `/tmp/probe-<uid>/service-<hash>.sock`, which
+    `private_dir` and `require_private` refuse when another user made the folder)."""
+    path = root_dir() / SOCKET_NAME
+    if WINDOWS or len(os.fsencode(str(path))) <= MAX_SOCKET_PATH:
+        return path
+    digest = hashlib.sha256(os.fsencode(str(root_dir()))).hexdigest()[:16]
+    return Path("/tmp") / f"probe-{os.getuid()}" / f"service-{digest}.sock"
 
 
 def legacy_barrier_path() -> Path:
@@ -547,5 +620,8 @@ def ensure_dirs() -> Path:
         private_dir(get_drop_answers_dir())
     sock = socket_path()
     if not WINDOWS:
+        if len(os.fsencode(str(service_dir() / SOCKET_NAME))) > MAX_SOCKET_PATH:
+            _make_short_socket_dir(service_dir())
+            sock = socket_path()
         private_dir(sock.parent)
     return sock

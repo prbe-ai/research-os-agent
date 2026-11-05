@@ -76,7 +76,59 @@ ENV_ALLOWLIST = (
     "PROBE_SERVICE_TELEMETRY_HOST",
     # The person's opt-out of Probe's entries in each agent's sandbox config (service-only M3).
     "PROBE_SANDBOX_ACCESS",
+    # The state root a client named (the SDK's on a read-only home, `paths.SERVICE_ROOT_ENV`):
+    # the service it starts must serve from the same folder.
+    "PROBE_SERVICE_ROOT",
 )
+
+
+#: The machine service's entry (private, the CLI's) and the delivery service's (public: the SDK's,
+#: plan D28), which the SDK starts on its own interpreter.
+MACHINE_MODULE = "probe.service"
+DELIVERY_MODULE = "probe.sdk.delivery.service"
+
+
+#: `build_module_argv`'s `-c` program: `sys.argv[1]` is the folder holding `probe`, put on the path
+#: before the first site-packages (never before the stdlib, where a stray `typing.py` would shadow
+#: it; not at all when it is there already), `sys.argv[2]` the module, run as `-m` runs it.
+MODULE_BOOTSTRAP = (
+    "import runpy, sys\n"
+    "d, m = sys.argv.pop(1), sys.argv.pop(1)\n"
+    "if d not in sys.path:\n"
+    "    sys.path.insert(next((n for n, p in enumerate(sys.path) "
+    "if p.endswith(('site-packages', 'dist-packages'))), len(sys.path)), d)\n"
+    "runpy.run_module(m, run_name='__main__', alter_sys=True)\n"
+)
+
+
+def build_module_argv(python: str, module: str, args: list, package_dir: str | None) -> list:
+    """`python -I -m module *args`, and when `package_dir` names the folder that holds `probe`
+    (a `pip install --user` or PYTHONPATH install, which `-I` hides, H1), that folder on
+    `sys.path` first: `-I -c MODULE_BOOTSTRAP package_dir module *args`. `-I` either way: no
+    caller's PYTHONPATH, user site or working folder can swap the code that runs."""
+    if not package_dir:
+        return [python, "-I", "-m", module, *args]
+    return [python, "-I", "-c", MODULE_BOOTSTRAP, package_dir, module, *args]
+
+
+def get_argv_module(argv: list) -> str:
+    """The module a `build_module_argv` argv runs (its program's name otherwise)."""
+    if "-m" in argv[:-1]:
+        return argv[argv.index("-m") + 1]
+    at = argv.index("-c") if "-c" in argv else -1
+    if at >= 0 and at + 3 < len(argv) and argv[at + 1] == MODULE_BOOTSTRAP:
+        return argv[at + 3]
+    return argv[0]
+
+
+def get_package_dir() -> str | None:
+    """The folder that holds this process's `probe` package, or None where this file is not in one
+    (the tap's copy)."""
+    here = os.path.abspath(__file__)
+    package = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+    if os.path.basename(package) != "probe" or not os.path.isfile(os.path.join(package, "__init__.py")):
+        return None
+    return os.path.dirname(package)
 
 
 class Ensured:
@@ -192,6 +244,32 @@ def runtime_python() -> str | None:
     return None
 
 
+def get_cli_python() -> str | None:
+    """This machine's CLI install's interpreter (H-3): runtime.json's when it names this machine (or
+    no machine: an older CLI's record) and runs here, else the uv tool env's. None where no CLI is
+    installed here: a pip-only box, or a shared home whose runtime.json is another machine's. Under
+    a root of its own (PROBE_SERVICE_ROOT: a read-only home, or beside an older service, C1) only
+    that root's runtime.json counts: the uv tool env there is the older CLI the SDK moved away from."""
+    try:
+        data = json.loads(paths.runtime_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("python"), str):
+        machine = data.get("machine")
+        if machine is not None and machine != paths.machine_key():
+            return None  # another machine's CLI, on a home both share
+        if _is_runnable(data["python"]):
+            return data["python"]
+    if os.environ.get(paths.SERVICE_ROOT_ENV) or paths.get_root_override():
+        return None
+    fallback = str(paths.fallback_python())
+    return fallback if _is_runnable(fallback) else None
+
+
+def _is_runnable(path: str) -> bool:
+    return os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
 def write_runtime(python: str, cli_version: str) -> bool:
     """Record the CLI's interpreter for every client (the CLI calls this at start).
 
@@ -201,7 +279,9 @@ def write_runtime(python: str, cli_version: str) -> bool:
         return False  # Probe is being uninstalled: nothing of it is recorded again
     # abspath, never realpath: a venv's python is a symlink to the base
     # interpreter, and resolving it would lose the venv.
-    wanted = {"python": os.path.abspath(python), "cli_version": cli_version}
+    # The machine it was written on: on a home several machines share, another one's CLI is not
+    # this machine's install (`get_cli_python`).
+    wanted = {"python": os.path.abspath(python), "cli_version": cli_version, "machine": paths.machine_key()}
     target = paths.runtime_path()
     try:
         if json.loads(target.read_text(encoding="utf-8")) == wanted:
@@ -222,6 +302,9 @@ def write_runtime(python: str, cli_version: str) -> bool:
 
 def _clean_env() -> dict:
     env = {name: os.environ[name] for name in ENV_ALLOWLIST if name in os.environ}
+    override = paths.get_root_override()
+    if override:
+        env[paths.SERVICE_ROOT_ENV] = override  # this process's own state root (`paths.set_root`)
     env.setdefault("HOME", str(paths.home()))
     env.setdefault("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
     return env
@@ -302,7 +385,13 @@ def is_uninstall_orphaned() -> bool:
         return False
 
 
-def _spawn(python: str, extra_env: dict | None = None) -> int:
+#: The loader's variables the SDK's interpreter may need to run at all (a conda or module-loaded
+#: Python on a cluster): a delivery service, started on that interpreter, keeps them (H-4).
+LOADER_ENV_PREFIXES = ("LD_", "DYLD_")
+
+
+def _spawn(python: str, module: str = MACHINE_MODULE, package_dir: str | None = None,
+           extra_env: dict | None = None) -> int:
     log_fd = os.open(
         paths.log_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600
     )
@@ -316,8 +405,8 @@ def _spawn(python: str, extra_env: dict | None = None) -> int:
             close_fds=True,
             **_DETACHED,
         )
-        argv = [python, "-I", "-m", "probe.service"]
-        child = subprocess.Popen(argv, **spawn)  # noqa: S603 -- the CLI's own interpreter, our own module
+        argv = build_module_argv(python, module, [], package_dir)
+        child = subprocess.Popen(argv, **spawn)  # noqa: S603 -- the CLI's or the SDK's interpreter, our module
     finally:
         os.close(log_fd)
     _children.append(child)
@@ -394,7 +483,8 @@ def _lock(fd: int, deadline: float) -> bool:
         time.sleep(0.01)
 
 
-def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_uninstall: bool = False) -> str:
+def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_uninstall: bool = False,
+           sdk_python: str | None = None, package_dir: str | None = None, starter_env: dict | None = None) -> str:
     """Make sure a service runs (an `Ensured` value). Never raises.
 
     Where this machine's activation units are (`paths.get_activation_unit()`, D19) the OS starts
@@ -407,6 +497,10 @@ def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_un
     While `probe uninstall` runs (`uninstall_barrier`): UNINSTALLING, nothing started or written --
     but for `probe uninstall` / `probe repair` (`is_finishing_uninstall`) after an uninstall stopped
     halfway (its owner gone): they finish it, in a service started for them (FINISHING_UNINSTALL_ENV).
+    `sdk_python` (the SDK's own interpreter, its `probe` in `package_dir`): where this machine has
+    a CLI install (`get_cli_python`) the SDK starts the machine service like any client (H-3); only
+    where it has none does it spawn the public delivery service on its own interpreter
+    (`DELIVERY_MODULE`, plan D9, D28), with its loader variables (H-4) and `starter_env` (M-5).
     """
     _reap()
     is_finishing = False
@@ -417,7 +511,8 @@ def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_un
     reached = _reach(0.5)
     if reached == _FENCED:
         return _ensure_fenced(wait, min_version)
-    outcome = Ensured.RUNNING if reached else _start(wait, is_finishing)
+    spawn_args = {"sdk_python": sdk_python, "package_dir": package_dir, "starter_env": starter_env}
+    outcome = Ensured.RUNNING if reached else _start(wait, is_finishing, spawn_args)
     if min_version and outcome == Ensured.RUNNING:
         return _replace_older(min_version, wait)
     return outcome
@@ -450,7 +545,7 @@ def _is_folder_hidden() -> bool:
         return False
 
 
-def _start(wait: float, is_finishing: bool = False) -> str:
+def _start(wait: float, is_finishing: bool = False, spawn_args: dict | None = None) -> str:
     """No service answers: the OS starts it (`_activate`) where this machine's units are, else
     (or when the OS will not) one spawn; then, with `wait`, its first answer. A process with
     no_new_privs never spawns one where the units are (L4: it may be in a Landlock domain no check
@@ -461,7 +556,7 @@ def _start(wait: float, is_finishing: bool = False) -> str:
     # carries none and would exit at once under the live barrier.
     outcome = _activate() if is_activated and not is_finishing else Ensured.UNAVAILABLE
     if outcome == Ensured.UNAVAILABLE and not (is_activated and _has_no_new_privs()) and _is_like_its_ancestors():
-        outcome = _spawn_once(is_finishing)
+        outcome = _spawn_once(is_finishing, **(spawn_args or {}))
     if wait > 0 and outcome in (Ensured.SPAWNED, Ensured.STARTING):
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
@@ -473,9 +568,11 @@ def _start(wait: float, is_finishing: bool = False) -> str:
     return outcome
 
 
-def _spawn_once(is_finishing: bool = False) -> str:
-    """One detached spawn under start.lock, rate-limited (MAX_STARTS in START_WINDOW_S); one that
-    finishes a halfway uninstall carries FINISHING_UNINSTALL_ENV."""
+def _spawn_once(is_finishing: bool = False, *, sdk_python: str | None = None, package_dir: str | None = None,
+                starter_env: dict | None = None) -> str:
+    """One detached spawn under start.lock, rate-limited (MAX_STARTS in START_WINDOW_S): the machine
+    service (one that finishes a halfway uninstall carries FINISHING_UNINSTALL_ENV), or for an SDK
+    where this machine has no CLI install the public delivery service."""
     try:
         paths.ensure_dirs()
         fd = os.open(paths.start_lock_path(), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -495,11 +592,21 @@ def _spawn_once(is_finishing: bool = False) -> str:
             return Ensured.STARTING
         if len(starts) >= MAX_STARTS:
             return Ensured.BACKOFF
-        python = runtime_python()
+        python, module, extra = runtime_python(), MACHINE_MODULE, None
+        if sdk_python is not None:
+            cli = get_cli_python()
+            if cli is not None:
+                python = cli
+            else:
+                python, module = (sdk_python if os.path.isabs(sdk_python) else None), DELIVERY_MODULE
+                extra = {**{name: value for name, value in os.environ.items()
+                            if name.startswith(LOADER_ENV_PREFIXES)}, **(starter_env or {})}
         if python is None:
             return Ensured.UNAVAILABLE
         try:
-            pid = _spawn(python, {FINISHING_UNINSTALL_ENV: "1"} if is_finishing else None)
+            if is_finishing:
+                extra = {**(extra or {}), FINISHING_UNINSTALL_ENV: "1"}
+            pid = _spawn(python, module, package_dir if module == DELIVERY_MODULE else None, extra)
         except OSError:
             return Ensured.UNAVAILABLE
         starts.append({"at": now, "pid": pid})

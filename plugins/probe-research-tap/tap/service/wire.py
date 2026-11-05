@@ -133,6 +133,31 @@ class Method:
     CLI_RUN = "cli.run"
     #: A signal the shim got (SIGINT, SIGTERM, SIGHUP, SIGWINCH, SIGTSTP, SIGCONT), for its command.
     CLI_SIGNAL = "cli.signal"
+    #: A training process's one network call (plan D10): the service sends the HTTP
+    #: request the SDK packaged and answers with the response (`sdk/delivery/transport/relay`).
+    API_CALL = "api.call"
+    #: Hash files a training process opened, passed as fds (plan D20, T43): sha256,
+    #: newlines or edge digests, in a niced child (`sdk/delivery/service/hashing`).
+    FILES_HASH = "files.hash"
+    #: An in-code key, held in the service's memory for drains of its queue (plan D21).
+    CREDENTIALS_HOLD = "credentials.hold"
+
+
+#: The outbox journal versions a service reads with its own drain (plan D8): the frozen
+#: v1 contract in `sdk/delivery/journal/DESIGN.md`. `service.hello` reports them as
+#: `outbox_journals`; a client writes one of them.
+OUTBOX_JOURNALS = (1,)
+
+#: Params that say a request's fds follow it (`files.hash`, `api.call` with a file
+#: body): the service pauses the line reader, sends the `fds` event, takes them.
+FDS_FIELD = "fds"
+#: The event a service sends when it is ready for a request's fds.
+FDS_READY_TOPIC = "fds.ready"
+#: To the one `api.call` caller whose answer streams into its `body_sink` (H3): `{id, bytes}`
+#: written so far, at least every second, so its wait goes on while the body comes.
+API_PROGRESS_TOPIC = "api.progress"
+#: At most this many fds with one request (SCM_MAX_FD is 253 on Linux).
+MAX_FDS = 250
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -179,6 +204,9 @@ METHODS = frozenset(
         Method.IMPORT_START,
         Method.CLI_RUN,
         Method.CLI_SIGNAL,
+        Method.API_CALL,
+        Method.FILES_HASH,
+        Method.CREDENTIALS_HOLD,
     }
 )
 

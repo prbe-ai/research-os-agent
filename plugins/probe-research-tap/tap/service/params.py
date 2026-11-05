@@ -10,6 +10,7 @@ import time
 from .env import (
     BASE_URL_ENV,
     CONTEXT_ENV,
+    CREDENTIAL_ENV,
     HOOK_EVENT_ID_LEN,
     HOOK_LANES,
     HOOK_PROXY_V,
@@ -661,23 +662,27 @@ def need_background(params: dict, *, directory: bool) -> dict:
     `{dir, python, cwd, env}`.
 
         dir     the outbox journal folder to drain (absolute; `outbox.drain` only)
-        python  the interpreter the child runs on: the caller's own (absolute)
+        python  `box.watch`'s child interpreter: the caller's own (absolute); an
+                `outbox.drain` child runs on the service's own (plan D8), so
+                its `python` is optional and unused
         cwd     the caller's working folder, the child's too (absolute; optional)
         env     the caller's environment, by `runtime_env_name` (at most
-                MAX_HOOK_ENV strings); a credential's name is refused.
+                MAX_HOOK_ENV strings), and its credentials (`CREDENTIAL_ENV`,
+                plan D11): that child's environment only, never stored.
                 `box.watch` needs its registry folder, PROBE_BOX_DIR, in it.
     """
     found = {
         "dir": _need_path(params, "dir") if directory else None,
-        "python": _need_path(params, "python"),
+        "python": _need_path(params, "python") if not directory or params.get("python") is not None else None,
         "cwd": _need_path(params, "cwd") if params.get("cwd") is not None else None,
     }
     env = params.get("env", {})
     if not isinstance(env, dict) or len(env) > MAX_HOOK_ENV:
         raise invalid_params(f"env must be an object of at most {MAX_HOOK_ENV} variables")
     for name, value in env.items():
-        if not isinstance(name, str) or "\0" in name or "=" in name or not runtime_env_name(name):
-            raise invalid_params(f"env may not set {name!r}: never a credential, only what the drainer reads")
+        allowed = isinstance(name, str) and (runtime_env_name(name) or name in CREDENTIAL_ENV)
+        if not allowed or "\0" in name or "=" in name:
+            raise invalid_params(f"env may not set {name!r}: only what the drainer reads")
         if not isinstance(value, str) or len(value) > MAX_HOOK_ENV_VALUE or "\0" in value:
             raise invalid_params(f"env.{name} must be a string of at most {MAX_HOOK_ENV_VALUE} characters")
     if not directory and not str(env.get("PROBE_BOX_DIR") or "").startswith("/"):

@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import enum
 from enum import IntEnum
 
 from .wire import invalid_params
+
+
+class _StrEnum(str, enum.Enum):  # noqa: UP042 -- enum.StrEnum is 3.11+, the tap runs on older pythons
+    """3.11's `enum.StrEnum` on any python (this file is the tap's, run by the system python)."""
+
+    __str__ = str.__str__
+    __format__ = str.__format__
 
 
 class DesktopOp:
@@ -115,7 +123,53 @@ class Cap:
     HOOKS_PROXY_V2 = "hooks.proxy.v2"
 
 
-CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER, Cap.HOOKS_PROXY, Cap.HOOKS_PROXY_V2})
+    #: The service drains outbox journals with its own code (plan D8): `outbox.drain`
+    #: needs no interpreter of the caller's, and `service.hello`'s `outbox_journals`
+    #: lists the journal versions it reads (`wire.OUTBOX_JOURNALS`).
+    OUTBOX_JOURNAL = "outbox.journal.v1"
+    #: `api.call`, `files.hash` and `credentials.hold` (plan D10, D20, D21): a training
+    #: process sends no HTTP and hashes nothing itself.
+    SDK_RELAY = "sdk.relay.v1"
+
+
+CAPS = frozenset({
+    Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER, Cap.HOOKS_PROXY, Cap.HOOKS_PROXY_V2,
+    Cap.OUTBOX_JOURNAL, Cap.SDK_RELAY,
+})
+#: What a delivery service (the SDK's own, `probe.sdk.delivery.service`) serves: the SDK's parts only.
+DELIVERY_CAPS = frozenset({Cap.OUTBOX_JOURNAL, Cap.SDK_RELAY})
+
+
+class ServiceRole(_StrEnum):
+    """What a service runs, chosen once at its start (`python -m probe.service --role`)."""
+
+    #: Everything: sessions, hooks, recorders, updates, keeper units (an installed CLI's).
+    MACHINE = "machine"
+    #: Started by the SDK where no CLI is installed (no `runtime.json`): drains, `api.call`,
+    #: `files.hash`, `credentials.hold`, telemetry only. No updater, keeper, recorders or Codex trust.
+    DELIVERY = "delivery"
+
+
+class RelayFailure:
+    """`api.call`'s `{failed: <kind>, message}`: no HTTP answer came, and why. The SDK raises
+    the httpx error of the same kind, so its retries and error mapping stay as they are."""
+
+    CONNECT = "connect"  # never reached the server: safe to resend
+    TIMEOUT = "timeout"  # sent, no answer in time
+    PROTOCOL = "protocol"  # the answer broke off
+    #: Never sent: the caller's deadline passed while it waited for a thread (M3).
+    EXPIRED = "expired"
+    #: Never sent: a caller in a sandbox named an address it may not reach (plan D25).
+    REFUSED = "refused"
+    #: The body passed `max_bytes`, or was too big for the answer with no `body_sink`.
+    TOO_LARGE = "too_large"
+    OTHER = "other"
+
+
+RELAY_FAILURES = frozenset({
+    RelayFailure.CONNECT, RelayFailure.TIMEOUT, RelayFailure.PROTOCOL, RelayFailure.EXPIRED, RelayFailure.REFUSED,
+    RelayFailure.TOO_LARGE, RelayFailure.OTHER,
+})
 
 
 class NotesMode:
@@ -395,7 +449,7 @@ class BackgroundState:
 
 
 class BackgroundRefusal:
-    """`{accepted: false, reason}`: the caller forks its own process, as before."""
+    """`{accepted: false, reason}`: nothing started; the journal waits for the next ask."""
 
     SANDBOXED = "sandboxed"  # an older service's refusal of a fenced caller (outbox.drain and box.watch are served now)
     BUSY = "busy"  # this service runs as many as it takes
@@ -585,6 +639,8 @@ class RefusedReason:
     COMMANDS_RUNNING = "commands_running"
     #: `cli.run` while Probe is being uninstalled (the uninstall barrier is up).
     UNINSTALLING = "uninstalling"
+    #: A method this service's role does not run (a `delivery` service, plan T35).
+    ROLE = "role"
     #: `desktop.request`: no child could start (no CLI interpreter). Nothing ran.
     CLI_UNAVAILABLE = "cli_unavailable"
     #: `desktop.request`: as many requests as it takes at once are running or
