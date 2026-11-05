@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.412.0
+
 - **Fix: on a Mac's first install the Probe service now really comes back from the permanent install.** 0.411.0 restarted the service that started from uv's temporary copy, but the OS brought it back on that same copy: the first service had written its launchd agent (on Linux, its systemd units) naming its own interpreter. The keeper now never writes units that name a launcher's temporary copy; the install writes them once it is recorded, before the restart. And a refresh that waited for the keeper's lock never puts back units an uninstall just removed.
 ## 0.411.0
 
