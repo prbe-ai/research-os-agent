@@ -97,6 +97,10 @@ FENCE_ENDPOINT_NAMES = frozenset({
 CALLER_WORKSPACE_ENV = "PROBE_CALLER_WORKSPACE"
 SERVICE_OWNED_ENV = ("PROBE_CALLER_PID", "PROBE_CALLER_START", CALLER_FENCED_ENV, CALLER_WORKSPACE_ENV,
                      "PROBE_LAUNCHER_FD")
+#: What an `action.run` request may carry as its `credentials` (service-only D11): the caller's
+#: own credentials and the settings a run reads from the environment, for that child's
+#: environment only (in memory: never journaled, never logged).
+CARRIED_ENV = CREDENTIAL_ENV | frozenset({"PROBE_MCP_URL", "PROBE_WORKSPACE", "PROBE_PROJECT"})
 MAX_CONTEXT_VALUE = 4096
 
 #: `hooks.run`'s `lane`s and the hook event each one serves: `hooks/dispatch.py`

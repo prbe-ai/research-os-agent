@@ -88,9 +88,9 @@ UPDATE_STATE_NAME = "update.json"
 #: Written by the desktop app's `--background-update` run (prbe-ai/desktop #11).
 APP_UPDATE_NAME = "app-update.json"
 #: Set on every `probe` this service starts itself (`children.cli_argv`, with
-#: `children.cli_env`): such a command never asks the service for an update
-#: (`probe.cli.main._hand_update_to_service`). The service is the updater, and
-#: an ask from one command of a job would land while the job's next command
+#: `children.cli_env`): such a command acts on no staff request of its own (the
+#: service's timer does, `probe.service.chores`). The service is the updater, and
+#: work from one command of a job would land while the job's next command
 #: still runs from the files an update replaces. Here, not in `children`: the
 #: CLI reads it on its every-command path, which has loaded this module
 #: already and must not pay for `children`'s asyncio import.
