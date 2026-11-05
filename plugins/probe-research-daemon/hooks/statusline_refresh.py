@@ -95,10 +95,12 @@ def install_dir() -> str:
 
 def install_dirs() -> list[str]:
     """Every place a status-line install keeps the renderer copy: Claude Code's
-    (`statusline.install_dir`) and Kimi Code's (`statusline.kimi_install_dir`,
-    under `$KIMI_CODE_HOME`, default `~/.kimi-code`)."""
+    (`statusline.install_dir`), Kimi Code's (`statusline.kimi_install_dir`,
+    under `$KIMI_CODE_HOME`, default `~/.kimi-code`) and the Cursor CLI's
+    (`harnesses/cursor_agent/statusline.install_dir`, under `~/.cursor/probe`)."""
     kimi = os.environ.get("KIMI_CODE_HOME") or os.path.join(os.path.expanduser("~"), ".kimi-code")
-    return [install_dir(), os.path.join(kimi, "probe-research-statusline")]
+    cursor = os.environ.get("PROBE_CURSOR_HOME") or os.path.join(os.path.expanduser("~"), ".cursor")
+    return [install_dir(), os.path.join(kimi, "probe-research-statusline"), os.path.join(cursor, "probe", "statusline")]
 
 
 def sync_renderer() -> None:

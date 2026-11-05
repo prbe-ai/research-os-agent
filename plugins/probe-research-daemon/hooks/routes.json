@@ -86,7 +86,7 @@
       },
       {
         "lane": "pre-tool",
-        "matcher": "^AskUserQuestion$",
+        "matcher": "^(AskUserQuestion|AskQuestion)$",
         "hooks": [
           {
             "type": "command",
@@ -155,7 +155,7 @@
       },
       {
         "lane": "post-tool",
-        "matcher": "^AskUserQuestion$",
+        "matcher": "^(AskUserQuestion|AskQuestion)$",
         "hooks": [
           {
             "type": "command",

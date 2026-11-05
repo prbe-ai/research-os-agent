@@ -1,0 +1,26 @@
+{
+  "name": "probe-research",
+  "version": "0.205.0",
+  "description": "Probe Research tracking for Cursor: the probe switch (on / read / off per conversation), track-work, instrument-code, visualize-progress, edit-notes, write-summary, overview-visuals, audit-team-note and plan-research-review skills, plus a read-only MCP. Probe's hook entries live in ~/.cursor/hooks.json, not here.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "keywords": [
+    "mlops",
+    "experiment-tracking",
+    "research",
+    "mcp"
+  ],
+  "skills": "./agent-skills/",
+  "rules": "./rules/",
+  "mcpServers": {
+    "probe-research": {
+      "url": "https://mcp.research.prbe.ai/mcp"
+    }
+  },
+  "hooks": {}
+}

@@ -1,0 +1,16 @@
+{
+  "name": "probe-research-tap",
+  "version": "0.10.49",
+  "description": "Probe Research capture for Cursor. The Probe service runs it; Cursor loads nothing from it.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "keywords": [
+    "probe-research"
+  ],
+  "hooks": {}
+}

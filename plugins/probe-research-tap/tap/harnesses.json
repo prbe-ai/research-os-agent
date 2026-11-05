@@ -309,6 +309,82 @@
       "hook_output": "message-json",
       "session_id_prefix": "session_",
       "process_title": "kimi-code"
+    },
+    {
+      "id": "cursor_agent",
+      "label": "Cursor",
+      "display": "Cursor session",
+      "aliases": [
+        "cursor"
+      ],
+      "binary": "cursor-agent",
+      "cli_flag": "cursor",
+      "family": "hook-plugin",
+      "captured": true,
+      "installable": true,
+      "searchable": true,
+      "route": "cursor-agent",
+      "icon": "/icons/cursor.svg",
+      "detect_env": [
+        "CURSOR_AGENT"
+      ],
+      "session_env": "CURSOR_CONVERSATION_ID",
+      "version_env": null,
+      "min_version": null,
+      "home": {
+        "path": ".cursor",
+        "env": "PROBE_CURSOR_HOME"
+      },
+      "transcripts": {
+        "root": ".cursor/probe/transcripts",
+        "session_id": "stem",
+        "format": "claude_jsonl",
+        "watch": "file",
+        "root_env": "PROBE_CURSOR_TRANSCRIPTS_DIR",
+        "discovery": "glob",
+        "pattern": "*.jsonl",
+        "follows_home": true
+      },
+      "capture": {
+        "token_env": "PROBE_CURSOR_TAP_TOKEN",
+        "plugin_dir_env": "PROBE_CURSOR_TAP_PLUGIN_DIR",
+        "plugin_dir": ".cursor/probe/probe-research-tap",
+        "watcher_prefix": "probe-research-tap",
+        "sanitizer": "sanitize",
+        "cli_token_fallback": false,
+        "legacy_plugin_dir": null
+      },
+      "plugin": {
+        "root_env": "CURSOR_PLUGIN_ROOT",
+        "manifest_dir": ".cursor-plugin",
+        "marketplace": ".cursor-plugin/marketplace.json",
+        "marketplace_source": "string"
+      },
+      "package_dir": null,
+      "instructions": {
+        "global": null,
+        "project": [
+          "AGENTS.md"
+        ]
+      },
+      "team_note": "render",
+      "mcp": "cursor-plugin",
+      "question_tool": "AskQuestion",
+      "lean_profile": "second-plugin",
+      "attribution_requires_pairing": false,
+      "capabilities": {
+        "root_skills": false,
+        "prompt_context": true,
+        "wake": false,
+        "follows_updates": false,
+        "scoped_installs": false
+      },
+      "statusline": "cursor-cli-config",
+      "reasoning_setting": null,
+      "hook_output": "cursor-json",
+      "session_id_prefix": null,
+      "process_title": null,
+      "hook_payload_marker": "cursor_version"
     }
   ]
 }

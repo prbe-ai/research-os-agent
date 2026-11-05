@@ -46,6 +46,11 @@ FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION)
 #: adapters' Capabilities.inject_line / .wake; the conformance test pins them).
 CAPABILITY_PROMPT_CONTEXT = "prompt_context"  # add text to the next prompt from a hook
 CAPABILITY_WAKE = "wake"  # start a turn for a late answer
+#: The capability keys a row may set (`capabilities`): any other key is refused, so a
+#: misspelt one never silently reads as False.
+CAPABILITY_KEYS = (
+    "prompt_context", "wake", "root_skills", "follows_updates", "loaded_records", "scoped_installs",
+)
 #: Probe's skills go in the agent's OWN skills folder, so they carry no plugin
 #: prefix (`cli/root_skills.py`). Claude Code only: Codex and Kimi read the
 #: plugin's `agent-skills/` by manifest key, and pi its package manifest.
@@ -83,10 +88,13 @@ DEFAULT_TRANSCRIPT_PATTERN = "**/*.jsonl"
 
 #: How a hook hands text to the model. Claude Code and Codex read
 #: `{"hookSpecificOutput": {"additionalContext": ...}}`; Kimi Code reads
-#: `{"message": ...}` (it injects any other JSON as raw text).
+#: `{"message": ...}` (it injects any other JSON as raw text); Cursor reads its own
+#: fields (`additional_context`, `followup_message`, `permission`), which the
+#: Probe service writes from the routes' Claude-shaped answer.
 HOOK_OUTPUT_CLAUDE_JSON = "claude-json"
 HOOK_OUTPUT_MESSAGE_JSON = "message-json"
-HOOK_OUTPUTS = (HOOK_OUTPUT_CLAUDE_JSON, HOOK_OUTPUT_MESSAGE_JSON)
+HOOK_OUTPUT_CURSOR_JSON = "cursor-json"
+HOOK_OUTPUTS = (HOOK_OUTPUT_CLAUDE_JSON, HOOK_OUTPUT_MESSAGE_JSON, HOOK_OUTPUT_CURSOR_JSON)
 
 #: How Probe's read-only MCP reaches a harness (`mcp`): each kind has ONE
 #: credential resolver (`probe.cli.capabilities.MCP_RESOLVERS`), and
@@ -96,13 +104,15 @@ MCP_PLUGIN_FILE = "plugin-file"  # the plugin's .mcp.json + headersHelper (Claud
 MCP_CONFIG_TOML = "config-toml"  # the agent's own config, bearer synced by the wizard (Codex)
 MCP_EXTENSION_BRIDGE = "extension-bridge"  # the extension bridges MCP, or pi-mcp-adapter does (pi)
 MCP_PLUGIN_MANIFEST = "plugin-manifest"  # the plugin manifest's mcpServers, bearer header (Kimi Code)
-MCP_KINDS = (MCP_PLUGIN_FILE, MCP_CONFIG_TOML, MCP_EXTENSION_BRIDGE, MCP_PLUGIN_MANIFEST)
+MCP_CURSOR_PLUGIN = "cursor-plugin"  # the installed Cursor plugin's mcpServers, bearer header (Cursor)
+MCP_KINDS = (MCP_PLUGIN_FILE, MCP_CONFIG_TOML, MCP_EXTENSION_BRIDGE, MCP_PLUGIN_MANIFEST, MCP_CURSOR_PLUGIN)
 
 #: Where Probe's status-line segment goes (`statusline`), one writer each
 #: (`probe.cli.statusline`); `null` means the harness has no slot Probe uses.
 STATUSLINE_CLAUDE_SETTINGS = "claude-settings"  # ~/.claude/settings.json `statusLine`
 STATUSLINE_KIMI_TUI_TOML = "kimi-tui-toml"  # $KIMI_CODE_HOME/tui.toml `[status_line] command`
-STATUSLINE_SLOTS = (STATUSLINE_CLAUDE_SETTINGS, STATUSLINE_KIMI_TUI_TOML)
+STATUSLINE_CURSOR_CLI_CONFIG = "cursor-cli-config"  # the Cursor CLI's cli-config.json `statusLine`
+STATUSLINE_SLOTS = (STATUSLINE_CLAUDE_SETTINGS, STATUSLINE_KIMI_TUI_TOML, STATUSLINE_CURSOR_CLI_CONFIG)
 
 #: What every hook-plugin harness's `plugin` object names.
 PLUGIN_KEYS = ("root_env", "manifest_dir", "marketplace", "marketplace_source")
@@ -213,6 +223,10 @@ class Harness:
     #: hooks then record "this process runs session X", and a `probe` command
     #: finds its session by walking up to that process.
     process_title: str | None = None
+    #: A key only this harness's hook payloads carry (Cursor: `cursor_version`). An
+    #: event a hook declares for another harness whose payload carries it came from
+    #: this one (Cursor runs Claude Code's plugins too), and is not run as that one's.
+    hook_payload_marker: str | None = None
     #: Where a desktop app bundles this harness's command, per platform: absolute
     #: (or `~/`) glob patterns, most preferred first (the ChatGPT app's Codex, the
     #: Claude app's Claude Code). Asked only when PATH has no `binary`.
@@ -419,6 +433,12 @@ def _harness(row: Any, index: int) -> Harness:
     mcp = _str_or_none(row.get("mcp"), f"{where}.mcp")
     if mcp is not None and mcp not in MCP_KINDS:
         raise RegistryError(f"{where}.mcp must be null or one of {MCP_KINDS}")
+    capabilities = row.get("capabilities") or {}
+    if not isinstance(capabilities, dict):
+        raise RegistryError(f"{where}.capabilities must be an object")
+    unknown = sorted(set(capabilities) - set(CAPABILITY_KEYS))
+    if unknown:
+        raise RegistryError(f"{where}.capabilities names unknown keys {unknown}; known: {CAPABILITY_KEYS}")
     statusline = _str_or_none(row.get("statusline"), f"{where}.statusline")
     if statusline is not None and statusline not in STATUSLINE_SLOTS:
         raise RegistryError(f"{where}.statusline must be null or one of {STATUSLINE_SLOTS}")
@@ -453,13 +473,14 @@ def _harness(row: Any, index: int) -> Harness:
         attribution_requires_pairing=_bool(
             row.get("attribution_requires_pairing"), f"{where}.attribution_requires_pairing"
         ),
-        capabilities=row.get("capabilities") or {},
+        capabilities=capabilities,
         statusline=statusline,
         reasoning_setting=_str_or_none(row.get("reasoning_setting"), f"{where}.reasoning_setting"),
         package_dir=_str_or_none(row.get("package_dir"), f"{where}.package_dir"),
         hook_output=hook_output,
         session_id_prefix=_str_or_none(row.get("session_id_prefix"), f"{where}.session_id_prefix"),
         process_title=_str_or_none(row.get("process_title"), f"{where}.process_title"),
+        hook_payload_marker=_str_or_none(row.get("hook_payload_marker"), f"{where}.hook_payload_marker"),
         app_paths=_app_paths(row.get("app_paths"), f"{where}.app_paths"),
     )
     if harness.captured and (

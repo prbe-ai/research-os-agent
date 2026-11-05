@@ -195,11 +195,12 @@ TOOL_LANES = ("pre-tool", "post-tool")
 #: accept in both plugins: a new tool route needs its name here too.
 TOOL_FILTER = {
     "pre-tool": (
-        frozenset(("Bash", "AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebSearch", "Skill")),
+        frozenset(("Bash", "AskUserQuestion", "AskQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit",
+                   "WebSearch", "Skill")),
         ("probe-research", "probe_research"),
     ),
     "post-tool": (
-        frozenset(("Bash", "Skill", "SlashCommand", "AskUserQuestion")),
+        frozenset(("Bash", "Skill", "SlashCommand", "AskUserQuestion", "AskQuestion")),
         ("probe-research", "probe_research"),
     ),
 }
@@ -1156,6 +1157,8 @@ def main(argv: list[str], payload: "bytes | None" = None):
         parsed = {}
     if not isinstance(parsed, dict):
         parsed = {}
+    if is_foreign_event(parsed, os.environ):
+        return 0
     heartbeat(lane, parsed)
     if not isinstance(wiring, dict):
         return 0
@@ -1322,6 +1325,22 @@ def _load_by_path(name: str):
     sys.modules[key] = module
     spec.loader.exec_module(module)
     return module
+
+
+def is_foreign_event(payload: dict, env) -> bool:
+    """Is this another agent's event under this plugin's name? Cursor runs Claude Code's
+    plugins too, with its own payloads (the registry's `hook_payload_marker`): those are
+    Probe's Cursor routes', which the service runs with PROBE_AGENT naming Cursor."""
+    import json
+
+    try:
+        with open(os.path.join(HERE, "harnesses.json"), encoding="utf-8") as handle:
+            rows = json.load(handle).get("harnesses") or []
+    except (OSError, ValueError):
+        return False
+    named = env.get("PROBE_AGENT") or ""
+    return any(isinstance(row, dict) and row.get("hook_payload_marker") and row["hook_payload_marker"] in payload
+               and row.get("id") != named for row in rows)
 
 
 def _agent_row(env) -> "dict | None":

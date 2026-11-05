@@ -26,6 +26,7 @@ CONTEXT_ENV = frozenset(
         "CODEX_HOME",
         "PI_CODING_AGENT_DIR",
         "KIMI_CODE_HOME",
+        "PROBE_CURSOR_HOME",
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",
         "XDG_DATA_HOME",

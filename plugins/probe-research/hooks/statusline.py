@@ -18,6 +18,9 @@ KIMI CODE (`$KIMI_CODE_HOME/tui.toml` `[status_line] command`) runs this too, wi
 `KIMI_CODE_STATUS_LINE=1` set: the service then draws Kimi's whole footer line 1. Kimi
 kills the command after 300 ms (TIMEOUT_S stays inside it).
 
+THE CURSOR CLI (`cli-config.json` `statusLine`) runs this too, through Probe's chain script, which
+exports `PROBE_STATUS_LINE=cursor_agent` (a `_STATUS_LINE` variable: it travels to the service).
+
 STDIN MAY BE EMPTY (a chained command before this one drained it): the service then finds the
 session in the environment this hands over (RENDER_ENV).
 """
