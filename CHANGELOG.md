@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fix: on a Mac's first install the Probe service now really comes back from the permanent install.** 0.411.0 restarted the service that started from uv's temporary copy, but the OS brought it back on that same copy: the first service had written its launchd agent (on Linux, its systemd units) naming its own interpreter. The keeper now never writes units that name a launcher's temporary copy; the install writes them once it is recorded, before the restart. And a refresh that waited for the keeper's lock never puts back units an uninstall just removed.
 ## 0.411.0
 
 - **Fix: an update right after a release no longer fails to find it.** The update asked uv to re-read the package index only for `probe-research`, not for the compiled `probe-research-cli` it pins, so for several minutes after each release `uv tool install` could not resolve the new version and the update said the CLI was already the latest. It now re-reads both, as the npm launcher already did. That includes the update's frozen first stage and the lifeboat (`handoff.py`, now HANDOFF_VERSION 5).
