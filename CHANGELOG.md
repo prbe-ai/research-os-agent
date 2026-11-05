@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Kimi Code 2.4's hook output and skill text are no longer read as the researcher's prompt (tap 0.10.56).** Kimi 2.1 wrote a UserPromptSubmit hook's output and an activated skill's body as messages of their own, which capture dropped. 2.4 puts them first in the prompt itself, as parts tagged `meta.source` (`user prompt submit hook`, `skill activation`), so every prompt that carried a Probe hint or reader message was captured, indexed and shown with that text on top, and the daemon read it as the researcher's words. Capture now drops the tagged parts (a prompt that is only those ships nothing) and the daemon reads them as hook output; the same text typed by the researcher, untagged, stays their prompt. A blocking hook's reason, which 2.4 writes as an assistant message, is no longer captured as the agent's reply.
 ## 0.412.0
 
 - **Fix: on a Mac's first install the Probe service now really comes back from the permanent install.** 0.411.0 restarted the service that started from uv's temporary copy, but the OS brought it back on that same copy: the first service had written its launchd agent (on Linux, its systemd units) naming its own interpreter. The keeper now never writes units that name a launcher's temporary copy; the install writes them once it is recorded, before the restart. And a refresh that waited for the keeper's lock never puts back units an uninstall just removed.

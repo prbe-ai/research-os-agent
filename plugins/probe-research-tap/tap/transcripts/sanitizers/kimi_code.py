@@ -27,7 +27,9 @@ Translation:
   metadata                          -> CC `system` subtype=session_meta
                                        extras: protocol_version, created_at
   context.append_message (role user)
-    origin.kind user                -> CC `user` (a researcher prompt)
+    origin.kind user                -> CC `user` (a researcher prompt), minus
+                                       the parts Kimi 2.4 puts in it and tags
+                                       `meta.source` (hook output, skill text)
     origin.kind plugin_command      -> CC `user`: the slash line the researcher
                                        typed (`/plugin:cmd args`), never the
                                        expanded command body
@@ -124,6 +126,10 @@ _TOOL_SUMMARY_KEYS: tuple[str, ...] = (
 
 #: User-role origins that are the researcher's own words.
 _PROMPT_ORIGINS = frozenset({"user"})
+#: `meta.source` of the parts Kimi 2.4 puts first in a prompt that are not the
+#: researcher's: a UserPromptSubmit hook's output and an activated skill's body.
+#: Kimi 2.1 wrote both as messages of their own (origin `hook_result`, `skill_activation`).
+_INSERTED_PART_SOURCES = frozenset({"user prompt submit hook", "skill activation"})
 
 #: Kimi's `step.end` usage names for the four counts in sanitize.USAGE_KEYS.
 _USAGE_NAMES = {
@@ -283,6 +289,17 @@ def _blocks(content: Any) -> list[dict]:
     return [b for b in (_translate_part(p) for p in content) if b is not None]
 
 
+def _strip_inserted_parts(content: Any) -> Any:
+    """A prompt's parts without the ones Kimi 2.4 tags as its own (`_INSERTED_PART_SOURCES`)."""
+    if not isinstance(content, list):
+        return content
+    return [
+        p for p in content
+        if not (isinstance(p, dict) and isinstance(p.get("meta"), dict)
+                and p["meta"].get("source") in _INSERTED_PART_SOURCES)
+    ]
+
+
 def _text_of(content: Any) -> str:
     if not isinstance(content, list):
         return content if isinstance(content, str) else ""
@@ -377,17 +394,20 @@ def _translate_append_message(event: dict) -> dict | None:
         return None
     timestamp = _timestamp(event.get("time"))
     role = message.get("role")
+    origin = message.get("origin") if isinstance(message.get("origin"), dict) else {}
     if role == "assistant":
         # Not written by 2.1.1 (assistant text arrives as loop events), but a
-        # whole assistant message here is still the model's words.
+        # whole assistant message here is still the model's words, unless it
+        # is a blocking hook's reason (Kimi 2.4: origin `hook_result`).
+        if origin.get("kind") == "hook_result":
+            return None
         blocks = _blocks(message.get("content"))
         return _message_event("assistant", timestamp, blocks) if blocks else None
     if role != "user":
         return None
-    origin = message.get("origin") if isinstance(message.get("origin"), dict) else {}
     kind = origin.get("kind")
     if isinstance(kind, str) and kind in _PROMPT_ORIGINS:
-        blocks = _blocks(message.get("content"))
+        blocks = _blocks(_strip_inserted_parts(message.get("content")))
         if not blocks:
             return None
         extras = {"prompt_id": _str(message.get("id"))} if message.get("id") else None
