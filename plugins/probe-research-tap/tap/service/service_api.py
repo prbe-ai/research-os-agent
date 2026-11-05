@@ -173,11 +173,17 @@ class Connection:
             raise ConnectionError("the service sent something other than a JSON object")
         return message
 
-    def call(self, method: str, params: dict | None = None) -> object:
-        """Send one request and return its `result`; ServiceError for an `error`."""
+    def call(self, method: str, params: dict | None = None, fds=()) -> object:
+        """Send one request and return its `result`; ServiceError for an `error`.
+        `fds`: file descriptors sent with the request's first bytes (SCM_RIGHTS)."""
         self._next_id += 1
         id_ = self._next_id
-        self.sock.sendall(encode(request(id_, method, params)))
+        line = encode(request(id_, method, params))
+        if fds:
+            sent = socket.send_fds(self.sock, [line], list(fds))
+            line = line[sent:]
+        if line:
+            self.sock.sendall(line)
         while True:
             message = self._read_message()
             if message.get("method") == "event" and "id" not in message:

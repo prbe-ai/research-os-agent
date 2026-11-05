@@ -88,9 +88,9 @@ class Cap:
     methods, for a client that must not rely on it where an older service
     (same method, older code) does not. A service from before `caps` sends none."""
 
-    #: `action.run` refuses a caller in a sandbox, whatever client kind it
-    #: names (`refused: sandboxed`). The CLI hands a wizard action only to a
-    #: service that says so: an older one would run it outside the sandbox.
+    #: Said by every service since `action.run` refused a caller in a sandbox;
+    #: an older CLI hands a wizard action only to a service that says it. Since
+    #: service-only D2 a fenced caller's action runs (outside its fence).
     ACTION_SANDBOX = "action.sandbox"
     #: The service decides when the desktop app checks for its update and
     #: never launches the app to do it: `update.check_now` with `app` answers
@@ -395,7 +395,7 @@ class BackgroundState:
 class BackgroundRefusal:
     """`{accepted: false, reason}`: the caller forks its own process, as before."""
 
-    SANDBOXED = "sandboxed"  # the caller is in a sandbox: its work would run outside it
+    SANDBOXED = "sandboxed"  # an older service's refusal of a fenced caller (outbox.drain and box.watch are served now)
     BUSY = "busy"  # this service runs as many as it takes
     FAILING = "failing"  # a child for it exited at its start lately
     STOPPING = "stopping"  # this service is on its way out
@@ -575,9 +575,9 @@ class RefusedReason:
     #: Any method that runs or stores work (the service's `Policy.WORK`) on a
     #: connection whose opener has exited (plan D9).
     CALLER_GONE = "caller_gone"
-    #: Any method that runs or stores work, from a caller the service cannot
-    #: rule out being in a sandbox: what it asks for would run (or stop)
-    #: outside it, with the context it chose.
+    #: A WORK method this service does not serve to a caller it cannot rule out
+    #: being in a sandbox (the service's `policy.FENCED_WORK` lists those it does,
+    #: service-only D2); an older service refused every WORK method so.
     SANDBOXED = "sandboxed"
     #: `desktop.request`: no child could start (no CLI interpreter). Nothing ran.
     CLI_UNAVAILABLE = "cli_unavailable"

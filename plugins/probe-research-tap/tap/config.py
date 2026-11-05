@@ -363,9 +363,11 @@ def api_base_url() -> str:
     if env:
         return env
     # Host pinned by `tap pair` into the plugin-local .config, so the daemon and
-    # `tap revoke` reach the same backend the pairing used without a token.
+    # `tap revoke` reach the same backend the pairing used. It is that pairing's
+    # host: it applies only beside the plugin's own .token, never to another
+    # token (service-only ROOT 2, D26).
     pinned = _read_config_dict().get(CONFIG_API_BASE_URL_KEY)
-    if isinstance(pinned, str) and pinned.strip():
+    if isinstance(pinned, str) and pinned.strip() and _read_own_token() is not None:
         return pinned.strip().rstrip("/")
     # Manual/self-host path: the probe CLI's config file (written by the wizard's sign-in).
     persisted = _read_probe_config().get("base_url")
@@ -473,14 +475,9 @@ def load_token() -> str | None:
     next source. session-start.sh's token gate mirrors this precedence so the
     hook and daemon always agree on whether a token is configured.
     """
-    p = token_file()
-    if p.is_file():
-        try:
-            t = p.read_text(encoding="utf-8").strip()
-            if t:
-                return t
-        except OSError:
-            pass
+    own = _read_own_token()
+    if own is not None:
+        return own
     token_env = current_source().token_env
     env = os.environ.get(token_env, "").strip()
     if env:
@@ -489,9 +486,32 @@ def load_token() -> str | None:
         # The CLI config's `ingest_token` is Claude Code's capture token; the
         # server refuses it on every other agent's route.
         return None
-    tok = _read_probe_config().get("ingest_token")
-    if isinstance(tok, str) and tok.strip():
-        return tok.strip()
+    probe_config = _read_probe_config()
+    tok = probe_config.get("ingest_token")
+    if not isinstance(tok, str) or not tok.strip():
+        return None
+    # D26: the CLI config's token goes only to the CLI config's own base URL, never to one an
+    # environment or a plugin's .config names (they would receive it).
+    own_url = probe_config.get("base_url")
+    try:
+        url = api_base_url()
+    except APIBaseURLUnset:
+        return None
+    if not isinstance(own_url, str) or url.rstrip("/") != own_url.strip().rstrip("/"):
+        return None
+    return tok.strip()
+
+
+def _read_own_token() -> str | None:
+    """The plugin's own paired token (`.token`, written by `tap pair`), or None."""
+    p = token_file()
+    if p.is_file():
+        try:
+            t = p.read_text(encoding="utf-8").strip()
+            if t:
+                return t
+        except OSError:
+            pass
     return None
 
 

@@ -23,8 +23,10 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     answers, 2 for usage, 3 for an error answer."""
     parser = argparse.ArgumentParser(prog="probe-service-client")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_ensure = sub.add_parser("ensure", help="start the service when none runs")
+    p_ensure = sub.add_parser("ensure", help="start the service when none runs (the one ensure every client calls)")
     p_ensure.add_argument("--wait", type=float, default=0.0)
+    p_ensure.add_argument("--min-version", default=None,
+                          help="replace a service older than this release (D15); `older` when it cannot be now")
     p_reg = sub.add_parser("register", help="session.register")
     p_reg.add_argument("--session-id", required=True)
     p_reg.add_argument("--harness", required=True)
@@ -52,7 +54,7 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     args = parser.parse_args(argv)
 
     if args.cmd == "ensure":
-        print(json.dumps({"ensured": ensure(wait=args.wait)}))
+        print(json.dumps({"ensured": ensure(wait=args.wait, min_version=args.min_version)}))
         return 0
     if args.cmd == "socket":
         print(json.dumps(locations()))

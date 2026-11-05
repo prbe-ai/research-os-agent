@@ -148,25 +148,33 @@ def _another_copy_installed() -> bool:
         if raw is None:
             return False
         plugins = json.loads(raw.decode("utf-8")).get("plugins")
-        chosen = renderer_copy(plugins.get(dispatch.ledger_key(root)) if isinstance(plugins, dict) else None)
+        chosen = renderer_copy(plugins.get(dispatch.ledger_key(root)) if isinstance(plugins, dict) else None,
+                               os.path.dirname(root))
         return chosen is not None and chosen != root
     except BaseException:  # noqa: BLE001 - a hook contracted to silence
         return False
 
 
-def renderer_copy(entries) -> "str | None":
+def renderer_copy(entries, own=None) -> "str | None":
     """Which of a ledger key's install folders the renderer comes from: its
     user-scope one (a project's own install serves that project only), else
     the newest version folder; the newest of several either way. None for
-    anything but a non-empty list of entries that each name one. The
+    anything but a non-empty list of entries that each name one. `own`: the
+    plugin's own cache folder; only a version folder in it, no link. The
     service's twin is `probe.service.followup.renderer_copy`."""
     if not isinstance(entries, list) or not entries:
         return None
     try:
-        listed = [(e.get("scope"), os.path.realpath(e["installPath"])) for e in entries]
+        listed = [(e.get("scope"), os.path.realpath(e["installPath"]), e["installPath"]) for e in entries]
     except (KeyError, TypeError, AttributeError, ValueError):
         return None
-    candidates = {p for scope, p in listed if scope == "user"} or {p for _, p in listed}
+    if own is not None:
+        mine = os.path.realpath(own)
+        listed = [(scope, path, given) for scope, path, given in listed
+                  if os.path.dirname(path) == mine and not os.path.islink(given)]
+    if not listed:
+        return None
+    candidates = {p for scope, p, _ in listed if scope == "user"} or {p for _, p, _ in listed}
 
     def version(path: str) -> tuple:
         parts = os.path.basename(path).split(".")
@@ -190,8 +198,12 @@ def _sync_into(target: str) -> None:
                         continue
             except OSError:
                 pass
-            tmp = dst + "." + str(os.getpid()) + ".tmp"
-            with open(tmp, "wb") as handle:
+            if os.path.islink(dst) or os.path.islink(target):
+                continue  # never replaced through a link
+            # A name nobody can know ahead, written only as a new file (M2).
+            tmp = os.path.join(target, "." + name + "." + os.urandom(8).hex() + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(fd, "wb") as handle:
                 handle.write(new)
             os.replace(tmp, dst)
         except OSError:

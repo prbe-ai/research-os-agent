@@ -320,7 +320,8 @@ def installed_tap(finds: str, env=None) -> tuple[str, str] | None:
     CODEX_CACHE: the newest version folder of the tap in Codex's plugin cache.
     KIMI_LIST: the one folder Kimi's plugin list records for the tap, in the
     `managed/` folder this plugin's own copy sits in (`dispatch.kimi_installed_root`'s
-    anchor: no variable decides where to look)."""
+    anchor: no variable decides where to look). Whichever: only a tap beside this copy
+    (`_is_beside`)."""
     values = os.environ if env is None else env
     dispatch = _sibling("dispatch")
     root_here = os.path.dirname(HERE)
@@ -357,9 +358,21 @@ def installed_tap(finds: str, env=None) -> tuple[str, str] | None:
         manifest = ".kimi-plugin"
     else:
         return None
-    if not _hands_back(root):
+    if not _is_beside(root, root_here) or not _hands_back(root):
         return None
     return root, _manifest_version(root, manifest)
+
+
+def _is_beside(root: str, here: str) -> bool:
+    """Is the tap at `root` beside this plugin's own copy, as `dispatch.installed_root` anchors a
+    hand-off: in the same folder (the Probe service's route copy, Kimi's `managed/`), or a version
+    folder of the tap in the same marketplace of the same agent's cache? No variable (a ledger, a
+    cache folder an environment names) ever points it anywhere else (service-only ROOT 3)."""
+    real, mine = os.path.realpath(root), os.path.realpath(here)
+    if os.path.dirname(real) == os.path.dirname(mine):
+        return True
+    return (os.path.basename(os.path.dirname(real)) == TAP_PLUGIN
+            and os.path.dirname(os.path.dirname(real)) == os.path.dirname(os.path.dirname(mine)))
 
 
 def _kimi_recorded(here: str, dispatch) -> "str | None":

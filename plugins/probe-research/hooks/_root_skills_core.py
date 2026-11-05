@@ -133,18 +133,22 @@ def _write(dst: Path, src: Path, slug: str, plugin: str) -> None:
     (`make sync-plugin-skills` does that), so this is a plain copy: the writer's
     version of `track-work` names a daemon-only option and must never land here.
     """
+    if dst.is_symlink():
+        # A link is never ours (see `prune`): nothing is written through or over one.
+        raise OSError(f"{dst} is a link; left as it is")
     staging = dst.parent / f".{dst.name}.probe-new"
-    if staging.exists():
+    if staging.is_symlink():
+        staging.unlink()
+    elif staging.exists():
         shutil.rmtree(staging)
-    shutil.copytree(src, staging)
-    (staging / MARKER).write_text(
-        json.dumps({"source": plugin, "skill": slug, "edit": str(src)}) + "\n",
-        encoding="utf-8",
-    )
-    if dst.is_symlink() or dst.exists():
-        # A symlink is never ours (see `prune`), so this only runs for a folder
-        # `apply` already proved is ours or is being replaced by rename.
-        dst.unlink() if dst.is_symlink() else shutil.rmtree(dst)
+    # Links in the plugin's copy stay links: never followed out of it (service-only ROOT 3).
+    shutil.copytree(src, staging, symlinks=True)
+    marker = os.open(staging / MARKER, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    with os.fdopen(marker, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"source": plugin, "skill": slug, "edit": str(src)}) + "\n")
+    if dst.exists():
+        # Only a folder `apply` already proved is ours, or one being replaced by rename.
+        shutil.rmtree(dst)
     os.replace(staging, dst)
 
 

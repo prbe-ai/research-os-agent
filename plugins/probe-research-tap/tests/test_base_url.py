@@ -110,7 +110,19 @@ def test_env_ingest_token_wins_over_config_file(monkeypatch) -> None:
 
 
 def test_ingest_token_from_config_file() -> None:
+    _write_probe_config({"base_url": "https://api.research.prbe.ai", "ingest_token": "file-token"})
+    assert cfg.load_token() == "file-token"
+
+
+def test_the_config_files_token_goes_only_to_its_own_base_url(monkeypatch) -> None:
+    """D26 (service-only ROOT 2): with no base URL of its own, or another one in force, the CLI
+    config's token is nobody's: whichever endpoint is used would receive it."""
     _write_probe_config({"ingest_token": "file-token"})
+    monkeypatch.setenv("PROBE_BASE_URL", "https://elsewhere.example")
+    assert cfg.load_token() is None
+    _write_probe_config({"base_url": "https://api.research.prbe.ai", "ingest_token": "file-token"})
+    assert cfg.load_token() is None
+    monkeypatch.setenv("PROBE_BASE_URL", "https://api.research.prbe.ai/")
     assert cfg.load_token() == "file-token"
 
 
@@ -132,7 +144,7 @@ def test_blank_env_ingest_token_falls_through_to_config_file(monkeypatch) -> Non
     """An exported-but-empty PROBE_INGEST_TOKEN must NOT mask a valid config-file
     token. session-start.sh treats empty env as unset and falls through to the
     config file; the daemon must do the same or hook and daemon disagree."""
-    _write_probe_config({"ingest_token": "file-token"})
+    _write_probe_config({"base_url": "https://api.research.prbe.ai", "ingest_token": "file-token"})
     monkeypatch.setenv("PROBE_INGEST_TOKEN", "")
     assert cfg.load_token() == "file-token"
     monkeypatch.setenv("PROBE_INGEST_TOKEN", "   ")
@@ -345,7 +357,11 @@ def test_pair_base_url_prefers_env_over_token(monkeypatch):
 
 
 def test_persisted_pair_host_used_by_api_base_url():
+    """The pinned host is the pairing's: it goes with the plugin's own .token, never alone (D26)."""
     cfg.persist_api_base_url("https://api.research.prbe.ai")
+    with pytest.raises(cfg.APIBaseURLUnset):
+        cfg.api_base_url()
+    cfg.write_token("paired-device-token")
     assert cfg.api_base_url() == "https://api.research.prbe.ai"
 
 
@@ -358,6 +374,8 @@ def test_env_base_url_beats_pinned_pair_host(monkeypatch):
 def test_pinned_pair_host_beats_probe_config_base_url():
     _write_probe_config({"base_url": "https://probe-cli.example", "ingest_token": "t"})
     cfg.persist_api_base_url("https://pinned.example")
+    assert cfg.api_base_url() == "https://probe-cli.example", "no .token: the pin is no one's"
+    cfg.write_token("paired-device-token")
     assert cfg.api_base_url() == "https://pinned.example"
 
 
@@ -392,7 +410,7 @@ def test_blank_token_file_falls_through_to_config_ingest_token():
     """An empty/whitespace .token is treated as UNSET, not as "" masking the
     next source — so a corrupt/empty file can't silently disable a self-host
     fallback that is otherwise configured."""
-    _write_probe_config({"ingest_token": "config-file-token"})
+    _write_probe_config({"base_url": "https://api.research.prbe.ai", "ingest_token": "config-file-token"})
     cfg.token_file().parent.mkdir(parents=True, exist_ok=True)
     cfg.token_file().write_text("   ")
     assert cfg.load_token() == "config-file-token"

@@ -28,11 +28,6 @@ and the event runs there instead, never twice. After `S` the event is this
 host's: the client waits for its exit status, and a host that dies meanwhile
 reads as exit 0 (fail open, as every Probe hook).
 
-Never for a caller in a sandbox (`_sandboxed`: an agent's tool command,
-seccomp/no-new-privs/namespaces on Linux, the macOS sandbox): the event would
-run outside it, with an environment and PATH that caller chose. Closed at
-once; the event runs where it is.
-
 Never for a caller without this host's key (#3355). Any process of this user
 reaches the socket, the agent's own shell included, and an event here is
 believed as the harness's: a forged question-tool pick would be recorded as
@@ -163,70 +158,6 @@ def _mtimes() -> tuple:
         except OSError:
             out.append(None)
     return tuple(out)
-
-
-def _peer_pid(conn: socket.socket):
-    """The connecting process's pid (Linux SO_PEERCRED, macOS LOCAL_PEERPID), or None."""
-    try:
-        if sys.platform.startswith("linux"):
-            import struct
-
-            pid, _uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-            return pid if pid > 0 else None
-        if sys.platform == "darwin":
-            import struct
-
-            raw = conn.getsockopt(0, 0x002, 4)  # SOL_LOCAL, LOCAL_PEERPID
-            pid = struct.unpack("i", raw)[0] if isinstance(raw, bytes) else int(raw)
-            return pid if pid > 0 else None
-    except (OSError, ValueError, AttributeError):
-        return None
-    return None
-
-
-def _confinement(pid) -> "tuple | None":
-    """What confines a process: (seccomp, its filter count, no_new_privs, mnt ns, user ns) on
-    Linux, (sandboxed,) on macOS; None when it cannot be read."""
-    try:
-        if sys.platform.startswith("linux"):
-            fields = {}
-            with open(f"/proc/{pid}/status", encoding="utf-8") as handle:
-                for line in handle:
-                    key, _, value = line.partition(":")
-                    fields[key] = value.strip()
-            # The filter count too: a sandbox inside a container that already
-            # runs everything under seccomp and no-new-privs adds filters of its own.
-            return (fields.get("Seccomp"), fields.get("Seccomp_filters"), fields.get("NoNewPrivs"),
-                    os.readlink(f"/proc/{pid}/ns/mnt"), os.readlink(f"/proc/{pid}/ns/user"))
-        if sys.platform == "darwin":
-            import ctypes
-
-            lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-            lib.sandbox_check.restype = ctypes.c_int
-            lib.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
-            return (lib.sandbox_check(int(pid), None, 0) != 0,)
-    except Exception:  # noqa: BLE001 - unknown: treated as confined
-        return None
-    return None
-
-
-_OWN_CONFINEMENT: list = []
-
-
-def _sandboxed(conn: socket.socket) -> bool:
-    """Is the caller more confined than this host (an agent's sandboxed tool
-    command)? Unknown counts as yes: the event then runs where it is, as before."""
-    pid = _peer_pid(conn)
-    if pid is None:
-        return True
-    if not _OWN_CONFINEMENT:
-        _OWN_CONFINEMENT.append(_confinement(os.getpid()))
-    own, theirs = _OWN_CONFINEMENT[0], _confinement(pid)
-    # A Landlock domain shows in none of those fields, and a process with
-    # no_new_privs may add one at any time: such a caller cannot be told from
-    # a sandboxed one (`probe.service.caller.landlock_possible`).
-    landlock = sys.platform.startswith("linux") and theirs is not None and len(theirs) >= 3 and theirs[2] == "1"
-    return own is None or theirs is None or theirs != own or landlock
 
 
 def _private_dir(path: str) -> None:
@@ -470,9 +401,6 @@ def serve(sock_path: str, service_pid: int) -> int:
                         break
                     except OSError:
                         break
-                    if _sandboxed(conn):
-                        conn.close()  # the event runs where it is
-                        continue
                     conn.setblocking(False)
                     # Not use yet: only an event it runs counts (a stream of
                     # connections it refuses never holds off its idle exit).

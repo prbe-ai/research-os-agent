@@ -48,6 +48,18 @@ WINDOWS = os.name == "nt"
 #: this the socket moves to a private folder under /tmp (API v1, "Transport").
 MAX_SOCKET_PATH = 100
 
+#: A fenced caller's requests and their answers, in this machine's folder (`get_drop_dir`): the
+#: requests in `requests/` (the only files there: launchd starts the service while it holds any),
+#: the answers in `answers/`, a request being written in the folder itself.
+DROP_DIRNAME = "drop"
+DROP_REQUESTS_DIRNAME = "requests"
+DROP_ANSWERS_DIRNAME = "answers"
+#: The OS units that start the service on its first connection (`get_activation_unit`), one set per
+#: machine (a home folder shared between machines holds each one's): systemd's
+#: `probe-service-<machine key>.socket` / `.service` / `.path`, launchd's agent.
+ACTIVATION_NAME = "probe-service"
+ACTIVATION_LABEL = "ai.prbe.probe-service"
+
 SERVICE_DIRNAME = "service"
 SOCKET_NAME = "service.sock"
 #: Held (flock) for the whole life of the one running service.
@@ -215,6 +227,70 @@ def root_dir() -> Path:
 def service_dir() -> Path:
     """`~/.local/state/probe/service/<machine key>`: this machine's service."""
     return root_dir() / machine_key()
+
+
+def get_drop_dir() -> Path:
+    """`<service dir>/drop`: where a fenced caller whose sandbox refuses the socket leaves its
+    requests (`<id>.req.json`) and finds their answers (`<id>.ans.json`), service-only plan Q1."""
+    return service_dir() / DROP_DIRNAME
+
+
+def get_drop_requests_dir() -> Path:
+    """`<drop>/requests`: where a request is renamed in (`<id>.req.json`), and nothing else."""
+    return get_drop_dir() / DROP_REQUESTS_DIRNAME
+
+
+def get_drop_answers_dir() -> Path:
+    """`<drop>/answers`: where the service leaves each request's answer (`<id>.ans.json`)."""
+    return get_drop_dir() / DROP_ANSWERS_DIRNAME
+
+
+def get_activation_name() -> str:
+    """This machine's systemd unit name (no suffix): `probe-service-<machine key>`."""
+    return f"{ACTIVATION_NAME}-{machine_key()}"
+
+
+def get_activation_label() -> str:
+    """This machine's launchd label: `ai.prbe.probe-service.<machine key>`."""
+    return f"{ACTIVATION_LABEL}.{machine_key()}"
+
+
+def get_activation_path() -> Path | None:
+    """Where this machine's activation unit is written: systemd's `<name>.socket` (Linux),
+    launchd's `<label>.plist` (macOS); None elsewhere."""
+    if sys.platform == "darwin":
+        return home() / "Library" / "LaunchAgents" / f"{get_activation_label()}.plist"
+    if sys.platform.startswith("linux"):
+        base = os.environ.get("XDG_CONFIG_HOME")
+        return (Path(base) if base else home() / ".config") / "systemd" / "user" / f"{get_activation_name()}.socket"
+    return None
+
+
+def get_activation_unit() -> Path | None:
+    """This machine's OS unit that starts the service on its first connection (service-only plan
+    D19, `get_activation_path`), when it is on disk AND listens on this machine's socket
+    (`ListenStream`, launchd's `SockPathName`); None otherwise. `ensure` then asks the OS to start
+    the service (and spawns one only when the OS will not)."""
+    unit = get_activation_path()
+    if unit is None:
+        return None
+    try:
+        text = unit.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    sock = str(socket_path())
+    if unit.suffix == ".plist":
+        import plistlib
+
+        try:
+            listeners = plistlib.loads(text.encode("utf-8")).get("Sockets") or {}
+            named = {spec.get("SockPathName") for spec in listeners.values() if isinstance(spec, dict)}
+        except (ValueError, AttributeError):
+            return None
+        return unit if sock in named else None
+    named = {line.partition("=")[2].strip().replace("%%", "%") for line in text.splitlines()
+             if line.startswith("ListenStream=")}
+    return unit if sock in named else None
 
 
 def lock_path() -> Path:
@@ -402,11 +478,21 @@ def private_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if WINDOWS:
         return path  # under %LOCALAPPDATA%, which only this user (and admins) can open
-    st = path.lstat()
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
-        raise OSError(f"{path} is not a private folder of this user")
-    if st.st_mode & 0o077:
-        os.chmod(path, 0o700)
+    # Checked and made 0700 through a descriptor of the folder itself, never a link
+    # (`O_DIRECTORY|O_NOFOLLOW`, `fchmod`): a swap after the check changes nothing it does.
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_CLOEXEC", 0))
+    except OSError as exc:
+        raise OSError(f"{path} is not a private folder of this user ({exc.strerror or exc})") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            raise OSError(f"{path} is not a private folder of this user")
+        if st.st_mode & 0o077:
+            os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
     return path
 
 
@@ -430,10 +516,14 @@ def require_private(path: Path) -> None:
 
 
 def ensure_dirs() -> Path:
-    """The shared folder, this machine's and the socket's, all private.
+    """The shared folder, this machine's, its drop folder and the socket's, all private.
     Returns the socket path."""
     private_dir(root_dir())
     private_dir(service_dir())
+    if not WINDOWS:
+        private_dir(get_drop_dir())
+        private_dir(get_drop_requests_dir())
+        private_dir(get_drop_answers_dir())
     sock = socket_path()
     if not WINDOWS:
         private_dir(sock.parent)

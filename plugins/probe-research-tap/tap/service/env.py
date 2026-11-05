@@ -20,6 +20,8 @@ from __future__ import annotations
 CONTEXT_ENV = frozenset(
     {
         "PROBE_CONFIG_PATH",
+        # The opt-out of Probe's entries in each agent's sandbox config (service-only M3).
+        "PROBE_SANDBOX_ACCESS",
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
         "PI_CODING_AGENT_DIR",
@@ -76,6 +78,15 @@ BASE_URL_ENV = "PROBE_BASE_URL"
 #: `probe uninstall` reads it (`probe.cli.install.uninstall.run`): a fenced caller never discards
 #: unsent research, and never forces.
 CALLER_FENCED_ENV = "PROBE_CALLER_FENCED"
+#: Never a fenced caller's (service-only D2, #4274): where a child sends the stored login (its
+#: endpoint, the config naming one) and through what (proxies, CA files: `SSL_CERT_FILE` replaces
+#: the trusted CAs). A fenced caller's child takes the machine's own instead (its login shell's,
+#: its CLI config). The one list: `probe.service.actions.caller.Fence` and the delivery service read it.
+FENCE_ENDPOINT_NAMES = frozenset({
+    "PROBE_CONFIG_PATH", "PROBE_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy",
+    "https_proxy", "no_proxy", "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO",
+})
 MAX_CONTEXT_VALUE = 4096
 
 #: `hooks.run`'s `lane`s and the hook event each one serves: `hooks/dispatch.py`
@@ -136,6 +147,8 @@ HOOK_QUEUE_ENV_NAMES = frozenset(
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
         "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
         "GIT_SSL_CAINFO",
+        # A fenced caller's queued event (service-only D2, `caller.Fence`): never a user site of its own.
+        "PYTHONNOUSERSITE",
     }
 )
 HOOK_QUEUE_ENV_PREFIXES = ("PROBE_", "CLAUDE", "CODEX_", "KIMI_", "PI_", "XDG_", "LC_")

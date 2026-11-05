@@ -183,6 +183,13 @@ def lock_held(path: Path) -> bool:
         handle.close()
 
 
+
+def _is_fenced_session(env: dict | None = None) -> bool:
+    """A session the Probe service records for a fenced caller (`PROBE_CALLER_FENCED`): recorded
+    only, never a daemon worker, until the service checks such a session's transcript
+    (service-only round 3, H-b)."""
+    return (os.environ if env is None else env).get("PROBE_CALLER_FENCED") == "1"
+
 class Supervisor:
     def __init__(self, *, session_id: str, transcript: Path, cwd: Path, service: object = None) -> None:
         self.session_id = session_id
@@ -207,6 +214,8 @@ class Supervisor:
             log.exception("companion ledger prune failed")
 
     def wanted(self) -> bool:
+        if _is_fenced_session():
+            return False
         state = lease.session_state(self.session_id)
         if state != self.gave_up_in:
             self.gave_up_in = None
@@ -271,7 +280,8 @@ class Supervisor:
 
         with threadenv.install().session(env):
             state = lease.session_state(self.session_id)
-            return state, state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
+            is_wanted = state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
+            return state, is_wanted and not _is_fenced_session(env)
 
     def _delegate(self) -> bool:
         """Hand the worker to the service, once. True while it supervises it."""

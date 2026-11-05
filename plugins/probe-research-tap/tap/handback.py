@@ -167,10 +167,10 @@ class ServiceCalls:
             conn.close()
 
     def record(self, params: dict) -> dict:
-        """`session.record`'s answer; `{}` when none came. A refusal for the
-        caller's confinement reads `reason: sandboxed`, as an answer
-        (`CONFINED_ANSWERS`) or as an error. A service before MIN_SERVICE is
-        not asked (`reason: service_too_old`)."""
+        """`session.record`'s answer; `{}` when none came. An older service refused a
+        caller in a sandbox (`reason: sandboxed`, as an answer or an error); a current
+        one records it through its fence (service-only D2). A service before MIN_SERVICE
+        is not asked (`reason: service_too_old`)."""
         from tap.service import client
 
         try:

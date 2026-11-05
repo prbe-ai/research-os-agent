@@ -651,3 +651,22 @@ def test_dropping_the_marker_holds_the_numbering_lock():
     mine = hosted._numbered("s-lock", hosted.Controls())
     hosted._drop_marker(Marker(), "s-lock", mine)
     assert held == [True, True]
+
+
+def test_a_hosted_recording_refuses_a_session_id_with_a_control_character(tmp_path):
+    """Service-only ROOT 2: a sid names a log file and a marker; a control character or a slash is never one."""
+    from tap import hosted
+
+    for sid in ("s\n1", "s\x1b1", "../s1"):
+        outcome, detail = hosted.record({"sid": sid, "cwd": str(tmp_path), "env": {}}, None)
+        assert outcome == hosted.FAILED and "session id" in detail
+
+
+def test_a_hosted_recordings_log_is_never_opened_through_a_link():
+    """Service-only ROOT 2: its log file is opened with O_NOFOLLOW."""
+    import inspect
+
+    from tap import hosted
+
+    source = inspect.getsource(hosted.record)
+    assert "O_NOFOLLOW" in source and "logging.FileHandler" not in source

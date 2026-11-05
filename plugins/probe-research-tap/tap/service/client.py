@@ -110,9 +110,6 @@ from .service_api import (
     connect as connect,
 )
 from .start import (
-    _BREAKAWAY as _BREAKAWAY,
-)
-from .start import (
     _DETACHED as _DETACHED,
 )
 from .start import (
@@ -158,12 +155,6 @@ from .start import (
     _spawn as _spawn,
 )
 from .start import (
-    _venv_base as _venv_base,
-)
-from .start import (
-    _without_venv_launcher as _without_venv_launcher,
-)
-from .start import (
     _write_starts as _write_starts,
 )
 from .start import (
@@ -171,9 +162,6 @@ from .start import (
 )
 from .start import (
     forget_start as forget_start,
-)
-from .start import (
-    no_new_privs as no_new_privs,
 )
 from .start import (
     runtime_python as runtime_python,

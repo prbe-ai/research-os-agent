@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -121,8 +122,6 @@ def _drop_marker(path, sid: str | None = None, mine: int | None = None) -> None:
     by nobody. The check, the read and the unlink hold `_STARTS_LOCK`: a new
     recording numbered between them (`_numbered` takes the same lock) waits,
     and writes its marker after this one is gone."""
-    import os
-
     with _STARTS_LOCK:
         if sid is not None and mine is not None and _STARTS.get(sid, 0) != mine:
             return
@@ -146,6 +145,8 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
     """Run one session's recorder on this thread until it ends, pauses or
     fails: `(outcome, detail)`. `session`: `{sid, cwd, transcript |
     transcript_dir, env}` (`env`: the environment its `tap watch` would have)."""
+    if not str(session.get("sid") or "").isprintable() or "/" in str(session.get("sid") or ""):
+        return FAILED, "the session id is not one (a control character or a slash in it)"
     environ = threadenv.install()
     handler: logging.Handler | None = None
     loggers = [logging.getLogger(name) for name in LOGGERS]
@@ -158,7 +159,10 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
             try:
                 log_dir = cfg.log_dir()
                 log_dir.mkdir(parents=True, exist_ok=True)
-                handler = logging.FileHandler(log_dir / f"{session['sid']}.log")
+                # Never through a link planted at its name (service-only ROOT 2).
+                fd = os.open(log_dir / f"{session['sid']}.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)
+                handler = logging.StreamHandler(os.fdopen(fd, "a", encoding="utf-8"))
                 handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
                 handler.addFilter(_ThisThread(threading.get_ident(), str(session["sid"])))
                 for logger in loggers:
@@ -173,8 +177,6 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
             # This process records it now (a resumed session's marker named the
             # last service): the hooks' fast path and `probe status` read it.
             try:
-                import os
-
                 from tap import record_client
 
                 record_client._write_hosted(str(session["sid"]), os.getpid())

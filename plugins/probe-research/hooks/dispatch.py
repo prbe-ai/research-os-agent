@@ -1556,6 +1556,8 @@ QUEUE_ENV_NAMES = frozenset(
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
         "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
         "GIT_SSL_CAINFO",
+        # A fenced caller's queued event (service-only D2, `caller.Fence`): never a user site of its own.
+        "PYTHONNOUSERSITE",
     }
 )
 QUEUE_ENV_PREFIXES = ("PROBE_", "CLAUDE", "CODEX_", "KIMI_", "PI_", "XDG_", "LC_")

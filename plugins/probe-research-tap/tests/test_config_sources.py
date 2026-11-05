@@ -84,9 +84,10 @@ def test_pi_never_reads_the_cli_configs_capture_token(monkeypatch, tmp_path):
     import json
 
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"ingest_token": "ros_ing_claude"}))
+    config.write_text(json.dumps({"base_url": "https://api.research.prbe.ai", "ingest_token": "ros_ing_claude"}))
     monkeypatch.setenv("PROBE_CONFIG_PATH", str(config))
     monkeypatch.delenv("PROBE_INGEST_TOKEN", raising=False)
+    monkeypatch.delenv("PROBE_BASE_URL", raising=False)
     monkeypatch.delenv("PROBE_PI_TAP_TOKEN", raising=False)
     monkeypatch.setenv("PROBE_PI_TAP_PLUGIN_DIR", str(tmp_path / "pi-state"))
     monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "claude-state"))
@@ -96,3 +97,51 @@ def test_pi_never_reads_the_cli_configs_capture_token(monkeypatch, tmp_path):
 
     monkeypatch.setenv("PROBE_TAP_SOURCE", "claude_code")
     assert cfg.load_token() == "ros_ing_claude"
+
+
+def _claude(monkeypatch, tmp_path, config: dict, *, token: str | None = None, pinned: str | None = None):
+    """Claude Code's capture, its plugin folder and the CLI config in `tmp_path`."""
+    import json
+
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "claude_code")
+    monkeypatch.delenv("PROBE_INGEST_TOKEN", raising=False)
+    monkeypatch.delenv("PROBE_BASE_URL", raising=False)
+    plugin = tmp_path / "plugin"
+    plugin.mkdir(exist_ok=True)
+    monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(plugin))
+    if token is not None:
+        (plugin / ".token").write_text(token)
+    if pinned is not None:
+        (plugin / ".config").write_text(json.dumps({"api_base_url": pinned}))
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    monkeypatch.setenv("PROBE_CONFIG_PATH", str(tmp_path / "config.json"))
+
+
+def test_the_cli_configs_token_goes_only_to_the_cli_configs_own_endpoint(monkeypatch, tmp_path):
+    """D26 (service-only ROOT 2): an environment or a plugin's .config naming another endpoint never
+    receives the CLI config's ingest token."""
+    _claude(monkeypatch, tmp_path, {"base_url": "https://api.research.prbe.ai", "ingest_token": "ros_ing_cli"})
+    assert cfg.load_token() == "ros_ing_cli" and cfg.api_base_url() == "https://api.research.prbe.ai"
+    monkeypatch.setenv("PROBE_BASE_URL", "https://evil.example")
+    assert cfg.load_token() is None, "the env's endpoint is not the config's own"
+    monkeypatch.delenv("PROBE_BASE_URL")
+    _claude(monkeypatch, tmp_path, {"base_url": "https://api.research.prbe.ai", "ingest_token": "ros_ing_cli"},
+            pinned="https://evil.example")
+    assert cfg.api_base_url() == "https://api.research.prbe.ai", "a .config pin without its own .token is no one's"
+    assert cfg.load_token() == "ros_ing_cli"
+
+
+def test_a_plugins_pinned_endpoint_goes_with_its_own_token_only(monkeypatch, tmp_path):
+    _claude(monkeypatch, tmp_path, {"base_url": "https://api.research.prbe.ai", "ingest_token": "ros_ing_cli"},
+            token="ros_dev_paired", pinned="https://paired.prbe.ai")
+    assert cfg.load_token() == "ros_dev_paired" and cfg.api_base_url() == "https://paired.prbe.ai"
+
+
+def test_a_session_recorded_for_a_fenced_caller_never_wants_a_daemon_worker():
+    """Service-only round 3, H-b: `PROBE_CALLER_FENCED=1` (the service records it for a caller in a
+    sandbox) records only; neither the hosted supervisor nor the service's starts its worker."""
+    from tap import companion_supervisor
+
+    assert companion_supervisor._is_fenced_session({"PROBE_CALLER_FENCED": "1"}) is True
+    assert companion_supervisor._is_fenced_session({"PROBE_CALLER_FENCED": "0"}) is False
+    assert companion_supervisor._is_fenced_session({}) is False
