@@ -1,7 +1,8 @@
-"""Daemon loop — `python -m tap watch ...`.
+"""The recording loop for one session, which the Probe service runs as one of its threads (`tap.hosted`).
 
-Spawned by hooks/session-start.sh. Reads new transcript content, batches +
-enqueues, drains the outbox, sleeps, repeats.
+(`python -m tap watch` started it as a process of its own until service-only 28b; nothing starts that now.)
+
+Reads new transcript content, batches + enqueues, drains the outbox, sleeps, repeats.
 
 Adaptive cadence: ticks at the active interval (default 60s) while the
 transcript is advancing; after IDLE_THRESHOLD_TICKS consecutive empty ticks

@@ -484,7 +484,8 @@ def _lock(fd: int, deadline: float) -> bool:
 
 
 def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_uninstall: bool = False,
-           sdk_python: str | None = None, package_dir: str | None = None, starter_env: dict | None = None) -> str:
+           sdk_python: str | None = None, package_dir: str | None = None, starter_env: dict | None = None,
+           replacing: dict | None = None) -> str:
     """Make sure a service runs (an `Ensured` value). Never raises.
 
     Where this machine's activation units are (`paths.get_activation_unit()`, D19) the OS starts
@@ -494,6 +495,12 @@ def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_un
     its folder) never starts one: its hello in the drop folder does (`_ensure_fenced`). `wait` > 0 waits that long
     for it to answer (`probe service start`); hooks and taps pass nothing and go on at once.
     `min_version`: an older service is stopped and a current one started (D15), else OLDER.
+    `replacing`: the `service.hello` answer of a running service that cannot serve this caller (it
+    answered `-32601` to a method this release has). While the service on the socket is still that
+    one (its `pid` and `started_at`), it is stopped and one started whatever any version says
+    (runtime.json's may be stale after an upgrade in place), else OLDER (it refused to stop, or did
+    not exit). Any other service (a successor another caller started, or the one this call started
+    because that one had gone) is used as it is: RUNNING, never stopped.
     While `probe uninstall` runs (`uninstall_barrier`): UNINSTALLING, nothing started or written --
     but for `probe uninstall` / `probe repair` (`is_finishing_uninstall`) after an uninstall stopped
     halfway (its owner gone): they finish it, in a service started for them (FINISHING_UNINSTALL_ENV).
@@ -513,6 +520,9 @@ def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_un
         return _ensure_fenced(wait, min_version)
     spawn_args = {"sdk_python": sdk_python, "package_dir": package_dir, "starter_env": starter_env}
     outcome = Ensured.RUNNING if reached else _start(wait, is_finishing, spawn_args)
+    if replacing is not None:
+        # Only a service that was there when this call came can be the one that refused.
+        return _replace_older(min_version, wait, refusing=replacing) if reached else outcome
     if min_version and outcome == Ensured.RUNNING:
         return _replace_older(min_version, wait)
     return outcome
@@ -686,16 +696,21 @@ def _ensure_fenced(wait: float, min_version: str | None) -> str:
     return Ensured.OLDER if min_version and _is_older(found, min_version) else Ensured.RUNNING
 
 
-def _replace_older(min_version: str, wait: float) -> str:
+def _replace_older(min_version: str | None, wait: float, *, refusing: dict | None = None) -> str:
     """D15: a service older than `min_version` is asked to stop, and a current one started once
     it exited. OLDER when it stays: it refused (an update or an action runs), it did not exit in
-    STOP_EXIT_WAIT_S, or what would start is older too (`_get_start_version`)."""
+    STOP_EXIT_WAIT_S, or what would start is older too (`_get_start_version`). `refusing` (`ensure`'s
+    `replacing`): no version is read; the service is stopped only when it is that one (the stop goes
+    on the connection whose hello said so, to that process alone), else RUNNING."""
     try:
         with Connection.open(TIMEOUT_S) as connection:
             hello = connection.hello(Client.CLI, "unknown")
-            if not _is_older(hello.get("service_version"), min_version):
+            if refusing is not None:
+                if not _is_same_service(hello, refusing):
+                    return Ensured.RUNNING  # a successor: never stopped
+            elif not _is_older(hello.get("service_version"), min_version):
                 return Ensured.RUNNING
-            if _is_older(_get_start_version(), min_version):
+            elif _is_older(_get_start_version(), min_version):
                 return Ensured.OLDER
             old = hello.get("pid")
             connection.call(Method.STOP)
@@ -709,6 +724,16 @@ def _replace_older(min_version: str, wait: float) -> str:
             return Ensured.OLDER
         time.sleep(0.05)
     return _start(max(wait, START_WAIT_S)) if _reach(0.5) is None else _wait_for_answer(max(wait, START_WAIT_S))
+
+
+def _is_same_service(hello: dict, refusing: dict) -> bool:
+    """Do two `service.hello` answers come from one service process (its `pid` and `started_at`)? Never
+    without a start time on both: a pid alone may be another service's after a reuse."""
+    pid = refusing.get("pid") if isinstance(refusing, dict) else None
+    started = refusing.get("started_at") if isinstance(refusing, dict) else None
+    if not isinstance(pid, int) or isinstance(started, bool) or not isinstance(started, (int, float, str)) or started == "":
+        return False
+    return hello.get("pid") == pid and hello.get("started_at") == started
 
 
 def _wait_for_answer(wait: float) -> str:

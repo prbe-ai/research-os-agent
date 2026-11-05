@@ -169,7 +169,7 @@ function ask<T>(
         if (message.id === 1) {
           const caps = (message.result as Record<string, unknown> | undefined)?.caps;
           if (cap !== null && (!Array.isArray(caps) || !caps.includes(cap))) {
-            finish(notAccepted); // an older service: pi runs its own code
+            finish(notAccepted); // an older service (no v2): treated as no service, a waiting event goes on unchanged
             return;
           }
           asked = true;

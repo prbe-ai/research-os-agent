@@ -56,8 +56,8 @@ CAPABILITY_KEYS = (
 #: plugin's `agent-skills/` by manifest key, and pi its package manifest.
 CAPABILITY_ROOT_SKILLS = "root_skills"
 #: An open session follows a plugin update with no restart: its hooks run the
-#: installed plugin copy (`hooks/dispatch.py installed_root`) and the prompt
-#: hook moves an old tap's watcher to the Probe service (`hooks/tap_handover.py`),
+#: installed plugin copy (`hooks/dispatch.py installed_root`) and a tap from
+#: 0.10.13 on hands its own watcher to the Probe service (`tap/handback.py`),
 #: so "no restart needed" may be said (`cli/updater.follows_without_restart`,
 #: `hooks/version_check._picked_up`). Claude Code, Codex, Kimi Code (with
 #: CAPABILITY_LOADED_RECORDS below) and pi (its extension's shim switches to the

@@ -7,7 +7,7 @@
  */
 
 import { type PathEnv } from "./paths.js";
-import { findProbeBinary, type ProbeBinaryDeps } from "./teamNote.js";
+import { findProbeBinary, type ProbeBinaryDeps } from "./probeBinary.js";
 
 /**
  * Is a capture daemon live for this session, and if not, why not.

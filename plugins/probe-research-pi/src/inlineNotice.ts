@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { currentInlineSince, InlineReason } from "./guard.js";
 import { ProbeState } from "./core/trackingState.js";
 import { probeStateDir, type PathEnv } from "./core/paths.js";
-import { findProbeBinary, type ProbeBinaryDeps } from "./core/teamNote.js";
+import { findProbeBinary, type ProbeBinaryDeps } from "./core/probeBinary.js";
 import type { TrackingExecFileFn } from "./core/trackingState.js";
 
 /** `session_marker.INLINE_NOTICE`, verbatim (Richard's approved text, 2026-10-06). */

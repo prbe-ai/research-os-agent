@@ -5,7 +5,8 @@ waits on it for a wake (`events.subscribe`); the approvals hook records an
 answer through it (`mailbox.answer`). Stdlib only, Python 3.9, loaded beside
 the hook by explicit path. Nothing here raises past `connect` (None: no
 service, a folder that is not this user's alone, a refused hello) and `call`
-(`Failed`): every caller then does the step on the files itself.
+(`Failed`): the step then waits for a later try (a message for the next hook,
+a pick for `probe approvals`); no caller does it on the files itself.
 
 `PROBE_HOOK_SERVICE=off` (or the older `PROBE_READS_SERVICE=off`): never ask.
 """

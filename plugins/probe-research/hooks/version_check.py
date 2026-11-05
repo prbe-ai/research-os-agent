@@ -110,16 +110,17 @@ DEFAULT_BASE = version_policy.DEFAULT_BASE
 UPDATE_CMD_MIN_CLI = "0.8.1"
 #: What an update needs of an open session where it follows (`_picked_up`):
 #: nothing. Its hooks run the installed plugin from their next event
-#: (`dispatch.hand_over`), the prompt hook moves an old tap's watcher
-#: (`tap_handover.py`), and the Probe service moves the rest after its update
+#: (`dispatch.hand_over`), a tap's watcher hands its session to the Probe
+#: service (HANDBACK_TAP on), and the service moves the rest after its update
 #: (`probe.service.followup`). Anywhere else, RESTART_TO_APPLY, as before.
 PICKED_UP = "open sessions pick it up at their next prompt"
 RESTART_TO_APPLY = "restart {agent} to apply"
 #: The Probe plugins and the tap, by name, in Claude Code's install ledger.
 LEDGER_PLUGINS = ("probe-research", "probe-research-daemon", "probe-research-tap")
-#: The first tap whose watcher hands its session to the Probe service
-#: (`tap_handover.HANDBACK_TAP`).
+#: The first tap whose watcher hands its session to the Probe service (`tap/handback.py`).
 HANDBACK_TAP = "0.10.13"
+#: Where a tap keeps a session's `tap watch` files (`tap/config.py` WATCHER_DIR_ENV): `/tmp` unless set.
+WATCHER_DIR_ENV = "PROBE_TAP_WATCHER_DIR"
 
 # Which hook event we are running under. routes.json exports this ONLY for
 # PreCompact, so an unset value means SessionStart -- the reading that preserves
@@ -1169,9 +1170,8 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     its ledger has scopes (`scoped_installs`: Claude Code's), the tap it
     updates to handing its sessions to the Probe
     service (HANDBACK_TAP or later; no tap at all: nothing to hand back) and
-    every live `tap watch` one the prompt hook can move
-    (`tap_handover.watchers_movable`). `agent` names it for the restart note.
-    Never raises: anything unproven is (False, ...)."""
+    no live `tap watch` from before it (`_has_stuck_watchers`). `agent` names
+    it for the restart note. Never raises: anything unproven is (False, ...)."""
     agent = "Claude Code"
     try:
         harness = _hook_harness().current()
@@ -1192,10 +1192,92 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
             target = latest if latest and _remote_gt_local(str(tap), str(latest)) else tap
             if _remote_gt_local(str(target), HANDBACK_TAP):
                 return False, agent
-        handover = _hook_harness().load_sibling("tap_handover")
-        return bool(handover.watchers_movable(harness.capture.watcher_prefix)), agent
+        return not _has_stuck_watchers(harness.capture.watcher_prefix), agent
     except Exception:  # noqa: BLE001 - a notice must never fail the hook
         return False, agent
+
+
+#: A session id as a watcher file names it.
+_WATCHER_SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+#: A versioned tap folder in a `tap watch` command line (a tap that wrote no `.version`). Kimi Code's
+#: folders are `managed/probe-research-tap@<version>`.
+_TAP_FOLDER_VERSION = re.compile(
+    r"/(probe-research-tap|prbe-cc-tap-plugin|prbe-codex-tap-plugin)[/@](\d+\.\d+\.\d+)(?:/|\s|$)")
+
+
+def _has_stuck_watchers(prefix: str) -> bool:
+    """Does a live `tap watch` of this agent's sessions (`<watcher dir>/<prefix>-watcher-<sid>.pid`)
+    run a tap from before HANDBACK_TAP, or one whose version cannot be read? Such a watcher never
+    hands its session to the Probe service, and nothing moves it any more (service-only 28b), so its
+    session follows an update only after a restart. Proven as the tap's own hooks prove it: a pid
+    file of this user's own (`_read_own_file`) naming a live process whose command line is THIS
+    session's `tap watch`; a dead pid, a pid reused since, or a file planted by another user in the
+    shared folder names nothing."""
+    import glob  # noqa: PLC0415
+
+    folder = os.environ.get(WATCHER_DIR_ENV) or "/tmp"
+    folder = folder if os.path.isabs(folder) else "/tmp"
+    head = f"{prefix}-watcher-"
+    for path in glob.glob(os.path.join(glob.escape(folder), f"{glob.escape(head)}*.pid")):
+        sid = os.path.basename(path)[len(head):-len(".pid")]
+        try:
+            pid = int((_read_own_file(path) or "").strip())
+        except ValueError:
+            continue
+        if not _WATCHER_SID.match(sid) or pid <= 1:
+            continue
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue  # gone, or another user's process: not this session's watcher
+        command = _get_command_line(pid)
+        at = command.find("tap watch")
+        if at < 0 or sid not in command[at:]:
+            continue  # unproven: a pid reused since, or a command line that cannot be read
+        version = (_read_own_file(path[: -len(".pid")] + ".version") or "").strip()
+        if not re.match(r"^\d+(\.\d+)+$", version):
+            found = _TAP_FOLDER_VERSION.search(command)
+            version = found.group(2) if found else ""
+        if not version or _remote_gt_local(version, HANDBACK_TAP):
+            return True
+    return False
+
+
+def _read_own_file(path: str, limit: int = 64) -> "str | None":
+    """A small file of this user's own, or None: opened without blocking and without following a
+    link, then a regular file owned by this uid, at most `limit` bytes. The watcher folder is shared
+    (`/tmp`): a FIFO there with no writer must never stall the hook, nor another user's file speak."""
+    import stat  # noqa: PLC0415
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        return os.read(fd, limit).decode("ascii", "replace")
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _get_command_line(pid: int) -> str:
+    """A process's command line, `/proc` first, else `ps`; "" when it cannot be read."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            return handle.read(65536).replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        pass
+    try:
+        return subprocess.run(  # noqa: S603 -- a fixed binary, no shell
+            ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5, check=False, stdin=subprocess.DEVNULL,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def _remote_gt_local(local: str, remote: str) -> bool:

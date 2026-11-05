@@ -48,8 +48,10 @@ wake the agent.
 
 ONE OWNER PER MESSAGE. Delivery is `os.rename` into `claimed/<sid>/`: exactly one
 deliverer wins; `claimed/<sid>/log.jsonl` says who. The Probe service owns
-delivery (plan Q2): this hook claims through it when it answers (`claim_all`,
-`mailbox.claim`: the same rename, done there), else here. A claim the service
+delivery (plan Q2): this hook runs only under the service, and claims through it
+(`claim_all`, `mailbox.claim`: the rename, done there; the service lets its own
+route children claim, #3361). A message the service did not take (no answer, busy,
+a refusal) waits for the next hook; nothing is claimed here. A claim the service
 made whose answer never came (it stalled, or died) is found by the request's
 token in the claim log once the request's deadline has passed, which the
 service never acts past: nothing is lost or delivered twice either way.
@@ -241,7 +243,7 @@ TOPIC_MAILBOX_CHANGED = "mailbox.changed"
 #: A claim through the service (`mailbox.claim`) carries a deadline this far
 #: off, which the service never acts past; with no answer by then and
 #: CLAIM_GRACE_S more, this hook takes what was claimed for it (the files its
-#: token names) and claims the rest itself.
+#: token names); the rest waits for the next hook.
 CLAIM_WAIT_S = 0.8
 CLAIM_GRACE_S = 0.4
 #: A service claim (`claimed/<stem>.<token>.json`) still not received this long
@@ -530,19 +532,6 @@ def mark_shown(sid: str, message_ids: "list[str]", by: str) -> None:
             log.write("".join(json.dumps({"id": mid, "by": by, "at": at}) + "\n" for mid in message_ids))
     except OSError:
         pass
-
-
-def claim(sid: str, path: Path, by: str) -> "dict | None":
-    """Take one message for delivery. None when someone else took it first."""
-    dst = _claimed_dir(sid) / path.name
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.rename(path, dst)
-    except FileNotFoundError:
-        return None
-    msg = _message(_read_json(dst))
-    _log_claim(sid, msg["id"] if msg else path.name, by, msg)
-    return msg
 
 
 def _log_claim(sid: str, message_id: str, by: str, msg: "dict | None", receipt: "str | None" = None) -> None:
@@ -1149,57 +1138,48 @@ def deliver_orphans(sid: str, by: str, wanted=None) -> "list[dict]":
 
 
 def claim_all(sid: str, paths: "list[Path]", by: str) -> "dict[Path, dict]":
-    """Take each of `paths` (waiting messages) once, for this hook to show:
-    through the Probe service when it answers (`mailbox.claim`), else here
-    (`claim`). What this hook got, by path; one someone else took is missing.
+    """Take each of `paths` (waiting messages) once, for this hook to show,
+    through the Probe service (`mailbox.claim`). What this hook got, by path;
+    one someone else took, or one the service did not take (no service, busy,
+    a refusal), is missing and waits for the next hook: nothing is claimed here.
 
-    Exactly once either way: a claim is a rename, whoever makes it. The
-    service's rename carries this request's token in the file's name, and this
-    hook's receipt (`receive`) renames it to the plain name before the message
-    is shown. With no complete answer (an error, a broken line, a timeout),
-    this hook takes the files its token names and claims the rest itself, but
-    only past the request's deadline (and the grace), which the service never
-    acts past. A service rename that lands later still is an orphan the next
-    deliverer delivers (`deliver_orphans`)."""
+    Exactly once: a claim is the service's rename, which carries this request's
+    token in the file's name, and this hook's receipt (`receive`) renames it to
+    the plain name before the message is shown. With no complete answer (an
+    error, a broken line, a timeout), this hook takes the files its token names,
+    but only past the request's deadline (and the grace), which the service
+    never acts past. A service rename that lands later still is an orphan the
+    next deliverer delivers (`deliver_orphans`)."""
     got: dict = {}
-    if not paths:
+    if not paths or os.environ.get(SERVICE_ENV) == "off":
         return got
-    rest = list(paths)
-    rpc = None
-    if os.environ.get(SERVICE_ENV) != "off":
-        try:
-            rpc = _rpc().Rpc.connect()
-        except Exception:  # noqa: BLE001 -- no helper beside this file: claim here
-            rpc = None
-    if rpc is not None:
-        deadline = time.time() + CLAIM_WAIT_S
-        # The token names its deadline: anyone can tell its claims' orphans.
-        token = "%d_%s" % (int(deadline * 1000), secrets.token_hex(6))
-        answered = False  # an error answer: the step ran (or never did), nothing more comes
-        try:
-            answer = rpc.call("mailbox.claim", {"sid": sid, "state_dir": _state_dir(),
-                                                "names": [p.name for p in paths], "by": by, "token": token,
-                                                "deadline": deadline, "budget": CLAIM_WAIT_S},
-                              timeout=CLAIM_WAIT_S + CLAIM_GRACE_S)
-        except Exception as exc:  # noqa: BLE001 -- see below
-            answer = None
-            answered = bool(getattr(exc, "answered", False))
-        finally:
-            rpc.close()
-        if answer is None and not answered:
-            # No answer at all: it may still be at work until the deadline.
-            time.sleep(max(0.0, deadline + CLAIM_GRACE_S - time.time()))
-        # What the service claimed for this request is in files its token names,
-        # answer or none: each through this hook's receipt.
-        by_token = {_token_name(p, token): p for p in paths}
-        for name, path in by_token.items():
-            msg = receive(sid, _claimed_dir(sid) / name, by, ledger=answer is None)
-            if msg is not None:
-                got[path] = msg
-        gone = set(answer.get("gone") or []) if answer is not None else set()
-        rest = [p for p in paths if p not in got and p.name not in gone]
-    for path in rest:
-        msg = claim(sid, path, by)
+    try:
+        rpc = _rpc().Rpc.connect()
+    except Exception:  # noqa: BLE001 -- no helper beside this file: nothing claimed
+        return got
+    if rpc is None:
+        return got
+    deadline = time.time() + CLAIM_WAIT_S
+    # The token names its deadline: anyone can tell its claims' orphans.
+    token = "%d_%s" % (int(deadline * 1000), secrets.token_hex(6))
+    answered = False  # an error answer: the step ran (or never did), nothing more comes
+    try:
+        answer = rpc.call("mailbox.claim", {"sid": sid, "state_dir": _state_dir(),
+                                            "names": [p.name for p in paths], "by": by, "token": token,
+                                            "deadline": deadline, "budget": CLAIM_WAIT_S},
+                          timeout=CLAIM_WAIT_S + CLAIM_GRACE_S)
+    except Exception as exc:  # noqa: BLE001 -- see below
+        answer = None
+        answered = bool(getattr(exc, "answered", False))
+    finally:
+        rpc.close()
+    if answer is None and not answered:
+        # No answer at all: it may still be at work until the deadline.
+        time.sleep(max(0.0, deadline + CLAIM_GRACE_S - time.time()))
+    # What the service claimed for this request is in files its token names,
+    # answer or none: each through this hook's receipt.
+    for name, path in {_token_name(p, token): p for p in paths}.items():
+        msg = receive(sid, _claimed_dir(sid) / name, by, ledger=answer is None)
         if msg is not None:
             got[path] = msg
     return got

@@ -1002,7 +1002,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     return { skillPaths: daemonSkillPaths(resourceRoot) };
   };
 
-  // Inject, don't render — see teamNote.ts's module docstring. Fires on
+  // Inject, don't render: the team note rides the prompt the service builds (its prompt route). Fires on
   // EVERY turn, so this must stay a cheap string append against the cache
   // populated at session_start: no CLI spawn, and no file I/O EXCEPT in the
   // `daemon` state (and one turn after leaving it), where daemonNotice reads
@@ -1143,8 +1143,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // agent_settled, NOT turn_end — agent_settled is pi's analogue of Claude
   // Code's Stop (fires once an agent run has fully settled, no automatic
   // retry/compaction/continuation pending); turn_end fires several times per
-  // user message and would push/pull far more than needed. See teamNote.ts's
-  // module docstring for why this is a full sync, detached, and fail-open.
+  // user message and would push/pull far more than needed. The team note's
+  // sync is the service's (its `agent_settled` route), never this extension's.
   const onAgentSettled: EventHandler = async (_event, ctx) => {
     await rereadPendingCapture(ctx, "agent_settled");
     if (probeIsOff(s)) return;

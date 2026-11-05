@@ -165,8 +165,8 @@ export function sessionsDir(env: PathEnv = process.env): string {
 
 /**
  * Where the team note document lives -- ONE per machine, whatever harness is
- * running. This extension reads it to brief a session, and `probe notes sync`
- * (invoked with `PROBE_AGENT=pi`, see `teamNote.ts`) reads and writes it.
+ * running. The Probe service reads it to brief a pi session (its prompt route),
+ * and `probe notes sync` (run by the service for pi) reads and writes it.
  * Mirrors `team_note_file.paths().document` in the Python CLI, which is
  * `state_dir() / "team-note" / "probe-team-note.md"`.
  *
@@ -180,7 +180,7 @@ export function sessionsDir(env: PathEnv = process.env): string {
  * appearing and disappearing. `PROBE_AGENT` still selects an instruction FILE;
  * it must never again select a document.
  *
- * `tests/teamNote.test.ts` pins this against the same fixture the Python
+ * `tests/paths.test.ts` pins this against the same fixture the Python
  * suite reads, so the two implementations cannot drift apart silently.
  */
 export function teamNoteDocumentPath(env: PathEnv = process.env): string {

@@ -366,73 +366,20 @@ independently if ever started another way.
 
 ## Team note
 
-Independent of the capture daemon above — this works whether or not a device
-is paired, because it never talks to the tap package at all. The team note is
-the lab's shared memory: ONE markdown file per machine,
+The team note is the lab's shared memory: ONE markdown file per machine,
 `~/.local/state/probe/team-note/probe-team-note.md` by default (under
 `$XDG_STATE_HOME` if that is set), that every agent (Claude Code, Codex, and
-pi) reads from and writes to. It used to be one file per harness beside each
-one's instruction file, which is what let two harnesses push a whole document
-over each other at every session start.
+pi) reads from and writes to.
 
-**Inject, don't render.** Claude Code and Codex get the note by having a
-managed block rewritten into their global instruction file
-(`CLAUDE.md`/`AGENTS.md`) at sync time. pi instead appends the note straight
-onto `event.systemPrompt` in a `before_agent_start` handler — it never writes
-to a file the researcher owns, and it can never collide with
-`AGENTS.override.md` shadowing a project's `AGENTS.md`.
-
-**No pointer, no note.** Both the injection and the sync below run only while
-pi's `AGENTS.md` (`$PI_CODING_AGENT_DIR/AGENTS.md`, else
-`~/.pi/agent/AGENTS.md`) carries Probe's managed block, the rule the CLI
-applies to the other harnesses' files. A file without it is the
-`--no-agent-rules` opt-out; a damaged block still counts as opted in. This
-holds in the daemon profile too.
-
-**What happens, and when:**
-
-1. `session_start` (every reason, including `reload`) fires `probe notes sync`
-   and waits up to 2s for it, then reads
-   `~/.local/state/probe/team-note/probe-team-note.md` into an in-memory cache.
-   Syncing first matters because the file is shared: read cold, right after a
-   new sign-in or a context switch, it would still hold the PREVIOUS
-   credential's note. On timeout the sync is left running (its result reaches
-   the next session) and the file is read as it stands. Absent, empty, or
-   unreadable all just mean "nothing to brief this session with"; nothing
-   throws.
-2. `before_agent_start` (every turn) appends the cached note, unchanged, to
-   the system prompt. It never re-reads the file — see the module docstring
-   in `src/core/teamNote.ts` for why a fresh install's first session has no note
-   yet, and why that's fine.
-3. `agent_settled` (pi's analogue of Claude Code's `Stop` — fires once an
-   agent run has fully settled) fires a **detached** `probe notes sync`, with
-   `PROBE_AGENT=pi` set so the CLI resolves pi's own file rather than falling
-   back to Claude Code's. This is a full sync (push then pull), not
-   `--push-only` — a deliberate departure from Claude Code's `Stop`, made
-   because pi exposes no `SessionEnd`-shaped event to split the pull half
-   onto. The refreshed copy reaches the *next* `session_start`'s cache read,
-   not this session's — same as an edit in Claude Code session N first
-   reaching the block session N+2 reads.
-
-**Detached for an inverted reason from Codex's `setsid`.** `hooks/team-note-sync.sh`
-detaches to survive Codex's 3-second `SessionEnd` cap. pi imposes no timeout
-at all on extension handlers (verified against `dist/core/extensions/runner.js`:
-every handler runs inside a bare `try`/`catch`, no `Promise.race`). Detaching
-here exists so a hung `probe` CLI (dead network, stuck DNS) can never stall
-the researcher's actual session — same mechanism, opposite justification.
-
-**Fails open and silent**, matching every hook in `probe-research`'s Claude
-Code/Codex plugin: no `probe` CLI on `PATH` or in the documented fallback
-locations, a dead network, or a server-side conflict all leave the local file
-exactly as the session left it.
-
-**Requires a CLI new enough to have a `pi` case.** `probe notes sync` resolves
-`agent_rules.memory_path()` via `PROBE_AGENT`; a `probe-research` CLI without
-the `pi` branch (anything before this feature shipped) falls back to Claude
-Code's file, so an old CLI on `PATH` would sync the wrong path silently. There
-is currently no version floor check here the way `version_check.py` has one
-for Claude Code/Codex (`TEAM_NOTE_MIN_CLI`) — flagged as a known gap, not
-solved by this extension.
+**The Probe service does all of it** (service-only task 16): this extension
+neither syncs nor reads the note. Its forwarded `before_agent_start` comes back
+with the note as a `system_prompt` action (pi gets it injected, never rendered
+into a file the researcher owns), and its `agent_settled` and session events run
+the service's own sync (`notes.sync`). The rules live in the service's copy
+(`probe.shared.harness.harnesses.pi.team_note_prompt`): no Probe managed block in
+pi's `AGENTS.md` (the `--no-agent-rules` opt-out; a damaged block still counts as
+opted in), or a workspace limit hiding team-wide items, means no note. No
+service, no note that turn.
 
 ## Probe MCP read tools
 

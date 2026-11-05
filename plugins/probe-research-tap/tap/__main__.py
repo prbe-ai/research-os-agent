@@ -16,7 +16,6 @@ def _print_help() -> int:
     print("Usage: python -m tap <subcommand> [args]")
     print()
     print("Subcommands:")
-    print("  watch    spawn the daemon (used by SessionStart hook)")
     print("  start    spawn the daemon idempotently, with gates (used by every caller)")
     print("  owner    record the agent process that owns a session (SessionStart)")
     print("  hook-env a hook's per-harness values and payload, from the registry (hooks)")
@@ -24,7 +23,7 @@ def _print_help() -> int:
     print("  status   print local state")
     print("  revoke   revoke device + wipe local state")
     print("  redaction-notice  print (and clear) what was redacted last session")
-    print("  companion  the Probe daemon worker (started by `watch` in the daemon state)")
+    print("  companion  the Probe daemon worker (started by the session's recorder in the daemon state)")
     print("  service  the machine-wide Probe service: ensure | register | end | status (pi)")
     print("  record | recording | finish  the Probe service records this session (SessionStart / prompt / SessionEnd)")
     return 0
@@ -41,10 +40,6 @@ def main(argv: list[str] | None = None) -> int:
     if cmd in ("-h", "--help", "help"):
         return _print_help()
 
-    if cmd == "watch":
-        from tap.main import main as watch_main
-
-        return watch_main(rest)
     if cmd == "owner":
         from tap.owner import main as owner_main
 
