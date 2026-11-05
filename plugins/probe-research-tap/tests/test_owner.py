@@ -158,3 +158,9 @@ def test_the_hook_process_itself_is_never_its_own_owner(monkeypatch):
 def test_owner_subcommand_never_fails(record_path):
     assert owner.main(["--session-id", "sid", "--from-pid", "999999999"]) == 0
     assert not record_path.exists()
+
+
+def test_cursors_cli_owns_its_session():
+    """Cursor's CLI runs as `cursor-agent` (comm `MainThread`): without its name no Cursor chat had
+    an owner, and the Probe service refused to record it (`no_owner`)."""
+    assert {"cursor-agent", "agent", "Cursor Helper (Plugin)"} <= owner.AGENT_NAMES

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **The Probe service's Windows code is deleted (service-only D16, tap 0.10.51).** Probe has not installed on Windows since #4084, so the named-pipe transport (`winpipe.py`, in the CLI and the tap), the Windows branches of the service's folder, locks, process identity, keeper, actions, updater and hook routes, the status-line hook's Windows liveness check and the tap's Git Bash pid and watcher-folder handling are gone, with `test_service_windows.py` and the dormant `service-windows` workflow. Nothing changes on Linux or macOS.
+- **Fix: Cursor chats are captured.** The tap's session-owner walk did not know Cursor's process names (`cursor-agent`, `agent`, the app's extension host), so every Cursor chat had no owner and the Probe service refused to record it (`no_owner`): Cursor sessions were never uploaded. Tap 0.10.52.
 
 ## 0.408.0
 

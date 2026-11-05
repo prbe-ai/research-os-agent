@@ -45,7 +45,12 @@ from tap.service import procid
 #: (its npm launcher is a `node` parent, which the walk passes through); Kimi
 #: Code 2.1.1 titles its node process kimi-code (comm and argv[0], seen under a
 #: real session), so a Kimi started from another agent's shell owns its own.
-AGENT_NAMES = frozenset({"claude", "codex", "kimi-code"})  # harness-literal-ok: process titles
+#: Cursor's CLI is `cursor-agent` (or `agent`) by argv[0], its comm `MainThread`; the
+#: app runs hooks below its extension host: the names its hook routes' caller check takes.
+AGENT_NAMES = frozenset({  # harness-literal-ok: process titles
+    "claude", "codex", "kimi-code",
+    "cursor-agent", "agent", "cursor", "Cursor", "Cursor Helper (Plugin)", "Cursor Helper",
+})
 
 #: A hook sits a few shells below the agent (`sh -c` -> `bash -c` -> the hook,
 #: plus ensure-daemon.sh on the self-heal path). Past this, the chain is not a
@@ -77,7 +82,7 @@ _proc = procid.proc
 
 
 def find_owner(start_pid: int) -> Owner | None:
-    """The nearest `claude`/`codex` ancestor of `start_pid`, never itself."""
+    """The nearest agent (AGENT_NAMES) ancestor of `start_pid`, never itself."""
     info = _proc(start_pid)
     for _ in range(MAX_WALK):
         if info is None or info.ppid <= 1:
