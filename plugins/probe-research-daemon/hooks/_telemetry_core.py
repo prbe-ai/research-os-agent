@@ -452,8 +452,11 @@ def post_batch(entries: list[dict], *, context: ssl.SSLContext | None = None) ->
     contract — both surfaces must send the identical envelope or a future
     endpoint/header change drifts them apart. `context`: see resolve_identity."""
     payload = json.dumps({"api_key": POSTHOG_KEY, "batch": entries})
+    # Read now, not only at import: a `probe` command runs in the service's warm CLI host,
+    # which imported this module under the service's environment, not the caller's.
+    host = os.environ.get("PROBE_TELEMETRY_HOST") or POSTHOG_HOST
     req = urllib.request.Request(
-        POSTHOG_HOST.rstrip("/") + "/batch/",
+        host.rstrip("/") + "/batch/",
         data=payload.encode(),
         headers={"Content-Type": "application/json"},
     )

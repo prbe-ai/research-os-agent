@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import IntEnum
+
 from .wire import invalid_params
 
 
@@ -579,6 +581,10 @@ class RefusedReason:
     #: being in a sandbox (the service's `policy.FENCED_WORK` lists those it does,
     #: service-only D2); an older service refused every WORK method so.
     SANDBOXED = "sandboxed"
+    #: `service.stop` while other `probe` commands run (`cli.run`): stopping would end them.
+    COMMANDS_RUNNING = "commands_running"
+    #: `cli.run` while Probe is being uninstalled (the uninstall barrier is up).
+    UNINSTALLING = "uninstalling"
     #: `desktop.request`: no child could start (no CLI interpreter). Nothing ran.
     CLI_UNAVAILABLE = "cli_unavailable"
     #: `desktop.request`: as many requests as it takes at once are running or
@@ -600,6 +606,28 @@ class BusyHolder:
     #: A `desktop.request` change whose child still runs (`data.holder.changes`:
     #: how many), also one its caller stopped waiting for.
     DESKTOP = "desktop"
+
+
+class ShimExit(IntEnum):
+    """The `probe` shim's own exit statuses (service-only T39); any other is its command's."""
+
+    OK = 0
+    #: No service answered, even after `ensure` (sysexits EX_UNAVAILABLE).
+    UNAVAILABLE = 69
+    #: The service went away while the command ran (EX_SOFTWARE).
+    SERVICE_LOST = 70
+    #: An update kept the command from starting (EX_TEMPFAIL, as the update barrier's busy).
+    UPDATING = 75
+
+
+class CommandStdio:
+    """`cli.run`'s `stdio`: the caller's own fds (a terminal, pipes), or output captured into the answer."""
+
+    FDS = "fds"
+    CAPTURE = "capture"
+
+
+COMMAND_STDIOS = frozenset({CommandStdio.FDS, CommandStdio.CAPTURE})
 
 
 #: `update.app_result`'s `error` is kept to this many characters.

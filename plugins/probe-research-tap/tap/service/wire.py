@@ -128,6 +128,11 @@ class Method:
     #: An approved import's worker (`probe.cli.import_jobs`), started and
     #: watched by the service instead of detached from the CLI.
     IMPORT_START = "import.start"
+    #: The `probe` command, run by the service in a child of its warm CLI host, with the
+    #: caller's own terminal (service-only D5; `service/commands/DESIGN.md`).
+    CLI_RUN = "cli.run"
+    #: A signal the shim got (SIGINT, SIGTERM, SIGHUP, SIGWINCH, SIGTSTP, SIGCONT), for its command.
+    CLI_SIGNAL = "cli.signal"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -172,6 +177,8 @@ METHODS = frozenset(
         Method.STATUSLINE_RENDER,
         Method.NOTES_SYNC,
         Method.IMPORT_START,
+        Method.CLI_RUN,
+        Method.CLI_SIGNAL,
     }
 )
 

@@ -47,6 +47,10 @@ WINDOWS = os.name == "nt"
 #: A UNIX socket path is at most 108 bytes on Linux and 104 on macOS; past
 #: this the socket moves to a private folder under /tmp (API v1, "Transport").
 MAX_SOCKET_PATH = 100
+#: Names the service's state root instead of `~/.local/state/probe/service`: another copy's own
+#: service (D13), or the SDK's fallback on a read-only home (D9). Absolute; every client and the
+#: service read it.
+SERVICE_ROOT_ENV = "PROBE_SERVICE_ROOT"
 
 #: A fenced caller's requests and their answers, in this machine's folder (`get_drop_dir`): the
 #: requests in `requests/` (the only files there: launchd starts the service while it holds any),
@@ -213,10 +217,27 @@ def machine_key() -> str:
     return _machine_key
 
 
+#: Another copy's own service roots (service-only D13): `<machine root>/copies/<hash of its prefix>`.
+COPIES_DIRNAME = "copies"
+
+
+def is_copy_root() -> bool:
+    """Is this the service (or a client) of another copy than the machine's install: a
+    checkout's or a project venv's `probe`, which runs a service of its own under
+    `<root>/copies/<key>` (service-only D13; `cli_shim.choose_service_root` sets
+    SERVICE_ROOT_ENV)? A root named for another reason (a read-only home's fallback) is not."""
+    named = os.environ.get(SERVICE_ROOT_ENV)
+    return bool(named) and os.path.isabs(named) and Path(named).parent.name == COPIES_DIRNAME
+
+
 def root_dir() -> Path:
     """`~/.local/state/probe/service`: every machine's folder, and the files
-    that describe the install rather than one machine. On Windows
-    `%LOCALAPPDATA%\\probe\\service` (private to the user there)."""
+    that describe the install rather than one machine; `PROBE_SERVICE_ROOT`
+    when set (an absolute path). On Windows `%LOCALAPPDATA%\\probe\\service`
+    (private to the user there)."""
+    named = os.environ.get(SERVICE_ROOT_ENV)
+    if named and os.path.isabs(named):
+        return Path(named)
     if WINDOWS:
         local = os.environ.get("LOCALAPPDATA")
         base = Path(local) if local else home() / "AppData" / "Local"

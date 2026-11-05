@@ -88,6 +88,15 @@ FENCE_ENDPOINT_NAMES = frozenset({
     "https_proxy", "no_proxy", "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO",
 })
+#: What only the service sets on a `probe` command it runs (`cli.run`): the shim it serves and
+#: that shim's start time (`probe.foundation.caller`), whether its caller is fenced, and its
+#: launcher channel (`probe.sdk.run.launch.program`). Never the request's word (the command child
+#: drops them from it), never the program `probe exec` starts (the shim's own child).
+#: A fenced caller's command: the folder it may write in (`cli/fenced_paths.py`), the working folder of
+#: the coding agent whose session it runs under, as this service read it (never the caller's word).
+CALLER_WORKSPACE_ENV = "PROBE_CALLER_WORKSPACE"
+SERVICE_OWNED_ENV = ("PROBE_CALLER_PID", "PROBE_CALLER_START", CALLER_FENCED_ENV, CALLER_WORKSPACE_ENV,
+                     "PROBE_LAUNCHER_FD")
 MAX_CONTEXT_VALUE = 4096
 
 #: `hooks.run`'s `lane`s and the hook event each one serves: `hooks/dispatch.py`

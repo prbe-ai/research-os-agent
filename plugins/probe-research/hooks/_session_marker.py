@@ -4292,8 +4292,14 @@ def _ancestors(pid: "int | None" = None) -> "list[tuple[int, str, str]]":
 
     A hook event run by the warm hook host (`hooks/zygote.py`, plan A0) has the
     host for a parent, not the harness: the host names the harness's process
-    in PROBE_HOOK_PARENT_PID, and the walk starts there."""
+    in PROBE_HOOK_PARENT_PID, and the walk starts there. A `probe` command the
+    Probe service runs (`cli.run`) has the service's CLI host for a parent: the
+    service names the shim it serves in PROBE_CALLER_PID (`probe.foundation.caller`),
+    and the walk is that shim's parents."""
     if pid is None:
+        caller = os.environ.get("PROBE_CALLER_PID", "")
+        if caller.isdigit() and int(caller) > 1:
+            return _ancestors(int(caller))[1:]
         hosted = os.environ.get("PROBE_HOOK_PARENT_PID", "")
         pid = int(hosted) if hosted.isdigit() and int(hosted) > 1 else os.getppid()
     current = pid

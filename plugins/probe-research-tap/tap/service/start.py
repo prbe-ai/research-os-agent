@@ -64,6 +64,12 @@ ENV_ALLOWLIST = (
     "PROBE_SERVICE_KEEPER",
     "PROBE_SERVICE_WORKER_POLL_S",
     "PROBE_SERVICE_WORKER_BACKOFF_S",
+    # How long the service stays after its last `probe` command, and its CLI host idles (cli.run).
+    "PROBE_SERVICE_COMMAND_LINGER_S",
+    "PROBE_SERVICE_MAX_COMMANDS",
+    "PROBE_COMMAND_HOST_IDLE_S",
+    # Another copy's own service (`paths.SERVICE_ROOT_ENV`, D13): it must live under that copy's root.
+    "PROBE_SERVICE_ROOT",
     # The watch's test-only switches (`watch.REPORTS_ENV`, `watch.SCAN_ENV`).
     "PROBE_SERVICE_REPORTS",
     "PROBE_SERVICE_WATCH_S",
@@ -103,6 +109,32 @@ class Ensured:
 # stale one).
 
 UNINSTALLING_MESSAGE = "Probe is being uninstalled on this computer; nothing of Probe starts until that finishes"
+#: The commands that finish an uninstall that stopped halfway (`get_command_word` decides).
+FINISHING_COMMANDS = frozenset({"uninstall", "repair"})
+#: `probe`'s global options that take a value (`cli/main.py` `_root`): skipped before the command.
+_VALUED_GLOBALS = ("--base-url", "--spool-dir")
+
+
+def get_command_word(argv: list[str]) -> str | None:
+    """The command `probe <argv>` names, past its global options (`--base-url X`, `--sync`, ...)."""
+    is_value_next = False
+    for token in argv:
+        if is_value_next:
+            is_value_next = False
+            continue
+        if token in _VALUED_GLOBALS:
+            is_value_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
+#: Set on the one service `ensure` starts for `probe uninstall` or `probe repair` after an
+#: uninstall stopped halfway (its barrier LIVE, its owner gone): those two finish it, and run in
+#: the service like every `probe` (service-only A2). Nothing else starts.
+FINISHING_UNINSTALL_ENV = "PROBE_SERVICE_FINISHING_UNINSTALL"
 
 
 def uninstall_barrier() -> dict | None:
@@ -257,7 +289,20 @@ def _pid_runs(pid: object) -> bool:
 _DETACHED: dict = {"start_new_session": True}
 
 
-def _spawn(python: str) -> int:
+def is_uninstall_orphaned() -> bool:
+    """Is the uninstall barrier LIVE with its owner gone: an uninstall that stopped halfway, which
+    only `probe uninstall` or `probe repair` may finish? Never raises."""
+    try:
+        reader = importlib.import_module("probe.shared.updates.uninstall_barrier")
+        data = reader.read()
+        if data is None or data.get(reader._UNREADABLE) or not isinstance(data.get("pid"), int):  # noqa: SLF001
+            return False  # nothing to tell its owner by: still running, as far as anyone can say
+        return reader.state(data) == reader.State.LIVE and not reader._owner_runs(data)  # noqa: SLF001
+    except Exception:  # noqa: BLE001 -- the tap's copy has no reader: never
+        return False
+
+
+def _spawn(python: str, extra_env: dict | None = None) -> int:
     log_fd = os.open(
         paths.log_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600
     )
@@ -267,7 +312,7 @@ def _spawn(python: str) -> int:
             stdout=log_fd,
             stderr=log_fd,
             cwd=str(paths.service_dir()),
-            env=_clean_env(),
+            env={**_clean_env(), **(extra_env or {})},
             close_fds=True,
             **_DETACHED,
         )
@@ -349,7 +394,7 @@ def _lock(fd: int, deadline: float) -> bool:
         time.sleep(0.01)
 
 
-def ensure(*, wait: float = 0.0, min_version: str | None = None) -> str:
+def ensure(*, wait: float = 0.0, min_version: str | None = None, is_finishing_uninstall: bool = False) -> str:
     """Make sure a service runs (an `Ensured` value). Never raises.
 
     Where this machine's activation units are (`paths.get_activation_unit()`, D19) the OS starts
@@ -359,15 +404,20 @@ def ensure(*, wait: float = 0.0, min_version: str | None = None) -> str:
     its folder) never starts one: its hello in the drop folder does (`_ensure_fenced`). `wait` > 0 waits that long
     for it to answer (`probe service start`); hooks and taps pass nothing and go on at once.
     `min_version`: an older service is stopped and a current one started (D15), else OLDER.
-    While `probe uninstall` runs (`uninstall_barrier`): UNINSTALLING, nothing started or written.
+    While `probe uninstall` runs (`uninstall_barrier`): UNINSTALLING, nothing started or written --
+    but for `probe uninstall` / `probe repair` (`is_finishing_uninstall`) after an uninstall stopped
+    halfway (its owner gone): they finish it, in a service started for them (FINISHING_UNINSTALL_ENV).
     """
     _reap()
+    is_finishing = False
     if uninstall_barrier() is not None:
-        return Ensured.UNINSTALLING
+        if not (is_finishing_uninstall and is_uninstall_orphaned()):
+            return Ensured.UNINSTALLING
+        is_finishing = True
     reached = _reach(0.5)
     if reached == _FENCED:
         return _ensure_fenced(wait, min_version)
-    outcome = Ensured.RUNNING if reached else _start(wait)
+    outcome = Ensured.RUNNING if reached else _start(wait, is_finishing)
     if min_version and outcome == Ensured.RUNNING:
         return _replace_older(min_version, wait)
     return outcome
@@ -400,16 +450,18 @@ def _is_folder_hidden() -> bool:
         return False
 
 
-def _start(wait: float) -> str:
+def _start(wait: float, is_finishing: bool = False) -> str:
     """No service answers: the OS starts it (`_activate`) where this machine's units are, else
     (or when the OS will not) one spawn; then, with `wait`, its first answer. A process with
     no_new_privs never spawns one where the units are (L4: it may be in a Landlock domain no check
     sees, and its service would be too); where none are (a container, a training box: every process
     has it) it does."""
     is_activated = paths.get_activation_unit() is not None
-    outcome = _activate() if is_activated else Ensured.UNAVAILABLE
+    # The finisher of a halfway uninstall is always spawned with its mark: an activated service
+    # carries none and would exit at once under the live barrier.
+    outcome = _activate() if is_activated and not is_finishing else Ensured.UNAVAILABLE
     if outcome == Ensured.UNAVAILABLE and not (is_activated and _has_no_new_privs()) and _is_like_its_ancestors():
-        outcome = _spawn_once()
+        outcome = _spawn_once(is_finishing)
     if wait > 0 and outcome in (Ensured.SPAWNED, Ensured.STARTING):
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
@@ -421,8 +473,9 @@ def _start(wait: float) -> str:
     return outcome
 
 
-def _spawn_once() -> str:
-    """One detached spawn under start.lock, rate-limited (MAX_STARTS in START_WINDOW_S)."""
+def _spawn_once(is_finishing: bool = False) -> str:
+    """One detached spawn under start.lock, rate-limited (MAX_STARTS in START_WINDOW_S); one that
+    finishes a halfway uninstall carries FINISHING_UNINSTALL_ENV."""
     try:
         paths.ensure_dirs()
         fd = os.open(paths.start_lock_path(), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -446,7 +499,7 @@ def _spawn_once() -> str:
         if python is None:
             return Ensured.UNAVAILABLE
         try:
-            pid = _spawn(python)
+            pid = _spawn(python, {FINISHING_UNINSTALL_ENV: "1"} if is_finishing else None)
         except OSError:
             return Ensured.UNAVAILABLE
         starts.append({"at": now, "pid": pid})
