@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.413.0
+
 - **Kimi Code 2.4's hook output and skill text are no longer read as the researcher's prompt (tap 0.10.56).** Kimi 2.1 wrote a UserPromptSubmit hook's output and an activated skill's body as messages of their own, which capture dropped. 2.4 puts them first in the prompt itself, as parts tagged `meta.source` (`user prompt submit hook`, `skill activation`), so every prompt that carried a Probe hint or reader message was captured, indexed and shown with that text on top, and the daemon read it as the researcher's words. Capture now drops the tagged parts (a prompt that is only those ships nothing) and the daemon reads them as hook output; the same text typed by the researcher, untagged, stays their prompt. A blocking hook's reason, which 2.4 writes as an assistant message, is no longer captured as the agent's reply.
 ## 0.412.0
 
