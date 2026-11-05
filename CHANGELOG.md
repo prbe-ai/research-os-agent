@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.411.0
+
 - **Fix: an update right after a release no longer fails to find it.** The update asked uv to re-read the package index only for `probe-research`, not for the compiled `probe-research-cli` it pins, so for several minutes after each release `uv tool install` could not resolve the new version and the update said the CLI was already the latest. It now re-reads both, as the npm launcher already did. That includes the update's frozen first stage and the lifeboat (`handoff.py`, now HANDOFF_VERSION 5).
 - **Fix: the Probe service no longer keeps running from uv's temporary copy after a first install.** The Mac app's first launch (and `npx probe-research`) runs `probe` through `uv tool run`. Since 0.407.0 that `probe` hands its command to the service, so it started the service from uv's cache before the command installed Probe for good. The command then recorded the permanent install but left the temporary service running: `probe status` said "ephemeral", and it ran from a folder uv may delete. Once the install is recorded, that service now restarts from it as soon as nothing runs.
 
