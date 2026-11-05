@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 from .journal.errors import ReconciliationRequired
+from .pinned import open_transcript
 from .journal.harness import _harness
 from .journal.integrity import prefix_hash
 from .session_kind import SessionKind, read_head, session_kind
@@ -127,7 +128,7 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
         expected = str(UUID(session_id))
     except (ValueError, TypeError, AttributeError) as exc:
         raise ReconciliationRequired("malformed source session identity") from exc
-    with path.open("rb") as handle:
+    with open_transcript(path) as handle:
         size = handle.seek(0, 2)
         try:
             fmt = _harness(source).transcripts["format"]

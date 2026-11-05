@@ -13,7 +13,6 @@ import {
   CAP_HOOKS_PROXY_V2,
   ForwardOutcome,
   forwardEvent,
-  isForwarding,
   makeQueueEnv,
   piConfigRoot,
   type ForwardRequest,
@@ -85,9 +84,9 @@ describe("a forward ends answered, not accepted, or with no answer (D50)", () =>
     expect(fake.requests.map((r) => r.method)).toEqual(["service.hello"]);
   });
 
-  it("is not accepted when refused or met with an error, with the refusal's reason", async () => {
-    await serve(() => ({ result: { refused: "a caller in a sandbox", reason: "sandboxed" } }));
-    expect(await forwardEvent(SOCKET, REQUEST, DEPS)).toMatchObject({ outcome: ForwardOutcome.NotAccepted, refusedReason: "sandboxed" });
+  it("is refused, never 'no service', when a running service refuses it; not accepted on an error answer", async () => {
+    await serve(() => ({ result: { refused: "the caller is not a hook of a running pi process", reason: "not_harness" } }));
+    expect(await forwardEvent(SOCKET, REQUEST, DEPS)).toMatchObject({ outcome: ForwardOutcome.Refused, refusedReason: "not_harness" });
     await service!.close();
     await serve(() => ({ error: { code: -32602, message: "v must be 1" } }));
     expect((await forwardEvent(SOCKET, REQUEST, DEPS)).outcome).toBe(ForwardOutcome.NotAccepted);
@@ -109,28 +108,7 @@ describe("a forward ends answered, not accepted, or with no answer (D50)", () =>
   });
 });
 
-describe("whether this machine forwards pi's events is the ledger's (D47)", () => {
-  const dir = socketFolder();
-  const env = { HOME: "/home/u", PI_CODING_AGENT_DIR: "/home/u/.pi/agent" };
-
-  function ledger(switches: { at: number; to: string }[], root = "/home/u/.pi/agent"): void {
-    mkdirSync(join(dir, "hooks"), { recursive: true });
-    writeFileSync(join(dir, "hooks", "migrations.json"), JSON.stringify({ v: 1, harnesses: { pi: { [root]: { switches } } } }));
-  }
-
-  it("forwards once pi's record ends in a shim switch, for this config only", () => {
-    ledger([{ at: 1, to: "shim" }]);
-    expect(isForwarding(dir, env)).toBe(true);
-    expect(isForwarding(dir, { ...env, PI_CODING_AGENT_DIR: "/elsewhere" })).toBe(false);
-  });
-
-  it("stops after a rollback, and with no ledger at all", () => {
-    ledger([{ at: 1, to: "shim" }, { at: 2, to: "legacy" }]);
-    expect(isForwarding(dir, env)).toBe(false);
-    expect(isForwarding(null, env)).toBe(false);
-    expect(isForwarding(join(dir, "nope"), env)).toBe(false);
-  });
-
+describe("a queue file", () => {
   it("keeps no secret of the session in a queue file", () => {
     expect(makeQueueEnv({ HOME: "/h", PATH: "/b", PI_SESSION_ID: "s", PROBE_TOKEN: "t", OPENAI_API_KEY: "k", XDG_STATE_HOME: "/x", PROBE_AGENT: "pi" }))
       .toEqual({ HOME: "/h", PATH: "/b", XDG_STATE_HOME: "/x", PROBE_AGENT: "pi" });

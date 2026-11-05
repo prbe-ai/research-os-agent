@@ -132,6 +132,12 @@ function cliPythons(deps: TapRuntimeDeps): string[] {
   return found;
 }
 
+/** The Probe CLI's interpreter (runtime.json's, else uv's) when it is there and executable, or null: what
+ * `python -I -m probe.service.client ensure` runs on (service-only T37: one `ensure`, the CLI's). */
+export function findCliPython(deps: TapRuntimeDeps): string | null {
+  return cliPythons(deps).find((python) => deps.existsSync(python) && deps.isExecutable(python)) ?? null;
+}
+
 /** The interpreters to ask, in `tap-python.sh`'s order; `root` is the tap checkout, if any. */
 function candidates(root: string | null, deps: TapRuntimeDeps): string[] {
   const onPath = (names: readonly string[]): string[] =>

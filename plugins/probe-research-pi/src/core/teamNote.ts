@@ -1,48 +1,8 @@
 /**
- * The team note, the half every harness shares: read the local document a
- * session is briefed with, decide whether this machine opted in (the pointer
- * block), and push local edits + pull the team's latest via a DETACHED
- * `probe notes sync`. How pi puts the note into a prompt is pi's own:
- * `../teamNotePrompt.ts`.
- *
- * ONE SYNC TRIGGER, NOT TWO. Claude Code/Codex split the job across two
- * hooks: `Stop` fires every turn and only pushes (cheap — get this turn's
- * edits out, no network round trip beyond that); `SessionEnd` fires once and
- * does a full reconcile (push, THEN pull, THEN re-render). pi has no
- * `SessionEnd`-shaped event exposed to extensions, and the brief for this
- * work names exactly one hook to use: `agent_settled`, "the analogue of
- * Claude Code's Stop." Rather than only push from `agent_settled` (which
- * would mean a pi machine could send edits out but would never once pull a
- * teammate's back in — the team note's entire premise, "edits sync on their
- * own... two sessions editing at once is fine," depends on the pull half
- * running SOMEWHERE), `spawnTeamNoteSync()` below runs a FULL `probe notes
- * sync` every time. That refreshed copy does not reach the CURRENT session's
- * cache (`../teamNotePrompt.ts`'s CACHE ONCE PER SESSION) — it reaches the NEXT `session_start`'s
- * read, exactly like a Claude Code edit at session N first reaching the
- * block session N+2 reads (team-note-sync.sh's own comment). This is a
- * deliberate departure from mirroring Stop's push-only cheapness, made
- * because pi's single-trigger design leaves no other opportunity for the
- * pull half to run at all.
- *
- * DETACHED, FOR AN INVERTED REASON. `hooks/team-note-sync.sh`'s `setsid`
- * exists to survive Codex's 3-second `SessionEnd` timeout — the hook's
- * process group would otherwise be killed mid-flight along with the timed-
- * out parent. pi imposes NO timeout at all on an extension's event handlers
- * (verified against pi 0.86.0's `dist/core/extensions/runner.js`, and
- * 0.84.3's: every handler call is `await`ed inside a bare try/catch — no
- * `Promise.race`, no wrapper, no deadline). So detaching here is not about
- * surviving a clock — there isn't one. It is because an in-process,
- * un-detached spawn that hangs (a dead network, a stuck DNS lookup) would
- * hang INSIDE the `agent_settled` handler with nothing to interrupt it,
- * stalling the researcher's actual pi session indefinitely. Same mechanism
- * as Codex's `setsid` (spawn a child, do not wait on it), opposite
- * justification — a future reader who assumes this was copied for the
- * timeout reason would be wrong; say so if this comment ever moves.
- *
- * FAIL OPEN AND SILENT, matching every hook in `probe-research`'s plugin: a
- * missing `probe` CLI, a dead network, or a server-side conflict must all
- * leave the local file exactly as the session left it. Nothing here throws
- * out of `readTeamNote()` or `spawnTeamNoteSync()`.
+ * The team note, the half every harness shares: read the local document a session is briefed with,
+ * decide whether this machine opted in (the pointer block), and find the `probe` CLI. The note's
+ * sync and the prompt it goes into are the Probe service's (its `agent_settled` and prompt routes,
+ * service-only task 16): nothing here syncs or spawns.
  */
 
 import { readFileSync } from "node:fs";
@@ -114,22 +74,6 @@ export function readTeamNote(env: PathEnv = process.env, deps: TeamNoteReadDeps 
 // Spawning the detached sync
 // ---------------------------------------------------------------------------
 
-export interface ChildLike {
-  pid: number | undefined;
-  unref: () => void;
-  /** OPTIONAL, because only `syncTeamNoteThenRead` waits on a child and every
-   * other caller fires and forgets. A fake that omits it makes that waiter
-   * resolve on its timeout, which is the same answer a real child that never
-   * exits would give -- so a test can leave it out and still be honest. */
-  once?: (event: string, listener: (payload?: unknown) => void) => unknown;
-}
-
-export type SpawnFn = (
-  command: string,
-  args: string[],
-  options: { detached: boolean; stdio: "ignore"; env: PathEnv },
-) => ChildLike;
-
 export interface ProbeBinaryDeps {
   existsSync: (path: string) => boolean;
   isExecutable: (path: string) => boolean;
@@ -179,128 +123,4 @@ export function findProbeBinary(deps: ProbeBinaryDeps): string | null {
     if (deps.existsSync(candidate) && deps.isExecutable(candidate)) return candidate;
   }
   return null;
-}
-
-export interface TeamNoteSyncDeps {
-  spawn: SpawnFn;
-  existsSync: (path: string) => boolean;
-  isExecutable: (path: string) => boolean;
-  env: PathEnv;
-  log: (message: string) => void;
-}
-
-/**
- * Fire a detached `probe notes sync` for this pi session and return
- * immediately. See the module docstring for why this is a full sync (not
- * `--push-only`), why it is detached, and why nothing here ever throws.
- *
- * `PROBE_AGENT=pi` is set in the child's environment — mirroring exactly how
- * `hooks.json` exports `PROBE_AGENT=codex` before invoking this same shell
- * script for Codex (Claude Code's own hook leaves it unset and rides the
- * CLI's `claude_code` default). Without it, `agent_rules.memory_path()`
- * inside the CLI would resolve to Claude Code's file even though this call
- * originated from pi, because that function falls back to
- * `os.environ.get("PROBE_AGENT")` whenever it is not told the caller
- * explicitly.
- */
-export function spawnTeamNoteSync(deps: TeamNoteSyncDeps): void {
-  spawnDetachedProbe(deps, ["notes", "sync"], "team-note sync");
-}
-
-/**
- * Fire a detached `probe <args>` with `PROBE_AGENT=pi` and return at once;
- * `what` names it in the log. Never throws: no binary or a failed spawn is
- * logged and nothing runs.
- */
-export function spawnDetachedProbe(deps: TeamNoteSyncDeps, args: string[], what: string): void {
-  const binary = findProbeBinary(deps);
-  if (!binary) {
-    deps.log(`${what} skipped: no probe CLI found on PATH or in the documented fallback locations`);
-    return;
-  }
-  try {
-    const child = deps.spawn(binary, args, {
-      detached: true,
-      stdio: "ignore",
-      env: { ...deps.env, PROBE_AGENT: "pi" },
-    });
-    child.unref();
-    deps.log(`${what} spawned (pid ${child.pid ?? "unknown"})`);
-  } catch (err) {
-    deps.log(`${what} spawn failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-/** How long `session_start` waits for its own sync before reading the file. */
-export const SYNC_BEFORE_READ_TIMEOUT_MS = 2_000;
-
-/**
- * Run the sync and WAIT for it, briefly, before the session reads the note.
- *
- * WHY WAIT AT ALL. The document is one file per machine, shared by every
- * harness and written by whichever credential last synced. Reading it before
- * this session's own sync has run means briefing the model from whatever was
- * left there -- and after a context switch or a new sign-in, what was left
- * there is the PREVIOUS credential's note. The sync is what parks that copy and
- * installs this credential's; doing it first turns a possible cross-tenant read
- * into an ordinary one.
- *
- * WHY BRIEFLY. pi imposes no timeout on an extension's event handlers (see the
- * module docstring), which means a hung network call here would hang the
- * session start -- the one place a hang is most visible and least forgivable.
- * On timeout the child is left running, unref'd, exactly as before: it still
- * finishes, and its result reaches the NEXT session's read. The note this
- * session shows is then the one already on disk, which is the pre-existing
- * behaviour rather than a new failure.
- *
- * NEVER THROWS, like everything else on this path.
- */
-export function syncTeamNoteThenRead(
-  deps: TeamNoteSyncDeps,
-  timeoutMs: number = SYNC_BEFORE_READ_TIMEOUT_MS,
-): Promise<"synced" | "timeout" | "skipped"> {
-  const binary = findProbeBinary(deps);
-  if (!binary) {
-    deps.log("team-note sync skipped: no probe CLI found on PATH or in the documented fallback locations");
-    return Promise.resolve("skipped");
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    // The child and the timer stay REF'D while this waits, and the child is let
-    // go only once the wait is over. With both unref'd up front, nothing kept
-    // Node's event loop alive during the wait, so `pi -p` (print mode: no TUI
-    // holding stdin) exited mid-session_start with code 0 and no answer, every
-    // time pi's AGENTS.md had Probe's block.
-    let child: ReturnType<TeamNoteSyncDeps["spawn"]> | undefined;
-    const finish = (outcome: "synced" | "timeout" | "skipped") => {
-      if (settled) return;
-      settled = true;
-      child?.unref();
-      resolve(outcome);
-    };
-    try {
-      child = deps.spawn(binary, ["notes", "sync"], {
-        detached: true,
-        stdio: "ignore",
-        env: { ...deps.env, PROBE_AGENT: "pi" },
-      });
-    } catch (err) {
-      deps.log(`team-note sync spawn failed: ${err instanceof Error ? err.message : String(err)}`);
-      return finish("skipped");
-    }
-    const timer = setTimeout(() => {
-      deps.log(`team-note sync still running after ${timeoutMs}ms; reading the file as it stands`);
-      finish("timeout");
-    }, timeoutMs);
-    const done = () => {
-      clearTimeout(timer as never);
-      finish("synced");
-    };
-    child.once?.("exit", done);
-    child.once?.("error", (err: unknown) => {
-      deps.log(`team-note sync failed: ${err instanceof Error ? err.message : String(err)}`);
-      clearTimeout(timer as never);
-      finish("skipped");
-    });
-  });
 }

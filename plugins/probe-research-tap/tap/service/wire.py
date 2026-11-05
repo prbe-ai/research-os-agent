@@ -79,6 +79,9 @@ class Method:
     SESSION_RECORD = "session.record"
     SESSION_RECORDING = "session.recording"
     SESSION_FINISH = "session.finish"
+    #: pi's session state, as `probe session initialize` gives it, run by the service (service-only
+    #: task 16): the extension spawns no CLI of its own.
+    SESSION_INITIALIZE = "session.initialize"
     #: `probe capture off` for one agent: finish every recorder this service
     #: runs for that harness, as `session.finish` does for one session.
     RECORDERS_FINISH = "recorders.finish"
@@ -97,6 +100,9 @@ class Method:
     MAILBOX_POST = "mailbox.post"
     MAILBOX_CLAIM = "mailbox.claim"
     MAILBOX_ANSWER = "mailbox.answer"
+    #: The inbox messages pi's idle poller showed: the service tells Probe (`reads_hook.report_delivered`,
+    #: from its own copy of the routes), so the extension makes no network call of its own.
+    MAILBOX_DELIVERED = "mailbox.delivered"
     #: The desktop app's management requests (`probe desktop request --json`'s
     #: request in, its v1 envelope out), answered by a child of the service.
     DESKTOP_REQUEST = "desktop.request"
@@ -112,6 +118,9 @@ class Method:
     #: that asked, one child per plugin folder at most every few seconds,
     #: instead of a detached fetch per tool call.
     STATUSLINE_REFRESH = "statusline.refresh"
+    #: A status line's segment, drawn by the service from its own state (service-only plan D14):
+    #: the status-line command only forwards its payload and prints the answer.
+    STATUSLINE_RENDER = "statusline.render"
     #: The team note's sync (`probe notes sync`, and a session start's `probe
     #: agent-rules refresh`): once per machine, debounced, instead of a
     #: detached `probe` per session per hook event.
@@ -146,6 +155,7 @@ METHODS = frozenset(
         Method.SESSION_RECORD,
         Method.SESSION_RECORDING,
         Method.SESSION_FINISH,
+        Method.SESSION_INITIALIZE,
         Method.RECORDERS_FINISH,
         Method.RUN_HOLD,
         Method.RUN_RELEASE,
@@ -153,11 +163,13 @@ METHODS = frozenset(
         Method.MAILBOX_POST,
         Method.MAILBOX_CLAIM,
         Method.MAILBOX_ANSWER,
+        Method.MAILBOX_DELIVERED,
         Method.DESKTOP_REQUEST,
         Method.OUTBOX_DRAIN,
         Method.BOX_WATCH,
         Method.TELEMETRY_SEND,
         Method.STATUSLINE_REFRESH,
+        Method.STATUSLINE_RENDER,
         Method.NOTES_SYNC,
         Method.IMPORT_START,
     }

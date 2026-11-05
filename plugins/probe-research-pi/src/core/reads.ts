@@ -46,7 +46,6 @@ import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
-import { readActiveProbeContext } from "./mcpAuth.js";
 import type { PathEnv } from "./paths.js";
 import { Destination, type Claim, type MessageLedger } from "./serverLedger.js";
 
@@ -204,50 +203,8 @@ export const WOKE_PROMPT_S = 120;
 
 /** `mailbox.INBOX_ID_PREFIX`: an inbox message's id is this, then its server id's hex. */
 export const INBOX_ID_PREFIX = "s";
-/** `reads_hook.SHOWN_LOG_TAIL_BYTES`: how much of the shown log is read. */
-const SHOWN_LOG_TAIL_BYTES = 256 * 1024;
-/** `mailbox.DAEMON_INSTANCE_RE`: a lease holder's name as the server takes one. */
-const DAEMON_INSTANCE_RE = /^[A-Za-z0-9_-]{16,128}$/;
-/** `probe_api.DAEMON_INSTANCE_HEADER`. */
-export const DAEMON_INSTANCE_HEADER = "X-Probe-Daemon-Instance";
-/** `probe_api.ACK_DELIVERED_TO_AGENT`. */
-export const ACK_DELIVERED_TO_AGENT = "delivered_to_agent";
-/** `probe.daemon.model.ENV_KEY`: the daemon's own key, before the CLI config's
- * `companion_token`, as the daemon reads them (`model.endpoint`). */
-export const DAEMON_KEY_ENV = "PROBE_DAEMON_KEY";
 /** `probe.sdk.settings.settings.DEFAULT_BASE_URL`. */
 export const DEFAULT_BASE_URL = "https://api.research.prbe.ai";
-/** `reads_hook.REPORT_BUDGET_S`: the longest telling Probe what was shown may take, in all. */
-export const REPORT_BUDGET_MS = 1500;
-/** `reads_hook.RECEIPT_REDIRECT`: a receipt never follows a redirect (the key
- * goes to the configured API only); a redirect is a failed receipt. */
-export const RECEIPT_REDIRECT = "error" as const;
-
-/** One request that tells Probe a message was shown (`reads_hook.receipt_requests`). */
-export interface ReceiptRequest {
-  url: string;
-  headers: Record<string, string>;
-  body: string;
-  redirect: typeof RECEIPT_REDIRECT;
-}
-
-/** `reads_hook.daemon_endpoint` / `model.endpoint`: the Probe API and the
- * daemon's key, or null without a key. */
-export function daemonEndpoint(env: PathEnv = process.env): { base: string; key: string } | null {
-  const ctx = readActiveProbeContext(env);
-  const key = env[DAEMON_KEY_ENV] || ctx.companion_token;
-  if (!key || typeof key !== "string") return null;
-  const base = env.PROBE_BASE_URL || ctx.base_url || DEFAULT_BASE_URL;
-  return { base: String(base).replace(/\/+$/, ""), key };
-}
-
-/** The server id (a uuid) an inbox message id carries, or null. */
-function inboxServerId(messageId: string): string | null {
-  if (!messageId.startsWith(INBOX_ID_PREFIX)) return null;
-  const hex = messageId.slice(INBOX_ID_PREFIX.length).toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(hex)) return null;
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 
 export interface Message {
   id: string;
@@ -419,35 +376,7 @@ export class Mailbox {
     return join(this.root, kind, safe(this.sessionId));
   }
 
-  /** `reads_hook._shown_ids`: the message ids `claimed/<sid>/shown.jsonl` names (its tail). */
-  private shownIds(): Set<string> {
-    const out = new Set<string>();
-    let text: string;
-    try {
-      const path = join(this.dir("claimed"), "shown.jsonl");
-      const size = fs.statSync(path).size;
-      const fd = fs.openSync(path, "r");
-      try {
-        const length = Math.min(size, SHOWN_LOG_TAIL_BYTES);
-        const buffer = Buffer.alloc(length);
-        fs.readSync(fd, buffer, 0, length, size - length);
-        text = buffer.toString("utf8");
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return out;
-    }
-    for (const line of text.split("\n")) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry && typeof entry.id === "string") out.add(entry.id);
-      } catch {
-        // a partial line
-      }
-    }
-    return out;
-  }
+
 
   /** `reads_hook._claimed_inbox`: the claimed file (plain name) and data of inbox message `messageId`. */
   private claimedInbox(messageId: string): [string, Record<string, unknown>] | null {
@@ -480,71 +409,6 @@ export class Mailbox {
         // it stays claimed; the daemon puts an unshown claim back after a minute
       }
     }
-  }
-
-  /** (its server id, its lease holder) for inbox message `messageId` that was
-   * claimed here and marked shown, or null: not an inbox message, never marked
-   * shown, or one an older worker wrote without a holder (`reads_hook._shown_inbox`). */
-  private shownInbox(messageId: string, shown: Set<string>): [string, string] | null {
-    const serverId = inboxServerId(messageId);
-    if (!serverId || !shown.has(messageId)) return null;
-    const holder = this.claimedInbox(messageId)?.[1].daemon_instance;
-    return typeof holder === "string" && DAEMON_INSTANCE_RE.test(holder) ? [serverId, holder] : null;
-  }
-
-  /** `reads_hook.receipt_requests`: one request per inbox message among `ids`
-   * that was marked shown and names its lease holder; none without the daemon's key. */
-  receiptRequests(ids: string[], env: PathEnv = process.env): ReceiptRequest[] {
-    const marked = ids.some((id) => id.startsWith(INBOX_ID_PREFIX)) ? this.shownIds() : new Set<string>();
-    const shown = ids.map((id) => this.shownInbox(id, marked)).filter((found): found is [string, string] => found !== null);
-    if (!shown.length) return [];
-    const endpoint = daemonEndpoint(env);
-    if (!endpoint) return [];
-    return shown.map(([serverId, holder]) => ({
-      url: `${endpoint.base}/v1/sessions/${encodeURIComponent(this.sessionId)}/messages/${serverId}/ack`,
-      headers: { Authorization: `Bearer ${endpoint.key}`, "Content-Type": "application/json", [DAEMON_INSTANCE_HEADER]: holder },
-      body: JSON.stringify({ state: ACK_DELIVERED_TO_AGENT }),
-      redirect: RECEIPT_REDIRECT,
-    }));
-  }
-
-  /** `reads_hook.report_delivered`: tell Probe the inbox messages among `ids`
-   * were shown, all at once, each request aborted after `budgetMs`. Resolves
-   * once all are answered or aborted; never rejects (callers do not await it). */
-  async reportDelivered(
-    ids: string[],
-    env: PathEnv = process.env,
-    fetchImpl: typeof fetch = globalThis.fetch,
-    budgetMs: number = REPORT_BUDGET_MS,
-  ): Promise<void> {
-    let requests: ReceiptRequest[];
-    try {
-      requests = this.receiptRequests(ids, env);
-    } catch {
-      return;
-    }
-    if (!requests.length || typeof fetchImpl !== "function") return;
-    await Promise.all(
-      requests.map(async (request) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), budgetMs);
-        timer.unref?.();
-        try {
-          const response = await Promise.race([
-            fetchImpl(request.url, {
-              method: "POST", headers: request.headers, body: request.body, redirect: request.redirect, signal: controller.signal,
-            }),
-            new Promise<null>((resolve) => controller.signal.addEventListener("abort", () => resolve(null), { once: true })),
-          ]);
-          await response?.body?.cancel?.().catch(() => undefined);
-        } catch {
-          // best effort: the daemon says it again
-        } finally {
-          clearTimeout(timer);
-          controller.abort();
-        }
-      }),
-    );
   }
 
   private turnPath(): string {

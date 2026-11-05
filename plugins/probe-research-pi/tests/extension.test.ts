@@ -85,6 +85,49 @@ vi.mock("node:child_process", () => ({
   ) => execFileMock(command, args, options, callback),
 }));
 
+/**
+ * The Probe service, as the extension asks it (`serviceForward.callService`): `session.initialize`
+ * answers what `probe session initialize` (execFileMock, as these tests have always stood it in)
+ * prints, as the service's child would; `session.finish` is recorded. Every call lands in serviceCalls.
+ */
+const serviceCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+type ExecImpl = Parameters<typeof execFileMock.mockImplementation>[0];
+/** The next `session initialize` answers, in order (what `execFileMock.mockImplementationOnce` did
+ * before the extension looked up its service socket first, itself a call of execFileMock's). */
+const initializeQueue: ExecImpl[] = [];
+const initializeOnce = (impl: ExecImpl): void => {
+  initializeQueue.push(impl);
+};
+
+vi.mock("../src/serviceForward.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/serviceForward.js")>();
+  return {
+    ...actual,
+    callService: async (_socket: string | null, method: string, params: Record<string, unknown>) => {
+      serviceCalls.push({ method, params });
+      if (method === "session.initialize") {
+        const run = initializeQueue.shift() ?? execFileMock;
+        return await new Promise((resolve) => {
+          run("probe", ["session", "initialize", "--session", String(params.sid), "--cwd", String(params.cwd)],
+            { env: params.env as Record<string, string | undefined> }, (error: Error | null, stdout: string) => {
+              if (error) {
+                resolve(null);
+                return;
+              }
+              try {
+                resolve({ state: JSON.parse(stdout) });
+              } catch {
+                resolve({ state: "not json" });
+              }
+            });
+        });
+      }
+      if (method === "session.finish") return { recording: true, finished: true };
+      return null;
+    },
+  };
+});
+
 // Imported AFTER the mock is registered (vitest hoists vi.mock, but the
 // dynamic import below keeps intent obvious without relying on hoisting
 // semantics for anything except the mock itself).
@@ -284,7 +327,7 @@ function installProbeCli(): string {
 describe("registerExtension — session_start", () => {
   it("initializes tracking from the session cwd and renders the persistent footer", async () => {
     const bin = installProbeCli();
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+    initializeOnce((_command, _args, _options, callback) => {
       callback(
         null,
         JSON.stringify({
@@ -308,19 +351,12 @@ describe("registerExtension — session_start", () => {
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
-    expect(execFileMock).toHaveBeenCalledWith(
-      bin,
-      [
-        "session",
-        "initialize",
-        "--session",
-        "pi-folder-session",
-        "--cwd",
-        "/repo/packages/app",
-      ],
-      expect.any(Object),
-      expect.any(Function),
-    );
+    // Through the Probe service (`session.initialize`, which runs `probe session initialize`): pi spawns no CLI.
+    expect(serviceCalls).toContainEqual({
+      method: "session.initialize",
+      params: expect.objectContaining({ sid: "pi-folder-session", cwd: "/repo/packages/app", agent: "pi" }),
+    });
+    expect(execFileMock.mock.calls.some(([command]) => command === bin)).toBe(false);
     expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ not tracking");
   });
 
@@ -328,7 +364,7 @@ describe("registerExtension — session_start", () => {
     // Probe off: the footer names the state, as the status line's `off` does
     // (it read "not tracking", as for `read`).
     installProbeCli();
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+    initializeOnce((_command, _args, _options, callback) => {
       callback(
         null,
         JSON.stringify({
@@ -373,88 +409,35 @@ describe("registerExtension — session_start", () => {
       ctx,
     )).resolves.toBeUndefined();
     expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● tracking");
-    expect(daemonSpawns()).toHaveLength(1);
-  });
-
-  it("does not spawn when the device is unpaired, and says so on stderr", async () => {
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("unpaired");
-    const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
-
-    const chunks = await captureStderr(() => handlers.get("session_start")!({ reason: "startup" }, ctx) as Promise<void>);
-
     expect(daemonSpawns()).toHaveLength(0);
-    expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks.join("\n")).toContain("not paired");
   });
 
-  it("spawns the daemon with PROBE_TAP_SOURCE=pi when paired", async () => {
-    pair();
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("paired");
-    const transcriptPath = `/tmp/${sessionId}.jsonl`;
-    const ctx = fakeContext({ sessionId, sessionFile: transcriptPath });
-
-    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
-
-    expect(daemonSpawns()).toHaveLength(1);
-    const [, , options] = daemonSpawns()[0];
-    expect(options.env.PROBE_TAP_SOURCE).toBe("pi");
-
-    // Cleanup: don't leave a shutdown-sentinel-free pidfile lying around for
-    // other tests/processes that share the real /tmp namespace.
-    rmSync(pidFile(sessionId), { force: true });
-    rmSync(shutdownSentinelFile(sessionId), { force: true });
-  });
-
-  it("does not spawn twice for a second session_start on the same session id", async () => {
-    pair();
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("dedup");
-    const transcriptPath = `/tmp/${sessionId}.jsonl`;
-    const ctx = fakeContext({ sessionId, sessionFile: transcriptPath });
-
-    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
-    // The dedup guard (spawnedSessionIds) returns before any spawn or wait —
-    // real timers are fine for this second call.
-    await handlers.get("session_start")!({ reason: "reload" }, ctx);
-
-    expect(daemonSpawns()).toHaveLength(1);
-
-    rmSync(pidFile(sessionId), { force: true });
-    rmSync(shutdownSentinelFile(sessionId), { force: true });
-  });
-
-  it("starts capture once pi writes a new session's file, not never", async () => {
-    // pi 1.0 writes a new session's file at its first message, after
-    // session_start; `tap start` refuses a missing transcript and nothing
-    // retried, so a new interactive session was never captured.
-    pair();
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("deferred");
-    const transcriptPath = join(tmp, `${sessionId}.jsonl`);
-    const ctx = fakeContext({ sessionId, sessionFile: transcriptPath, writeSessionFile: false });
-
-    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
-    expect(daemonSpawns()).toHaveLength(0);
-
-    // Still unwritten at the next event: still waiting, no spawn.
-    await handlers.get("tool_call")!({ toolName: "read", input: { path: "x" } }, ctx);
-    expect(daemonSpawns()).toHaveLength(0);
-
-    writeFileSync(transcriptPath, "{}\n");
-    await invokeSessionStart(handlers.get("agent_settled")!, {}, ctx);
-    expect(daemonSpawns()).toHaveLength(1);
-    // Once: a later event does not spawn again.
-    await handlers.get("agent_settled")!({}, ctx);
-    expect(daemonSpawns()).toHaveLength(1);
-
-    rmSync(pidFile(sessionId), { force: true });
-    rmSync(shutdownSentinelFile(sessionId), { force: true });
+  it("never starts capture itself: the service asks for the session's recorder (M9)", async () => {
+    // Paired or not, killswitch or not, a written file or one pi writes later: pi spawns no `tap
+    // start` (the service runs it, gates included, and tells the person an unpaired device).
+    for (const [label, setup] of [
+      ["unpaired", () => {}],
+      ["paired", () => pair()],
+      ["killswitch", () => {
+        pair();
+        mkdirSync(process.env.PROBE_PI_TAP_PLUGIN_DIR!, { recursive: true });
+        writeFileSync(disabledFile(process.env), "");
+      }],
+    ] as const) {
+      setup();
+      const { api, handlers } = fakeExtensionAPI();
+      await registerExtension(api as never, tmp);
+      const sessionId = uniqueSessionId(label);
+      const transcriptPath = join(tmp, `${sessionId}.jsonl`);
+      const ctx = fakeContext({ sessionId, sessionFile: transcriptPath, writeSessionFile: label !== "paired" });
+      await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+      await handlers.get("tool_call")!({ toolName: "read", input: { path: "x" } }, ctx);
+      writeFileSync(transcriptPath, "{}\n");
+      await invokeSessionStart(handlers.get("agent_settled")!, {}, ctx);
+      await handlers.get("session_start")!({ reason: "reload" }, ctx);
+      expect(daemonSpawns(), label).toHaveLength(0);
+      rmSync(shutdownSentinelFile(sessionId), { force: true });
+    }
   });
 
   it("skips sessions with no persisted session file (nothing to tail)", async () => {
@@ -463,22 +446,6 @@ describe("registerExtension — session_start", () => {
     await registerExtension(api as never, tmp);
     const sessionId = uniqueSessionId("inmemory");
     const ctx = fakeContext({ sessionId, sessionFile: undefined });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-
-    expect(daemonSpawns()).toHaveLength(0);
-  });
-
-  it("refuses to spawn when the .disabled killswitch is present, even when paired", async () => {
-    pair();
-    const stateDir = process.env.PROBE_PI_TAP_PLUGIN_DIR!;
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(disabledFile(process.env), "");
-
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("killswitch");
-    const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
@@ -516,7 +483,7 @@ describe("trackingStatusText", () => {
 describe("registerExtension — the footer's third state", () => {
   it("renders `tracked, not capturing session transcript` from the CLI's own capture block", async () => {
     installProbeCli();
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+    initializeOnce((_command, _args, _options, callback) => {
       callback(
         null,
         JSON.stringify({
@@ -623,7 +590,7 @@ describe("registerExtension — the footer's third state", () => {
       await registerExtension(api as never, tmp);
       const ctx = fakeContext({ sessionId: ended, sessionFile: `/tmp/${ended}.jsonl`, hasUI: true });
       const started = handlers.get("session_start")!({ reason: "startup" }, ctx);
-      await vi.advanceTimersByTimeAsync(2_500); // the spawn's confirmation wait
+      await vi.advanceTimersByTimeAsync(2_500); // the session start settles
       await started;
       expect(reads.calls(ended)).toBe(2);
       await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
@@ -694,7 +661,7 @@ describe("registerExtension — the footer's third state", () => {
 
   it("ignores a malformed capture block rather than failing the whole read", async () => {
     installProbeCli();
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+    initializeOnce((_command, _args, _options, callback) => {
       callback(
         null,
         JSON.stringify({
@@ -754,92 +721,6 @@ describe("registerExtension — the footer's third state", () => {
   });
 });
 
-describe("registerExtension — tracking switch footer", () => {
-  it("refreshes the persistent footer after an interactive switch lands", async () => {
-    installProbeCli();
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({
-      sessionId: "pi-switch-session",
-      sessionFile: undefined,
-      cwd: "/repo",
-      hasUI: true,
-    });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● tracking");
-    ctx.setStatus.mockClear();
-    execFileMock.mockClear();
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
-      callback(
-        null,
-        JSON.stringify({
-          session_id: "pi-switch-session",
-          tracking: false,
-          signal: "off",
-          seeded: false,
-          source: "session",
-        }),
-        "",
-      );
-    });
-    spawnMock.mockImplementationOnce(() => ({
-      pid: 4242,
-      unref: vi.fn(),
-      on: (event: string, callback: (value: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => callback(0));
-      },
-      once: (event: string, callback: (value: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => callback(0));
-      },
-    }));
-
-    await handlers.get("input")!(
-      { text: "/track-work off", source: "interactive" },
-      ctx,
-    );
-
-    expect(execFileMock).toHaveBeenCalledTimes(1);
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ not tracking");
-  });
-
-  it("clears the old footer when a landed switch cannot be read back", async () => {
-    installProbeCli();
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({
-      sessionId: "pi-switch-readback-failure",
-      sessionFile: undefined,
-      cwd: "/repo",
-      hasUI: true,
-    });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● tracking");
-    ctx.setStatus.mockClear();
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
-      callback(new Error("initializer unavailable"), "", "");
-    });
-    spawnMock.mockImplementationOnce(() => ({
-      pid: 4242,
-      unref: vi.fn(),
-      on: (event: string, callback: (value: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => callback(0));
-      },
-      once: (event: string, callback: (value: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => callback(0));
-      },
-    }));
-
-    await handlers.get("input")!(
-      { text: "/track-work off", source: "interactive" },
-      ctx,
-    );
-
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", undefined);
-  });
-});
-
 describe("registerExtension — D6 MCP bridge stand-down", () => {
   it("skips the Probe MCP bridge and logs the hand-off when pi-mcp-adapter and our package are both installed", async () => {
     pair();
@@ -872,7 +753,7 @@ describe("registerExtension — D6 MCP bridge stand-down", () => {
 
     // Capture itself is untouched by the stand-down -- it's an independent
     // subsystem (see extension.ts's own comment on the split).
-    expect(daemonSpawns()).toHaveLength(1);
+    expect(daemonSpawns()).toHaveLength(0); // capture is the service's to ask for (M9)
 
     rmSync(pidFile(sessionId), { force: true });
     rmSync(shutdownSentinelFile(sessionId), { force: true });
@@ -915,7 +796,6 @@ describe("registerExtension — session_shutdown", () => {
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
     await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
-    expect(daemonSpawns()).toHaveLength(1);
 
     await handlers.get("session_shutdown")!({ reason: "reload" }, ctx);
     // No shutdown sentinel should appear — the daemon was deliberately left running.
@@ -976,22 +856,21 @@ describe("registerExtension — session_shutdown", () => {
       const hosted = `/tmp/${paths.WATCHER_PREFIX}-watcher-${sessionId}.hosted`;
       writeFileSync(hosted, String(pid), { mode: 0o600 });
       execFileMock.mockClear();
+      serviceCalls.length = 0;
       return { handlers, ctx, sessionId, hosted };
     }
 
-    const finishCalls = () => execFileMock.mock.calls.filter(([, args]) => args[2] === "finish");
+    const finishCalls = () => serviceCalls.filter(({ method }) => method === "session.finish");
 
-    it("on quit: the service finishes the session (tap finish, bounded wait), and the marker goes", async () => {
+    it("on quit: the service finishes the session (`session.finish`, bounded wait), and the marker goes", async () => {
       await withService(async (pid) => {
         const { handlers, ctx, sessionId, hosted } = await startHosted("hosted-quit", pid);
         try {
           await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
-          expect(finishCalls()).toHaveLength(1);
-          const [command, args, options] = finishCalls()[0];
-          expect(command).toBe(join(process.env.PROBE_PI_TAP_ROOT!, ".venv", "bin", "python3"));
-          expect(args).toEqual(["-m", "tap", "finish", "--session-id", sessionId, "--wait", "3"]);
-          expect(options.env.PYTHONPATH?.split(delimiter)[0]).toBe(process.env.PROBE_PI_TAP_ROOT);
+          // On the service's own socket: pi spawns no `tap finish` (service-only task 16).
+          expect(finishCalls()).toEqual([{ method: "session.finish", params: { sid: sessionId, wait: 3 } }]);
+          expect(execFileMock.mock.calls.some(([, args]) => args.includes("finish"))).toBe(false);
           expect(existsSync(hosted)).toBe(false);
           expect(existsSync(shutdownSentinelFile(sessionId))).toBe(true);
         } finally {
@@ -1055,57 +934,23 @@ describe("registerExtension — session_shutdown", () => {
   });
 });
 
-describe("registerExtension — no Python 3.11 or newer", () => {
-  it("says so once, naming what it found, and leaves it for `probe doctor`; a later start that finds one clears it", async () => {
+describe("registerExtension — the tap's python", () => {
+  it("is the service's now (M9): a session start asks for none, and an earlier start's note goes", async () => {
     pair();
-    // The checkout's .venv python answers the version probe "too old" (exit 1).
-    execFileSyncMock.mockImplementation(() => {
-      throw new Error("exit 1");
-    });
     const missing = paths.pythonMissingFile(process.env);
-    try {
-      const { api, handlers } = fakeExtensionAPI();
-      await registerExtension(api as never, tmp);
-      const sessionId = uniqueSessionId("old-python");
-      const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
-      // Its own folder, so no python earlier in this file's run answered for it.
-      const venv = join(process.env.PROBE_PI_TAP_ROOT!, ".venv", "bin", "python3");
-      const moved = join(tmp, "old-venv", ".venv", "bin");
-      mkdirSync(moved, { recursive: true });
-      writeFileSync(join(moved, "python3"), readFileSync(venv));
-      chmodSync(join(moved, "python3"), 0o755);
-      const oldRoot = join(tmp, "old-venv");
-      mkdirSync(join(oldRoot, "tap"), { recursive: true });
-      writeFileSync(join(oldRoot, "tap", "__init__.py"), "");
-      process.env.PROBE_PI_TAP_ROOT = oldRoot;
-      process.env.PATH = join(tmp, "empty-path");
-
-      const chunks = await captureStderr(() => invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx));
-
-      expect(chunks.join("")).toContain("no Python 3.11 or newer found");
-      expect(chunks.join("")).toContain("(no python3)");
-      expect(daemonSpawns()).toHaveLength(0);
-      expect(readFileSync(missing, "utf-8")).toBe("no python3\n");
-    } finally {
-      execFileSyncMock.mockReset();
-      execFileSyncMock.mockImplementation(() => "");
-    }
-
-    // The next start finds an interpreter: the note goes.
+    mkdirSync(dirname(missing), { recursive: true });
+    writeFileSync(missing, "no python3\n");
     const { api, handlers } = fakeExtensionAPI();
     await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("new-python");
+    const sessionId = uniqueSessionId("old-python");
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
-    const fresh = join(tmp, "fresh-checkout");
-    mkdirSync(join(fresh, "tap"), { recursive: true });
-    writeFileSync(join(fresh, "tap", "__init__.py"), "");
-    mkdirSync(join(fresh, ".venv", "bin"), { recursive: true });
-    writeFileSync(join(fresh, ".venv", "bin", "python3"), "#!/bin/sh\nexit 0\n");
-    chmodSync(join(fresh, ".venv", "bin", "python3"), 0o755);
-    process.env.PROBE_PI_TAP_ROOT = fresh;
-    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+    process.env.PATH = join(tmp, "empty-path");
+
+    const chunks = await captureStderr(() => invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx));
+
+    expect(chunks.join("")).not.toContain("no Python 3.11 or newer found");
+    expect(daemonSpawns()).toHaveLength(0);
     expect(existsSync(missing)).toBe(false);
-    rmSync(pidFile(sessionId), { force: true });
   });
 });
 
@@ -1122,433 +967,6 @@ describe("registerExtension — /probe-status command", () => {
     const chunks = await captureStderr(() => commands.get("probe-status")!.handler("", ctx));
 
     expect(chunks.join("\n")).toContain("paired:");
-  });
-});
-
-describe("registerExtension — team note", () => {
-  function writeTeamNote(text: string): string {
-    const path = teamNoteDocumentPath(process.env);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, text);
-    return path;
-  }
-
-  /** pi's AGENTS.md, as the wizard leaves it: the researcher's text and Probe's block. */
-  function writeAgentsFile(text: string): void {
-    const path = paths.piAgentsFile(process.env);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, text);
-  }
-
-  const POINTER = "# My rules\n\n<!-- probe-research:begin (managed by `probe wizard`) -->\n<!-- v36 -->\n## Probe Research\n<!-- probe-research:end -->\n";
-
-  // Every test below runs beside the pointer unless it says otherwise.
-  beforeEach(() => writeAgentsFile(POINTER));
-
-  const noteSyncs = () => spawnMock.mock.calls.filter(([, args]) => args[0] === "notes" && args[1] === "sync");
-
-  it("neither syncs nor injects the note when pi's AGENTS.md has no Probe block (the opt-out)", async () => {
-    installProbeCli();
-    writeTeamNote("# Team note\nDo not repeat the June outage.\n");
-    writeAgentsFile("# My rules\n");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-opted-out"), sessionFile: undefined });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const result = await (handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler)({ systemPrompt: "BASE" }, ctx);
-    await handlers.get("agent_settled")!({}, ctx);
-
-    expect(result).toBeUndefined();
-    expect(noteSyncs()).toHaveLength(0);
-  });
-
-  it("treats a missing AGENTS.md as no pointer, and a damaged block as still opted in", async () => {
-    installProbeCli();
-    writeTeamNote("damaged-block note");
-    rmSync(paths.piAgentsFile(process.env));
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    await handlers.get("agent_settled")!({}, {});
-    expect(noteSyncs()).toHaveLength(0);
-
-    writeAgentsFile("# My rules\n<!-- probe-research:end -->\n");
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-damaged"), sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const result = await (handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler)({ systemPrompt: "BASE" }, ctx);
-    expect(result!.systemPrompt).toContain("damaged-block note");
-    expect(noteSyncs()).toHaveLength(1);
-  });
-
-  type BeforeAgentStartHandler = (
-    event: { systemPrompt: string; prompt?: string },
-    ctx: unknown,
-  ) => Promise<{ systemPrompt?: string } | undefined>;
-
-  it("injects the cached team note into the system prompt via before_agent_start", async () => {
-    const notePath = writeTeamNote("# Team note\nDo not repeat the June outage.\n");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-inject"), sessionFile: undefined });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
-    const result = await beforeAgentStart({ systemPrompt: "BASE PROMPT" }, ctx);
-
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("BASE PROMPT");
-    expect(result!.systemPrompt).toContain("Do not repeat the June outage.");
-    expect(result!.systemPrompt).toContain(notePath);
-  });
-
-  /** This computer's workspace limit in the probe CLI config pi reads. */
-  function writeWorkspaceLimit(teamItems: string | null): void {
-    const path = paths.probeConfigPath(process.env);
-    mkdirSync(dirname(path), { recursive: true });
-    const workspace = teamItems === null ? { id: "11111111-1111-1111-1111-111111111111" } : {
-      id: "11111111-1111-1111-1111-111111111111", limit: true, team_items: teamItems,
-    };
-    writeFileSync(path, JSON.stringify({ version: 2, current_context: "default", contexts: { default: { workspace } } }));
-  }
-
-  it("stops injecting the note the moment the workspace limit hides team items, mid-session included", async () => {
-    writeTeamNote("# Team note\nDo not repeat the June outage.\n");
-    writeWorkspaceLimit(null);
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-mid-session"), sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
-    expect((await beforeAgentStart({ systemPrompt: "P1" }, ctx))!.systemPrompt).toContain("June outage");
-
-    writeWorkspaceLimit("hide"); // `probe workspace limit <w> --team-items hide`, mid-session
-    const hidden = await beforeAgentStart({ systemPrompt: "P2" }, ctx);
-    expect(hidden?.systemPrompt ?? "P2").not.toContain("June outage");
-
-    writeWorkspaceLimit("show");
-    expect((await beforeAgentStart({ systemPrompt: "P3" }, ctx))!.systemPrompt).toContain("June outage");
-  });
-
-  it("a session that starts with team items hidden neither syncs nor injects, until they show", async () => {
-    installProbeCli();
-    writeTeamNote("# Team note\nKeep the June outage in mind.\n");
-    writeWorkspaceLimit("hide");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-hidden-start"), sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    await handlers.get("agent_settled")!({}, ctx);
-    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
-    expect((await beforeAgentStart({ systemPrompt: "P1" }, ctx))?.systemPrompt ?? "P1").not.toContain("June outage");
-    expect(noteSyncs()).toHaveLength(0);
-
-    writeWorkspaceLimit("show");
-    expect((await beforeAgentStart({ systemPrompt: "P2" }, ctx))!.systemPrompt).toContain("June outage");
-  });
-
-  it("showing team items again syncs and reloads the note for the CURRENT account before injecting it", async () => {
-    installProbeCli();
-    const notePath = writeTeamNote("# Team note\nthe PREVIOUS account's note\n");
-    writeWorkspaceLimit("hide");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-account-switch"), sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    expect(noteSyncs()).toHaveLength(0);
-
-    // Meanwhile another account signed in; its sync replaces the machine's note.
-    spawnMock.mockImplementationOnce(() => {
-      writeFileSync(notePath, "# Team note\nthe CURRENT account's note\n");
-      return { pid: 4242, unref: vi.fn(), once: (event: string, cb: (v: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => cb(0));
-      } };
-    });
-    writeWorkspaceLimit("show");
-    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
-    const prompt = (await beforeAgentStart({ systemPrompt: "P" }, ctx))!.systemPrompt!;
-
-    expect(noteSyncs()).toHaveLength(1);
-    expect(prompt).toContain("the CURRENT account's note");
-    expect(prompt).not.toContain("PREVIOUS");
-  });
-
-  it("does not re-read the file on every before_agent_start -- cached once at session_start", async () => {
-    writeTeamNote("original note");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-cache"), sessionFile: undefined });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    // Mutate the file AFTER the cache is populated. If before_agent_start
-    // re-read the file per turn, both calls below would see this instead.
-    writeTeamNote("CHANGED note -- must not appear this session");
-
-    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
-    const first = await beforeAgentStart({ systemPrompt: "P1" }, ctx);
-    const second = await beforeAgentStart({ systemPrompt: "P2" }, ctx);
-
-    expect(first!.systemPrompt).toContain("original note");
-    expect(second!.systemPrompt).toContain("original note");
-    expect(first!.systemPrompt).not.toContain("CHANGED note");
-    expect(second!.systemPrompt).not.toContain("CHANGED note");
-  });
-
-  it("injects nothing when no team note file exists (fail open)", async () => {
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("note-absent"), sessionFile: undefined });
-
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
-    const result = await beforeAgentStart({ systemPrompt: "BASE" }, ctx);
-
-    expect(result).toBeUndefined();
-  });
-
-  it("starts the reads poller at settle once the daemon serves, so an asked answer arrives while pi is idle", async () => {
-    // A daemon that came up mid-turn (a new session's capture starts at its
-    // first tool call) served nothing at the prompt, so the poller never
-    // started and the answer waited for the researcher's next prompt.
-    const { api, handlers } = fakeExtensionAPI();
-    const sendMessage = vi.fn();
-    (api as unknown as { sendMessage: typeof sendMessage }).sendMessage = sendMessage;
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("settle-reads");
-    const ctx = { ...fakeContext({ sessionId, sessionFile: undefined }), isIdle: () => true };
-    const reads = join(paths.probeStateDir(process.env), "reads");
-    mkdirSync(join(reads, "status"), { recursive: true });
-    writeFileSync(join(reads, "status", `${sessionId}.json`), JSON.stringify({ state: "ok", reason: "", since: 1 }));
-    mkdirSync(join(reads, "messages", sessionId), { recursive: true });
-    writeFileSync(
-      join(reads, "messages", sessionId, `${"1".padStart(20, "0")}-a1.json`),
-      JSON.stringify({
-        id: "a1", session: sessionId, kind: "answer", text: "66.8%", ask: "aq1", question: "best?",
-        reason: null, made_at: 1, expires_at: Date.now() / 1000 + 3600,
-      }),
-    );
-    vi.useFakeTimers();
-    try {
-      await handlers.get("agent_settled")!({}, ctx);
-      await vi.advanceTimersByTimeAsync(2_500);
-    } finally {
-      vi.useRealTimers();
-      await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    }
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0][0].content).toContain("66.8%");
-  });
-
-  it("starts a turn for a run alert that lands while pi is idle", async () => {
-    // A run alert is the daemon's own message, yet it wakes an idle pi like an
-    // answer: the 2 s poller hands it over with triggerTurn.
-    const { api, handlers } = fakeExtensionAPI();
-    const sendMessage = vi.fn();
-    (api as unknown as { sendMessage: typeof sendMessage }).sendMessage = sendMessage;
-    await registerExtension(api as never, tmp);
-    const sessionId = uniqueSessionId("idle-alert");
-    const ctx = { ...fakeContext({ sessionId, sessionFile: undefined }), isIdle: () => true };
-    const reads = join(paths.probeStateDir(process.env), "reads");
-    mkdirSync(join(reads, "status"), { recursive: true });
-    writeFileSync(join(reads, "status", `${sessionId}.json`), JSON.stringify({ state: "ok", reason: "", since: 1 }));
-    mkdirSync(join(reads, "messages", sessionId), { recursive: true });
-    writeFileSync(
-      join(reads, "messages", sessionId, `${"1".padStart(20, "0")}-r0123456789ab.json`),
-      JSON.stringify({
-        id: "r0123456789ab", session: sessionId, kind: "alert", ask: null, question: null, reason: null,
-        text: "digits-svm (digits-svm-7) crashed at step 900 after 2h 10m: OutOfMemoryError.",
-        made_at: 1, expires_at: Date.now() / 1000 + 3600, keep: true, alerts: [7],
-      }),
-    );
-    vi.useFakeTimers();
-    try {
-      await handlers.get("agent_settled")!({}, ctx);
-      await vi.advanceTimersByTimeAsync(2_500);
-    } finally {
-      vi.useRealTimers();
-      await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    }
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0][0].content).toBe(
-      "[Probe] Run alert\ndigits-svm (digits-svm-7) crashed at step 900 after 2h 10m: OutOfMemoryError.",
-    );
-    expect(sendMessage.mock.calls[0][1]).toEqual({ deliverAs: "steer", triggerTurn: true });
-  });
-
-  it("never registers a turn_end handler -- only agent_settled can trigger a sync", async () => {
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-
-    expect(handlers.has("agent_settled")).toBe(true);
-    expect(handlers.has("turn_end")).toBe(false);
-  });
-
-  it("agent_settled spawns a detached `probe notes sync` with PROBE_AGENT=pi", async () => {
-    const binDir = join(tmp, "bin");
-    mkdirSync(binDir, { recursive: true });
-    const bin = join(binDir, "probe");
-    writeFileSync(bin, "#!/bin/sh\nexit 0\n");
-    chmodSync(bin, 0o755);
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
-
-    try {
-      const { api, handlers } = fakeExtensionAPI();
-      await registerExtension(api as never, tmp);
-      spawnMock.mockClear();
-
-      await handlers.get("agent_settled")!({}, {});
-
-      const call = spawnMock.mock.calls.find(([cmd]) => cmd === bin);
-      expect(call).toBeDefined();
-      const [, args, options] = call!;
-      expect(args).toEqual(["notes", "sync"]);
-      expect(options.detached).toBe(true);
-      expect(options.stdio).toBe("ignore");
-      expect(options.env.PROBE_AGENT).toBe("pi");
-    } finally {
-      process.env.PATH = previousPath;
-    }
-  });
-
-  it("fails open and silent on agent_settled when no probe CLI can be found anywhere", async () => {
-    const previousPath = process.env.PATH;
-    const previousHome = process.env.HOME;
-    const emptyPath = join(tmp, "empty-path-dir");
-    const emptyHome = join(tmp, "empty-home-dir");
-    mkdirSync(emptyPath, { recursive: true });
-    mkdirSync(emptyHome, { recursive: true });
-    // Both PATH and the fallback-candidate HOME must be isolated: this real
-    // dev machine has an actual `probe` CLI installed, and findProbeBinary's
-    // documented fallbacks (~/.local/bin/probe, the uv tool-install path) are
-    // real paths under the real $HOME -- only overriding PATH would let this
-    // test pass by accident on a machine that has probe, and fail on one
-    // that does not.
-    process.env.PATH = emptyPath;
-    process.env.HOME = emptyHome;
-
-    try {
-      const { api, handlers } = fakeExtensionAPI();
-      await registerExtension(api as never, tmp);
-      spawnMock.mockClear();
-
-      await expect(handlers.get("agent_settled")!({}, {})).resolves.not.toThrow();
-      expect(daemonSpawns()).toHaveLength(0);
-    } finally {
-      process.env.PATH = previousPath;
-      process.env.HOME = previousHome;
-    }
-  });
-});
-
-
-describe("registerExtension — the daemon state", () => {
-  type BeforeAgentStart = (
-    event: { systemPrompt: string },
-    ctx: unknown,
-  ) => Promise<{ systemPrompt?: string; message?: { content: string } } | undefined>;
-
-  async function startInDaemon(sessionId: string, withKey: boolean) {
-    installProbeCli();
-    const config = join(tmp, "config.json");
-    writeFileSync(
-      config,
-      JSON.stringify({ current_context: "default", contexts: { default: withKey ? { companion_token: "k" } : {} } }),
-    );
-    process.env.PROBE_CONFIG_PATH = config;
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
-      callback(
-        null,
-        JSON.stringify({ session_id: sessionId, tracking: true, signal: "on", state: "daemon", seeded: true, source: "machine" }),
-        "",
-      );
-    });
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId, sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    return { before: handlers.get("before_agent_start") as unknown as BeforeAgentStart, ctx };
-  }
-
-  it("tells the model the daemon records, and says once when it does not", async () => {
-    const { before, ctx } = await startInDaemon(uniqueSessionId("daemon-live"), true);
-    const first = await before({ systemPrompt: "BASE" }, ctx);
-    expect(first!.systemPrompt).toContain("The Probe daemon is recording this session");
-    expect(first!.message).toBeUndefined(); // one prompt of grace for the worker to start
-    const second = await before({ systemPrompt: "BASE" }, ctx);
-    expect(second!.message!.content).toContain("the daemon is not running, so recording is back with you");
-    // ...and from then on the prompt stops claiming it records.
-    expect(second!.systemPrompt ?? "").not.toContain("The Probe daemon is recording this session");
-    const third = await before({ systemPrompt: "BASE" }, ctx);
-    expect(third?.message).toBeUndefined(); // announced once
-  });
-
-  it("tells the model the whole split on the turn the switch lands on daemon", async () => {
-    // A session that did not START in `daemon` never saw the daemon's
-    // session-start text, so the turn after `/probe on` lands on `daemon` (the
-    // CLI stores `on` as `daemon` where the daemon records) is where it must
-    // arrive, in full.
-    const { DAEMON_CONTEXT } = await import("../src/core/daemonNotice.js");
-    installProbeCli();
-    const config = join(tmp, "config.json");
-    writeFileSync(
-      config,
-      JSON.stringify({ current_context: "default", contexts: { default: { companion_token: "k" } } }),
-    );
-    process.env.PROBE_CONFIG_PATH = config;
-    const sessionId = uniqueSessionId("daemon-flip");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId, sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
-    const onTurn = await before({ systemPrompt: "BASE" }, ctx);
-    expect(onTurn?.systemPrompt ?? "").not.toContain(DAEMON_CONTEXT);
-
-    spawnMock.mockImplementationOnce(() => ({
-      pid: 4242,
-      unref: vi.fn(),
-      on: (event: string, callback: (value: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => callback(0));
-      },
-      once: (event: string, callback: (value: unknown) => void) => {
-        if (event === "exit") queueMicrotask(() => callback(0));
-      },
-    }));
-    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
-      callback(
-        null,
-        JSON.stringify({ session_id: sessionId, tracking: true, signal: "on", state: "daemon", seeded: true, source: "session" }),
-        "",
-      );
-    });
-    await handlers.get("input")!({ text: "/probe on", source: "interactive" }, ctx);
-
-    const flipTurn = await before({ systemPrompt: "BASE" }, ctx);
-    expect(flipTurn!.systemPrompt).toContain(DAEMON_CONTEXT);
-    for (const word of ["project", "experiment", "group", "run end", "--directed"]) {
-      expect(DAEMON_CONTEXT).toContain(word);
-    }
-  });
-
-  it("moves nothing on a typed `/probe daemon`: the daemon is the wizard's", async () => {
-    installProbeCli();
-    const sessionId = uniqueSessionId("daemon-typed");
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId, sessionFile: undefined });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const switchCalls = () =>
-      spawnMock.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "session" && args[1] === "state");
-    const before = switchCalls().length;
-    await handlers.get("input")!({ text: "/probe daemon", source: "interactive" }, ctx);
-    expect(switchCalls()).toHaveLength(before);
-  });
-
-  it("never claims a keyless daemon records", async () => {
-    const { before, ctx } = await startInDaemon(uniqueSessionId("daemon-keyless"), false);
-    const first = await before({ systemPrompt: "BASE" }, ctx);
-    expect(first!.systemPrompt ?? "").not.toContain("The Probe daemon is recording this session");
-    expect(first!.message!.content).toContain("the daemon is not running");
   });
 });
 
@@ -1652,43 +1070,6 @@ describe("registerExtension — the daemon profile", () => {
     expect(await handlers.get("resources_discover")!({ type: "resources_discover", cwd: "/repo", reason: "startup" }, agentCtx)).toBeUndefined();
   });
 
-  it("lists only the lean skills, with the daemon's own, and tells the model nothing about the daemon", async () => {
-    const { DAEMON_CONTEXT } = await import("../src/core/daemonNotice.js");
-    installProbeCli();
-    const config = join(tmp, "config.json");
-    writeFileSync(config, JSON.stringify({ current_context: "default", contexts: { default: { companion_token: "k" } } }));
-    process.env.PROBE_CONFIG_PATH = config;
-    cliReports({ state: "daemon", profile: "daemon" });
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, PACKAGE_ROOT);
-    const ctx = fakeContext({ sessionId: uniqueSessionId("lean-prompt"), sessionFile: undefined, hasUI: true });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
-
-    const results = [];
-    for (let turn = 0; turn < 3; turn++) {
-      const event = { systemPrompt: "BASE", systemPromptOptions: { skills: skills() } };
-      results.push({ event, result: await before(event, ctx) });
-    }
-
-    const lean = results[0].event.systemPromptOptions.skills;
-    expect(lean.map((skill) => skill.name).sort()).toEqual(["instrument-code", "plan-research-review", "probe", "visualize-progress"]);
-    for (const name of ["probe", "visualize-progress"]) {
-      expect(lean.find((skill) => skill.name === name)!.filePath).toBe(join(PACKAGE_ROOT, "daemon-skills", name, "SKILL.md"));
-    }
-    for (const { result } of results) {
-      expect(result?.systemPrompt ?? "").not.toContain(DAEMON_CONTEXT);
-      expect(result?.message).toBeUndefined();
-    }
-    // No worker ever took a lease: one prompt of grace, then the RESEARCHER
-    // hears it, once, and the footer says degraded.
-    const warnings = ctx.notify.mock.calls.filter(([, level]) => level === "warning");
-    expect(warnings).toEqual([
-      ["Probe: the daemon is not running, so it is not recording this session. `probe doctor` says why.", "warning"],
-    ]);
-    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", trackingStatusText(true, undefined, false));
-  });
-
   it("leaves the agent profile's skills exactly as pi loaded them", async () => {
     installProbeCli();
     cliReports({ state: "full", profile: "agent" });
@@ -1712,116 +1093,6 @@ describe("registerExtension — the daemon profile", () => {
     await captureStderr(() => commands.get("probe-mcp-login")!.handler("", ctx));
     expect(ctx.ui.input).not.toHaveBeenCalled();
     expect(ctx.ui.notify.mock.calls[0][0]).toContain("Probe daemon reads for this session");
-  });
-});
-
-describe("registerExtension — the guard", () => {
-  const defaultExecFile = execFileMock.getMockImplementation()!;
-  afterEach(() => {
-    execFileMock.mockImplementation(defaultExecFile);
-  });
-
-  type ToolCall = (event: { toolName: string; input: Record<string, unknown> }, ctx: unknown) => Promise<{ block?: boolean; reason?: string } | undefined>;
-
-  async function start(profile: string | undefined) {
-    installProbeCli();
-    execFileMock.mockImplementation((_command, args, _options, callback) => {
-      callback(
-        null,
-        JSON.stringify({ session_id: args[args.indexOf("--session") + 1], tracking: true, signal: "on", seeded: true, source: "machine", profile }),
-        "",
-      );
-    });
-    const { api, handlers } = fakeExtensionAPI();
-    await registerExtension(api as never, tmp);
-    const ctx = fakeContext({ sessionId: uniqueSessionId(`guard-${profile}`), sessionFile: undefined, cwd: tmp });
-    await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    return { toolCall: handlers.get("tool_call") as unknown as ToolCall, ctx, handlers };
-  }
-
-  function setInline(ctx: unknown, since: number): void {
-    const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
-    const sessions = join(process.env.XDG_STATE_HOME!, "probe", "sessions");
-    mkdirSync(sessions, { recursive: true });
-    writeFileSync(join(sessions, `${sid}.state`), "full\n");
-    writeFileSync(join(sessions, `${sid}.inline`), JSON.stringify({ from: "daemon", since }));
-  }
-
-  it("blocks a daemon-profile session's probe read and lets its probe ask run", async () => {
-    const { toolCall, ctx } = await start("daemon");
-    const refused = await toolCall({ toolName: "bash", input: { command: "probe run list" } }, ctx);
-    expect(refused).toMatchObject({ block: true });
-    expect(refused!.reason).toContain("`probe run list` was refused before it ran");
-    expect(await toolCall({ toolName: "bash", input: { command: "probe ask hi" } }, ctx)).toBeUndefined();
-  });
-
-  it("lets an inline daemon-profile session's probe write run, and still refuses the switch", async () => {
-    const { toolCall, ctx } = await start("daemon");
-    const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
-    const sessions = join(process.env.XDG_STATE_HOME!, "probe", "sessions");
-    mkdirSync(sessions, { recursive: true });
-    writeFileSync(join(sessions, `${sid}.state`), "full\n");
-    writeFileSync(join(sessions, `${sid}.inline`), JSON.stringify({ from: "daemon", since: 1 }));
-    expect(await toolCall({ toolName: "bash", input: { command: "probe project create x" } }, ctx)).toBeUndefined();
-    expect(await toolCall({ toolName: "bash", input: { command: "probe session state on" } }, ctx)).toMatchObject({ block: true });
-  });
-
-  it("tells an inline daemon-profile agent once, and again after a compaction or a resume", async () => {
-    type BeforeAgentStart = (event: { systemPrompt: string }, ctx: unknown) => Promise<unknown>;
-    const { ctx, handlers } = await start("daemon");
-    setInline(ctx, 1791266269.25);
-    const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
-    const told = async () => JSON.stringify((await before({ systemPrompt: "BASE" }, ctx)) ?? {}).includes("on (inline)");
-    expect(await told()).toBe(true);
-    expect(await told()).toBe(false);
-    await handlers.get("session_compact")!({}, ctx);
-    expect(await told()).toBe(true);
-    expect(await told()).toBe(false);
-    await handlers.get("session_start")!({ reason: "resume" }, ctx);
-    expect(await told()).toBe(true);
-    setInline(ctx, 1791266300);
-    expect(await told()).toBe(true);
-  });
-
-  it("sends an owing inline agent back only after a run that completed, never after Esc or an error", async () => {
-    type BeforeSettle = (event: { outcome: string }, ctx: unknown) => Promise<unknown>;
-    const { ctx, handlers } = await start("daemon");
-    setInline(ctx, 1);
-    const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
-    const owedDir = join(process.env.XDG_STATE_HOME!, "probe", "owed");
-    mkdirSync(owedDir, { recursive: true });
-    writeFileSync(join(owedDir, `${sid}.json`), JSON.stringify({
-      seq: 1, items: [{ why: "note", kind: "run", ref: "r1", by: "agent", seq: 1 }], asks: {},
-    }));
-    const asked: string[][] = [];
-    const prior = execFileMock.getMockImplementation()!;
-    execFileMock.mockImplementation((command, args, options, callback) => {
-      if (args[1] === "owed") {
-        asked.push(args);
-        callback(null, "Not ended: owed.\n", "");
-        return;
-      }
-      prior(command, args, options, callback);
-    });
-    const settle = handlers.get("agent_before_settle") as unknown as BeforeSettle;
-    expect(await settle({ outcome: "aborted" }, ctx)).toBeUndefined();
-    expect(await settle({ outcome: "error" }, ctx)).toBeUndefined();
-    await handlers.get("agent_settled")!({}, ctx);
-    expect(asked).toHaveLength(0);
-    expect(await settle({ outcome: "completed" }, ctx)).toEqual({
-      entries: [{ type: "custom_message", customType: "probe-owed", content: "Not ended: owed.", display: true }],
-      continue: true,
-    });
-    expect(asked).toEqual([["session", "owed", "--send-back", "--session", sid]]);
-  });
-
-  it("blocks an agent-profile session's forged answer, and nothing else", async () => {
-    const { toolCall, ctx } = await start(undefined);
-    const answer = join(process.env.XDG_STATE_HOME!, "probe", "approvals", "answers", "x.json");
-    const refused = await toolCall({ toolName: "write", input: { path: answer, content: "{}" } }, ctx);
-    expect(refused).toMatchObject({ block: true });
-    expect(refused!.reason).toContain("Only the researcher answers them");
-    expect(await toolCall({ toolName: "bash", input: { command: "probe run list" } }, ctx)).toBeUndefined();
   });
 });
 
@@ -1898,7 +1169,7 @@ describe("registerExtension — Probe's tracking switched off (probeTracking: fa
     const log = readFileSync(extensionLogFile(process.env), "utf-8");
     expect(log).toContain("Probe tracking is off, no Probe MCP tools");
     expect(log).not.toContain("Probe MCP ready");
-    expect(daemonSpawns()).toHaveLength(1); // capture is untouched
+    expect(daemonSpawns()).toHaveLength(0); // capture is the service's to ask for (M9), off switch or not
 
     const skills = [...PACKAGE_SKILLS, "their-own"].map((name) => ({ name, filePath: `/x/${name}/SKILL.md` }));
     const event = { systemPrompt: "BASE", systemPromptOptions: { skills } };
@@ -1956,74 +1227,3 @@ describe("registerExtension — Probe's tracking switched off (probeTracking: fa
   });
 });
 
-describe("the server's notices (plan T9, R25)", () => {
-  const NOTICE = {
-    message_id: "maintenance_nov3", code: "maintenance", severity: "warning", action: "none", audience: "both",
-    text: "Probe is read-only 02:00-03:00 UTC on Nov 3.", revision: 7,
-  };
-  type BeforeAgentStart = (event: { systemPrompt: string }, ctx: unknown) => Promise<{ message?: { content: string } } | undefined>;
-
-  /** A fresh shim and implementation state, as pi's `/reload` leaves it (module state does not survive). */
-  async function freshHost() {
-    const impl = await import("../src/impl.js");
-    const { emptySharedState, ShimHost } = await import("../src/shim.js");
-    const { api, handlers } = fakeExtensionAPI();
-    await new ShimHost({ installRoot: tmp, cloneImpl: impl, shared: emptySharedState() }).attach(api as never);
-    return handlers;
-  }
-
-  it("tells the person once per computer and the agent once per session, and still works after /reload", async () => {
-    installProbeCli();
-    const config = join(tmp, "config.json");
-    writeFileSync(config, JSON.stringify({ base_url: "https://probe.test", token: "probe_pat_pi" }));
-    process.env.PROBE_CONFIG_PATH = config;
-    let messages: unknown[] = [NOTICE];
-    const reads: string[] = [];
-    vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
-      reads.push(`${url} ${init.headers["X-Probe-Client"]}/${init.headers["X-Probe-Client-Version"]}`);
-      return new Response(JSON.stringify({ set_revision: "0123456789abcdef", messages }), { status: 200 });
-    });
-    const original = execFileMock.getMockImplementation()!;
-    execFileMock.mockImplementation((command, args, options, callback) =>
-      args[0] === "--version" ? callback(null, "probe 0.370.0\n", "") : original(command, args, options, callback));
-    try {
-      const sessionId = uniqueSessionId("server-notices");
-      const ctx = fakeContext({ sessionId, sessionFile: undefined, hasUI: true });
-      const said = (text: string) => ctx.notify.mock.calls.filter(([line]) => line === `Probe: ${text}`);
-
-      const first = await freshHost();
-      await first.get("session_start")!({ reason: "startup" }, ctx);
-      await vi.waitFor(() => expect(said(NOTICE.text)).toHaveLength(1));
-      expect(said(NOTICE.text)[0][1]).toBe("warning");
-      expect(reads).toEqual(["https://probe.test/v1/client/messages cli/0.370.0"]);
-      const turn = await (first.get("before_agent_start") as unknown as BeforeAgentStart)({ systemPrompt: "BASE" }, ctx);
-      expect(turn?.message?.content).toContain(`[Probe] Notice from Probe (server): "${NOTICE.text}"`);
-
-      // /reload: the module state is gone, the ledger on disk is not. A list older than FRESH_S is read again.
-      const { ledgerFor } = await import("../src/core/serverNotices.js");
-      const saved = ledgerFor(process.env)!;
-      saved.saveList(null, saved.loadList("cli")!.items, "cli", Date.now() / 1000 - 120);
-      messages = [NOTICE, { ...NOTICE, message_id: "incident_1", revision: 1, text: "Uploads are slow; nothing is lost." }];
-      const reloaded = await freshHost();
-      await reloaded.get("session_start")!({ reason: "reload" }, ctx);
-      await vi.waitFor(() => expect(said("Uploads are slow; nothing is lost.")).toHaveLength(1));
-      expect(said(NOTICE.text)).toHaveLength(1);
-      // A server message the CLI posted to this session's mailbox (no daemon serves it) reaches both.
-      const box = join(process.env.XDG_STATE_HOME!, "probe", "reads", "messages", sessionId);
-      mkdirSync(box, { recursive: true });
-      writeFileSync(join(box, `${"0".repeat(20)}-nupdate_cli_2.json`), JSON.stringify({
-        id: "nupdate_cli_2", session: sessionId, kind: "server", text: "This CLI misses a fix.", ask: null, question: null,
-        reason: null, made_at: 1, expires_at: Date.now() / 1000 + 3600, severity: "warning", audience: "both",
-      }));
-      const after = await (reloaded.get("before_agent_start") as unknown as BeforeAgentStart)({ systemPrompt: "BASE" }, ctx);
-      const content = after?.message?.content ?? "";
-      expect(content).toContain(`[Probe] Notice from Probe (server): "This CLI misses a fix."`);
-      expect(content).toContain(`[Probe] Notice from Probe (server): "Uploads are slow; nothing is lost."`);
-      expect(content).not.toContain(NOTICE.text);
-      expect(said("This CLI misses a fix.")).toHaveLength(1);
-    } finally {
-      execFileMock.mockImplementation(original);
-      vi.unstubAllGlobals();
-    }
-  });
-});

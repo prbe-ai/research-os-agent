@@ -17,10 +17,9 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isDaemonAlive, waitForSpawnConfirmation } from "../src/core/daemon.js";
+import { isDaemonAlive } from "../src/core/daemon.js";
 import {
   createMachineKeys,
-  hostedMarkerStamp,
   hostedServicePid,
   isTheService,
   machineId,
@@ -144,84 +143,6 @@ describe.runIf(HAS_PROC)("a session the Probe service records (Linux: /proc)", (
     const pid = await liveProcess(true);
     const { sid } = marker(String(pid));
     expect(isDaemonAlive(sid, realDeps)).toBe(true);
-  });
-
-  it("a session start the service took ends the wait at once, without 'spawn failed?'", async () => {
-    const pid = await liveProcess(true);
-    const { sid } = marker(String(pid));
-    const logged: string[] = [];
-    let sleeps = 0;
-    // `tap start` found the service recording the session and exited 0 (its marker unchanged).
-    await waitForSpawnConfirmation(
-      sid,
-      {
-        ...realDeps,
-        log: (m) => logged.push(m),
-        sleep: async () => {
-          sleeps += 1;
-        },
-      },
-      { spawned: { markerBefore: hostedMarkerStamp(sid), exitCode: () => 0 } },
-    );
-    expect(sleeps).toBe(0);
-    expect(logged.join("\n")).not.toContain("spawn failed?");
-  });
-
-  it("a marker the service writes during the wait ends it then", async () => {
-    const pid = await liveProcess(true);
-    const sid = `pi-hosted-test-${randomUUID()}`;
-    const path = `/tmp/${WATCHER_PREFIX}-watcher-${sid}.hosted`;
-    cleanup.push(path);
-    const logged: string[] = [];
-    let sleeps = 0;
-    await waitForSpawnConfirmation(sid, {
-      ...realDeps,
-      log: (m) => logged.push(m),
-      sleep: async () => {
-        sleeps += 1;
-        if (sleeps === 3) writeFileSync(path, String(pid), { mode: 0o600 });
-      },
-    });
-    expect(sleeps).toBe(3);
-    expect(logged).toEqual([]);
-  });
-
-  it("a live marker from before the spawn is no confirmation while `tap start` has not answered", async () => {
-    const pid = await liveProcess(true);
-    const { sid } = marker(String(pid));
-    const logged: string[] = [];
-    const answer = await waitForSpawnConfirmation(
-      sid,
-      { ...realDeps, log: (m) => logged.push(m), sleep: async () => {} },
-      { maxPolls: 3, spawned: { markerBefore: hostedMarkerStamp(sid), exitCode: () => undefined } },
-    );
-    expect(answer).not.toBe("hosted");
-    expect(logged.join("\n")).toContain("spawn failed?");
-  });
-
-  it("the service's rewrite of the marker (a new file, as `tap record` writes it) is confirmation", async () => {
-    const pid = await liveProcess(true);
-    const { sid, path } = marker(String(pid));
-    const stamp = hostedMarkerStamp(sid);
-    expect(stamp).not.toBeNull();
-    let sleeps = 0;
-    const answer = await waitForSpawnConfirmation(
-      sid,
-      {
-        ...realDeps,
-        log: () => {},
-        sleep: async () => {
-          sleeps += 1;
-          if (sleeps === 2) {
-            writeFileSync(`${path}.tmp`, String(pid), { mode: 0o600 });
-            execFileSync("mv", ["-f", `${path}.tmp`, path]);
-          }
-        },
-      },
-      { spawned: { markerBefore: stamp, exitCode: () => undefined } },
-    );
-    expect(answer).toBe("hosted");
-    expect(sleeps).toBe(2);
   });
 
   describe("is not fooled by", () => {

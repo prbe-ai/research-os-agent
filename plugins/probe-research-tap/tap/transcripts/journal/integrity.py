@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from ..credential_scan.events import redact_event
+from ..pinned import open_transcript
 EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 _FIELDS = (
     "session_id",
@@ -89,7 +90,7 @@ def _continues(stream: dict, payload: dict) -> bool:
 
 def prefix_hash(path: Path, end: int) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with open_transcript(path) as handle:
         left = end
         while left:
             chunk = handle.read(min(left, 1024 * 1024))
@@ -104,7 +105,7 @@ def prefix_hash(path: Path, end: int) -> str:
 
 def complete_line_end(path: Path, end: int) -> int:
     """Find the last complete source record without loading a partial giant line."""
-    with path.open("rb") as handle:
+    with open_transcript(path) as handle:
         while end:
             start = max(0, end - 64 * 1024)
             handle.seek(start)

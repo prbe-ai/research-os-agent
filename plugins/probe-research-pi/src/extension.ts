@@ -27,28 +27,16 @@ import { dirname, join } from "node:path";
 import type { AgentActivityOutcome, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
-import { newAskerState, QuestionAsker, feedbackUnsent, spawnFeedbackFlush, type ApprovalsDeps, type AskerState } from "./core/approvals.js";
-import { guardToolCall, PiTool, resolveLikePi, sessionInlineReadOnly, sessionIsInline } from "./guard.js";
-import {
-  cliHasInlineBridge,
-  forgetInlineShown,
-  inlineNotice,
-  inlineNoticeDue,
-  inlineSkillsText,
-  localCliVersion,
-  markInlineShown,
-} from "./inlineNotice.js";
-import { agentOwes, owedSendBack } from "./owed.js";
+import { newAskerState, QuestionAsker, type ApprovalsDeps, type AskerState } from "./core/approvals.js";
+import { PiTool, resolveLikePi, sessionInlineReadOnly, sessionIsInline } from "./guard.js";
+import { forgetInlineShown } from "./inlineNotice.js";
 import {
   ClaimRecheck,
   finishHostedSession,
   HOSTED_FINISH_WAIT_S,
   pruneStaleShutdownSentinels,
   recheckUntilClaimed,
-  SpawnConfirmation,
-  spawnDaemon,
   stopDaemon,
-  waitForSpawnConfirmation,
   type DaemonDeps,
   type SpawnFn,
 } from "./core/daemon.js";
@@ -59,25 +47,21 @@ import {
   mcpToolDeclarations,
   type McpTransport,
 } from "./mcpBridge.js";
-import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, pythonMissingFile, teamNoteDocumentPath } from "./core/paths.js";
-import { hostedMarkerStamp, hostedServicePid } from "./core/hosted.js";
+import { approvalsDir, extensionLogFile, probeStateDir, pythonMissingFile } from "./core/paths.js";
+import { hostedServicePid } from "./core/hosted.js";
 import { Mailbox } from "./core/reads.js";
-import { fetchNotices, ledgerFor, notifyLevel, notifyPerson, takeAgentNotices } from "./core/serverNotices.js";
+import { ledgerFor, notifyLevel } from "./core/serverNotices.js";
 import { checkPairing } from "./core/pairing.js";
 import { buildStatusReport } from "./status.js";
-import { pythonSeen, resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
-import { ensureService, lookupServiceSocket } from "./core/service.js";
+import { findCliPython, resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
+import { boundedHookEnv, ensureService, lookupServiceSocket } from "./core/service.js";
 import { packageVersion } from "./packageVersion.js";
-import { guardViaService } from "./serviceGuard.js";
 import { answeredEffects, Forwarder, freshForwardState, ranToEnd, showNotices, wasAccepted, type ForwardState } from "./forwarding.js";
-import { ForwardedEvent, piConfigRoot } from "./serviceForward.js";
-import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./core/trackingSwitch.js";
+import { callService, ForwardedEvent, ForwardOutcome, piConfigRoot } from "./serviceForward.js";
+import { parseSwitchIntent, switchAppliedNotice } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
-import { teamItemsHidden } from "./core/workspaceLimit.js";
 import {
   companionKeyHeld,
-  DAEMON_CONTEXT,
-  daemonNotice,
   daemonStatus,
   DaemonStatus,
   type DaemonNoticeDeps,
@@ -95,14 +79,6 @@ import {
   type RecorderValue,
   type TrackingExecFileFn,
 } from "./core/trackingState.js";
-import {
-  hasProbePointer,
-  readTeamNote,
-  spawnTeamNoteSync,
-  syncTeamNoteThenRead,
-  type TeamNoteSyncDeps,
-} from "./core/teamNote.js";
-import { renderTeamNoteForPrompt } from "./teamNotePrompt.js";
 import {
   EMPTY_STATE_SCHEMA,
   ShimEvent,
@@ -152,32 +128,15 @@ export const MIGRATES_FROM: readonly number[] = [];
  */
 export interface SessionState {
   /**
-   * `spawned`: sessions this process started capture for -- the same-session
-   * double-spawn guard, and which session's daemon to stop at shutdown. The
-   * real dedup authority is still the pidfile check inside spawnDaemon(); this
-   * is a same-process fast path that also closes the narrow race where
-   * session_start could fire twice before a freshly-spawned wrapper has written
-   * its own pidfile.
+   * The shared state's schema 1 shape, kept: another version of this extension takes it over.
    *
-   * `pending`: sessions whose file pi had not written at session_start. pi 1.0
-   * writes a NEW session's file at its first message, after session_start:
-   * `tap start` refuses a transcript that does not exist (EXIT_NO_TRANSCRIPT)
-   * and nothing retried, so a new interactive session was never captured and
-   * the daemon never started for it. Session id -> the file to wait for.
+   * `pending`: sessions whose file pi had not written at session_start (pi 1.0 writes a NEW
+   * session's file at its first message), session id -> that file. The service asks for their
+   * recorder at the next events (M9); this only says the footer is read back once the file is there.
+   * `spawned` (its schema 1 name): sessions whose footer is read again until a recorder claims
+   * them; their end stops it.
    */
   capture: { spawned: Set<string>; pending: Map<string, string> };
-  /**
-   * The team-note cache. Populated ONCE per real session_start by readTeamNote(),
-   * read by EVERY before_agent_start of that session, and never refreshed
-   * mid-session -- see teamNote.ts's module docstring ("cache once per session").
-   *
-   * `hidden`: were team-wide items hidden by this computer's workspace limit
-   * when the note was last looked at? While they are, the note is neither
-   * synced nor cached -- the machine's one document may be another account's
-   * by the time they show again -- so the first prompt after `show` syncs and
-   * reloads it first.
-   */
-  note: { text: string | null; hidden: boolean };
   probe: {
     /**
      * The three-valued switch for this session, as the CLI last reported it.
@@ -223,12 +182,11 @@ export interface SessionState {
     lastTurnInDaemon: boolean;
   };
   /**
-   * This machine's Probe service socket, for the guard's `hooks.run` (plan D38):
-   * asked of the tap once per pi process (`lookupServiceSocket`, a Python start,
-   * so never on a tool call's path). Until it answers, and if it cannot, the
-   * guard is `guard.ts` alone.
+   * This machine's Probe service socket, where every event goes (`forwarding.ts`): asked of the
+   * tap (`lookupServiceSocket`, a Python start, so never on a tool call's path) once it is found,
+   * and again at most every SOCKET_RETRY_MS while it is not. A failed lookup never forgets one found.
    */
-  service: { socket: string | null; asked: boolean };
+  service: { socket: string | null; asked: boolean; askedAt: number };
   /**
    * DAEMON READS (reads.ts): the daemon's reader answers `probe ask` and sends
    * team context, and the worker's run-alert poller sends run alerts; pi gets
@@ -245,7 +203,7 @@ export interface SessionState {
   current: { sessionId: string | null };
   /** Whose Probe MCP connection's tools are declared now (a session id), or none. */
   mcp: { declared: string | null };
-  /** This turn's choice between pi's own code and the Probe service (`forwarding.ts`, PR 7). */
+  /** This turn and its session's context, as the Probe service gave them (`forwarding.ts`, PR 7). */
   forward: ForwardState;
 }
 
@@ -262,7 +220,6 @@ export interface TransportState {
 function freshSession(): SessionState {
   return {
     capture: { spawned: new Set(), pending: new Map() },
-    note: { text: null, hidden: false },
     probe: {
       state: undefined,
       tracking: undefined,
@@ -271,7 +228,7 @@ function freshSession(): SessionState {
       daemonHealth: undefined,
       lastTurnInDaemon: false,
     },
-    service: { socket: null, asked: false },
+    service: { socket: null, asked: false, askedAt: 0 },
     reads: { poller: null },
     questions: newAskerState(),
     current: { sessionId: null },
@@ -344,13 +301,41 @@ function probeIsOff(s: SessionState): boolean {
   return s.probe.state === ProbeState.Off;
 }
 
+/** A tool call's input fields the service's guard never reads (the body of a write or an edit): never sent
+ * (`hooks/_hook_forward.py` GATE_BULK_FIELDS). */
+const GATE_BULK_FIELDS: ReadonlySet<string> = new Set([
+  "content", "oldText", "newText", "edits", "old_string", "new_string", "new_source", "old_str", "new_str", "file_text",
+]);
+/** A tool call's fields after that, at most (`_hook_forward.MAX_GATE_PAYLOAD`): past it, refused. */
+const MAX_GATE_PAYLOAD = 256 * 1024;
+/** `mailbox.delivered`'s wait (the service's own `DELIVERED_WAIT_S`, and the round trip). */
+const DELIVERED_WAIT_MS = 3500;
+/** An inbox message's id (`reads.INBOX_ID_PREFIX`, then 32 hex): the only ones Probe hears were shown. */
+const INBOX_ID = /^s[0-9a-f]{32}$/;
+/** What a refused tool call says to the agent (`_hook_forward.DENIED`). */
+const GuardDenied = {
+  too_big: "Probe refused this tool call: it is too large for Probe's guard to check ({detail}). Split it into smaller steps.",
+  not_harness: "Probe refused this tool call: the Probe service found no running agent this event belongs to.",
+} as const;
+/** The service's refusal of a forged event (`proxy.RefusedReason.NOT_HARNESS`): the one that refuses a tool call. */
+const REFUSED_NOT_HARNESS = "not_harness";
+
+function guardDenied(key: keyof typeof GuardDenied, detail = ""): string {
+  return GuardDenied[key].replace("{detail}", detail);
+}
+
+/** A socket lookup that found none is asked again after this long (M8: a service started meanwhile). */
+const SOCKET_RETRY_MS = 30_000;
+
 function askServiceSocket(s: SessionState, runtime: TapRuntime): void {
-  if (s.service.asked) return;
-  s.service.asked = true;
   const service = s.service;
+  if (service.socket || (service.asked && Date.now() - service.askedAt < SOCKET_RETRY_MS)) return;
+  service.asked = true;
+  service.askedAt = Date.now();
   void lookupServiceSocket(runtime, { execFile: realTrackingExecFile, env: process.env, log: logLine }).then((socket) => {
+    if (!socket) return; // a failed lookup never forgets a socket found (and is asked again later)
     service.socket = socket;
-    if (socket) logLine(`probe service: the guard asks the service at ${socket}`);
+    logLine(`probe service: pi's events go to the service at ${socket}`);
   });
 }
 
@@ -388,7 +373,8 @@ function realApprovalsDeps(): ApprovalsDeps {
     mkdirSync: (path) => fs.mkdirSync(path, { recursive: true }),
     now: () => Date.now(),
     token: () => randomBytes(6).toString("hex"),
-    sendFeedback: () => spawnFeedbackFlush(realTeamNoteSyncDeps()),
+    // The Probe service sends it (its session-start maintenance flushes unsent feedback): nothing runs here.
+    sendFeedback: () => {},
   };
 }
 
@@ -415,21 +401,6 @@ function notifyServerBanners(ctx: any, box: Mailbox): void {
       continue;
     }
     banner.claim?.commit();
-  }
-}
-
-/** The server's notices at a session start (plan T9): read (the CLI's kind and version), then the
- * person's shown once per computer. Not awaited: a session start never waits on the network. */
-async function startServerNotices(ctx: any): Promise<void> {
-  try {
-    const items = await fetchNotices({
-      env: process.env,
-      fetchImpl: globalThis.fetch,
-      cliVersion: () => localCliVersion({ execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env }),
-    });
-    if (ctx?.hasUI) notifyPerson(items, ledgerFor(process.env), (text, level) => ctx.ui.notify(text, level));
-  } catch (err) {
-    logLine(`server notices: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -482,10 +453,6 @@ const realSpawn: SpawnFn = (command, args, options) =>
     once: (event: string, listener: (payload?: unknown) => void) => unknown;
   };
 
-/** Same call, kept separate because the switch WAITS on its child. */
-const realSwitchSpawn: SwitchSpawnFn = (command, args, options) =>
-  spawn(command, args, options) as unknown as SwitchChild;
-
 const realTrackingExecFile: TrackingExecFileFn = (command, args, options, callback) => {
   return execFile(command, args, options, (error, stdout, stderr) => {
     callback(error, String(stdout), String(stderr));
@@ -503,7 +470,6 @@ function logLine(message: string): void {
 
 function realDaemonDeps(): DaemonDeps {
   return {
-    spawn: realSpawn,
     existsSync: fs.existsSync,
     mkdirSync: (path) => fs.mkdirSync(path, { recursive: true }),
     readFileSync: (path) => fs.readFileSync(path, "utf-8"),
@@ -515,19 +481,9 @@ function realDaemonDeps(): DaemonDeps {
   };
 }
 
-function realTeamNoteSyncDeps(): TeamNoteSyncDeps {
-  return {
-    spawn: realSpawn,
-    existsSync: fs.existsSync,
-    isExecutable,
-    env: process.env,
-    log: logLine,
-  };
-}
-
 /**
- * Read the session's state back from the CLI (`probe session initialize`) and
- * draw the footer from it. A reading that comes back after pi switched to
+ * Read the session's state back through the Probe service (`session.initialize`, which runs
+ * `probe session initialize`: the extension spawns no CLI) and draw the footer from it. A reading that comes back after pi switched to
  * another session is the old one's: never committed over the new one's (its
  * switch, profile and footer). `keepOnFailure`: a
  * read that fails leaves the last reading, not an unknown one (a re-read after
@@ -547,9 +503,8 @@ async function refreshTrackingStatus(
   opts: { keepOnFailure?: boolean } = {},
 ): Promise<boolean> {
   const state = await initializeTrackingState(sessionId, cwd, {
-    execFile: realTrackingExecFile,
-    existsSync: fs.existsSync,
-    isExecutable,
+    call: (method, params, waitMs) =>
+      callService(s.service.socket, method, params, waitMs, { clientVersion: PACKAGE_VERSION, log: logLine }),
     env: process.env,
     log: logLine,
   });
@@ -612,7 +567,7 @@ function announce(ctx: { hasUI: boolean; ui: { notify: (msg: string, level?: "in
  * registered it. Run at session start AND at every prompt, because
  * pi-mcp-adapter registers its tools on its own schedule, which may be after
  * this extension's `session_start`. Deactivated, not unregistered: pi has no
- * unregister, and the guard (`guard.ts`) refuses a call that reaches one
+ * unregister, and the service's guard refuses a call that reaches one
  * anyway (a codemode script can call an inactive tool).
  */
 function deactivateProbeTools(api: ShimApi): void {
@@ -657,8 +612,8 @@ function tellResearcherAboutDaemon(
 
 /**
  * Every coding agent's session variable, from the harness registry beside this
- * file (`harnesses.json`, synced from `probe.foundation.harness_registry`): pi's switch spawns the
- * CLI without them (`trackingSwitch.ts`). Empty when the copy cannot be read.
+ * file (`harnesses.json`, synced from `probe.foundation.harness_registry`). Empty when the copy
+ * cannot be read.
  */
 export function agentSessionEnv(): readonly string[] {
   try {
@@ -687,10 +642,9 @@ export function prepareExtension(env: ImplEnv): Candidate {
   const asker = new QuestionAsker(s.questions);
   const forwarder = new Forwarder({
     state: s.forward, env: process.env, socket: () => s.service.socket, clientVersion: PACKAGE_VERSION, log: logLine,
-    // The one thing a forwarded turn does itself when no service answers: start one.
+    // The one thing pi does itself when no service answers: ask the CLI to start one (`ensure`).
     startService: () => {
-      const runtime = resolveTapRuntime(tapRuntimeDeps());
-      if (runtime && checkPairing(process.env).paired) ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });
+      if (checkPairing(process.env).paired) ensureService(findCliPython(tapRuntimeDeps()), { spawn: realSpawn, env: process.env, log: logLine });
     },
   });
   let active = false;
@@ -762,7 +716,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
           throw err;
         }
         box.markShown(box.lastClaimed, "pi poller"); // only once sendMessage returned
-        void box.reportDelivered(box.lastClaimed); // Probe hears it was shown (inbox only; never awaited)
+        // Probe hears it was shown (inbox only; never awaited): through the service, never pi's own call.
+        void reportDelivered(sid, box.lastClaimed);
       }
       notifyServerBanners(live, box);
       readsNotify(live, box.researcherNotice());
@@ -780,6 +735,14 @@ export function prepareExtension(env: ImplEnv): Candidate {
   /** Start the reads poller for this process, once a session the reader serves
    * (or on a machine where the daemon holds questions) has had its first prompt
    * (`before_agent_start`). */
+  /** The inbox messages among `ids` were shown: the service tells Probe (`mailbox.delivered`). Never rejects. */
+  async function reportDelivered(sessionId: string, ids: string[]): Promise<void> {
+    const inbox = ids.filter((id) => INBOX_ID.test(id));
+    if (!inbox.length) return;
+    await callService(s.service.socket, "mailbox.delivered", { sid: sessionId, message_ids: inbox, env: boundedHookEnv(process.env) },
+      DELIVERED_WAIT_MS, { clientVersion: PACKAGE_VERSION, log: logLine });
+  }
+
   function startReadsPoller(ctx: any): void {
     const poller = s.reads.poller;
     if (poller) {
@@ -802,108 +765,17 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // -- capture -----------------------------------------------------------------
 
   /**
-   * Start capture (the tap watcher, which starts the daemon) for one session:
-   * the killswitch, pairing and interpreter checks, the spawn, then the footer
-   * read back. From session_start when the session file already exists, and
-   * otherwise once pi has written it (`startPendingCapture`).
+   * The footer read back after the service asked for this session's recorder (it does, at the
+   * session start and at the next events while pi has not written the session's file: M9). A live
+   * recorder claims the session after its first server read, ~2 s on (#3619): read it again a few
+   * times while it has not, or the footer says "not capturing" of a session that is captured.
    */
-  async function startCapture(ctx: any, sessionId: string, transcriptPath: string, label: string): Promise<void> {
-    // Best-effort hygiene, every session start, matching session-start.sh:
-    // never allowed to fail this handler.
-    try {
-      pruneStaleShutdownSentinels({
-        readdirSync: (dir) => fs.readdirSync(dir),
-        statMtimeMs: (path) => fs.statSync(path).mtimeMs,
-        rmSync: (path) => fs.rmSync(path, { force: true }),
-        now: () => Date.now(),
-      });
-    } catch {
-      // Never let hygiene block capture.
-    }
-
-    // Killswitch: presence of .disabled disables the daemon entirely — checked
-    // FIRST, same order as session-start.sh, and silently (log file only, no
-    // stderr/notify): the user turned capture off on purpose, so re-announcing
-    // that on every single session start would just be noise.
-    if (fs.existsSync(disabledFile(process.env))) {
-      logLine(`${label}: killswitch active, skipping ${sessionId}`);
-      return;
-    }
-
-    if (s.capture.spawned.has(sessionId)) {
-      return;
-    }
-
-    const pairing = checkPairing(process.env);
-    if (!pairing.paired) {
-      announce(ctx, pairing.reason, "warning");
-      return;
-    }
-
-    const runtimeDeps = tapRuntimeDeps();
-    const runtime = resolveTapRuntime(runtimeDeps);
-    if (!runtime) {
-      // What was found instead, for the researcher and for `probe doctor`
-      // (`.python-missing`, as the tap's own session-start.sh leaves it).
-      const seen = pythonSeen(runtimeDeps);
-      try {
-        fs.writeFileSync(pythonMissingFile(process.env), `${seen}\n`);
-      } catch {
-        // No tap state folder to note it in: the announcement still says it.
-      }
-      announce(
-        ctx,
-        `no Python 3.11 or newer found for the probe-research-tap daemon (${seen}) — capture disabled for this session. ` +
-          "Install Python 3.11 or newer, or set PROBE_PI_TAP_ROOT, then start a new session.",
-        "error",
-      );
-      return;
-    }
-    try {
-      fs.rmSync(pythonMissingFile(process.env), { force: true });
-    } catch {
-      // Best-effort, as the hook's `rm -f`.
-    }
-
-    const deps = realDaemonDeps();
-    // The service's marker as it was before this start: only one this start
-    // produced (or `tap start` exiting 0 beside it) confirms it below.
-    const markerBefore = hostedMarkerStamp(sessionId);
-    const result = spawnDaemon({ sessionId, transcriptPath, cwd: ctx.cwd, runtime, ownerPid: process.pid }, deps);
-    // Marked SYNCHRONOUSLY, with no await between the spawn decision and this
-    // line: `capture.spawned` is the same-process fast path (see its own
-    // comment), and the whole point of it is to close before
-    // waitForSpawnConfirmation's multi-second wait below even starts — a
-    // second session_start racing in during that wait must see this set
-    // already updated, not find the window still open.
+  async function rereadCapture(ctx: any, sessionId: string): Promise<void> {
     s.capture.spawned.add(sessionId);
-    if (result.spawned) {
-      logLine(`${label}: spawned capture for ${sessionId} (pid ${result.pid ?? "unknown"})`);
-      // A session the Probe service records confirms by its `.hosted` marker,
-      // with no pid file: the wait ends then instead of at its 2 s bound.
-      const confirmed = await waitForSpawnConfirmation(sessionId, deps, {
-        spawned: { markerBefore, exitCode: result.exitCode, switchedOff: probeIsOff(s) },
-      });
-      if (confirmed === SpawnConfirmation.Hosted) {
-        logLine(`${label}: the Probe service records ${sessionId}`);
-      }
-    } else {
-      logLine(`${label}: capture already running for ${sessionId}`);
-    }
-
-    // Read the footer back now that `tap start` has had its say. The refresh
-    // at the top of this handler ran BEFORE the spawn, so its capture reading
-    // is the one reading guaranteed to be stale — and a `tap start` that
-    // refused (a gate this handler does not pre-check, an interpreter below
-    // 3.11) would otherwise leave "● tracking" on screen for the rest of the
-    // session with nothing capturing behind it.
     await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
-    // A live recorder claims the session after its first server read, ~2 s on
-    // (#3619): read it again a few times while it has not, or the footer says
-    // "not capturing" of a session that is captured until something redraws it.
+    const current = () => s.current.sessionId === sessionId && s.capture.spawned.has(sessionId);
     recheckUntilClaimed(s.probe.tracking?.capture, {
       reread: async () => {
-        const current = () => s.current.sessionId === sessionId && s.capture.spawned.has(sessionId);
         if (!current()) return ClaimRecheck.Stop;
         const read = await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd, { keepOnFailure: true });
         if (!current()) return ClaimRecheck.Stop;
@@ -916,42 +788,34 @@ export function prepareExtension(env: ImplEnv): Candidate {
     });
   }
 
-  /** Start a pending session's capture once its file exists. Never throws. */
-  async function startPendingCapture(ctx: any, label: string): Promise<void> {
+  /** A session whose file pi had not written at its start: once it has, the footer is read back. Never throws. */
+  async function rereadPendingCapture(ctx: any, label: string): Promise<void> {
     try {
       const sessionId = ctx?.sessionManager?.getSessionId();
       const transcriptPath = sessionId ? s.capture.pending.get(sessionId) : undefined;
       if (!sessionId || !transcriptPath || !fs.existsSync(transcriptPath)) return;
       s.capture.pending.delete(sessionId);
-      await startCapture(ctx, sessionId, transcriptPath, label);
+      await rereadCapture(ctx, sessionId);
     } catch (err) {
-      logLine(`${label}: deferred capture start failed: ${err instanceof Error ? err.message : String(err)}`);
+      logLine(`${label}: capture read-back failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+
 
   // -- the events ----------------------------------------------------------------
 
   const onSessionStart: EventHandler = async (event, ctx) => {
-    // Team note: SYNC FIRST, then refresh the cache, for EVERY session_start
-    // reason including "reload". The document is one file per machine, written
-    // by whichever credential last synced — so reading it cold briefs this
-    // session from whatever was left there, which after a credential switch is
-    // the previous tenant's note. The sync is what parks that copy and installs
-    // ours; waiting for it (bounded, never longer than
-    // SYNC_BEFORE_READ_TIMEOUT_MS, child left running on timeout) makes the
-    // read an ordinary one. Independent of the capture-daemon logic below on
-    // purpose: a session with no transcript file, no pairing, or the killswitch
-    // active should still see the team note. Neither call ever throws.
     const sessionId = ctx.sessionManager.getSessionId();
     const transcriptPath = ctx.sessionManager.getSessionFile();
     s.current.sessionId = sessionId ?? null;
 
-    // THE SWITCH IS RESOLVED FIRST, and it did not used to be. The note sync
-    // below is a network call and the read after it becomes text in every
-    // prompt, so both have to know whether this session is `off` -- and they
-    // cannot ask after the fact. Nothing in resolving the switch depends on the
-    // note, so this is a pure reorder.
-    //
+    // The service's socket first: everything below asks it. Asked for once found; this event
+    // waits for it, bounded.
+    const runtime = resolveTapRuntime(tapRuntimeDeps());
+    if (runtime) {
+      askServiceSocket(s, runtime);
+      if (!s.service.socket) await waitForSocket(s, runtime);
+    }
     // Seeds the ONE durable session signal before any capture-specific early
     // return, then renders that same answer in Pi's persistent footer. Reloads
     // are safe: the hidden initializer uses set-if-absent and returns the
@@ -960,61 +824,13 @@ export function prepareExtension(env: ImplEnv): Candidate {
     // A resumed session's agent hears again that Probe is inline (`/probe inline`).
     if (sessionId && event.reason === "resume") forgetInlineShown(sessionId);
 
-    if (probeIsOff(s)) {
-      // `off` means no Probe calls and nothing injected. Leaving this out was
-      // the difference between a switch and a promise: the note still synced
-      // over the network every settle, and still rode into every prompt.
-      s.note.text = null;
-      logLine("probe state is off: skipping the team-note sync and injection");
-    } else if (!hasProbePointer(process.env)) {
-      // NO POINTER, NO NOTE, in both profiles (teamNote.ts::hasProbePointer):
-      // pi's AGENTS.md without Probe's block is the researcher's opt-out.
-      s.note.text = null;
-      logLine("no Probe block in pi's AGENTS.md: skipping the team-note sync and injection");
-    } else if (teamItemsHidden(process.env)) {
-      // This computer's workspace limit hides team-wide items, the team note
-      // among them (`probe workspace limit --team-items hide`): no sync and no
-      // cached copy. `before_agent_start` asks the limit again on every prompt,
-      // and once they show it syncs and reads the CURRENT account's note.
-      s.note.text = null;
-      s.note.hidden = true;
-      logLine("the workspace limit hides team-wide items: skipping the team-note sync and injection");
-    } else {
-      s.note.hidden = false;
-      await syncTeamNoteThenRead(realTeamNoteSyncDeps());
-      s.note.text = readTeamNote(process.env);
-    }
-    // The machine-wide Probe service (core/service.ts): started now, detached
-    // and never waited on, so it is up by the time capture registers this
-    // session. Not under `off` (plan A2), and not where capture cannot start.
-    // Its socket is asked for once per process, for the guard (`tool_call`).
-    if (!probeIsOff(s)) {
-      const runtime = resolveTapRuntime(tapRuntimeDeps());
-      if (runtime) askServiceSocket(s, runtime);
-      if (runtime && checkPairing(process.env).paired) {
-        ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });
-      }
-    }
-    // THE SERVICE'S SESSION START (PR 7): on a machine that moved pi to the Probe service, its
-    // SessionStart routes give this session's context (every turn's prompt gets it) and the
-    // server's notices, and flush unsent feedback; otherwise (or when it does not take the
-    // event) this extension does the last two itself, as before.
-    const startRuntime = !probeIsOff(s) && !s.service.socket && forwarder.isMarked() ? resolveTapRuntime(tapRuntimeDeps()) : null;
-    if (startRuntime) await waitForSocket(s, startRuntime);
-    forwarder.beginTurn(sessionId, probeIsOff(s));
+    // THE SERVICE'S SESSION START (PR 7; service-only task 16): its routes give this session's
+    // context (every turn's prompt gets it, the team note among it) and the server's notices, sync
+    // the team note and flush unsent feedback. Nothing of it runs here.
+    forwarder.beginTurn(sessionId);
     const started = await forwarder.send(ForwardedEvent.SessionStart, ctx, { reason: event.reason });
-    if (started !== null) {
-      // A forwarded turn: the service's routes give the context and the notices; nothing runs here.
-      if (sessionId && wasAccepted(started)) forwarder.keepContext(sessionId, answeredEffects(started));
-      showNotices(ctx, answeredEffects(started));
-    } else if (!probeIsOff(s)) {
-      // The server's notices, every start, `/reload` included (the ledger keeps each to once): never
-      // with Probe `off` (no Probe calls), and never awaited.
-      void startServerNotices(ctx);
-      // Feedback for the Probe team the researcher said yes to and that was not
-      // sent yet (offline, or the dialog's own send failed). Not under `off`.
-      if (feedbackUnsent(realApprovalsDeps())) spawnFeedbackFlush(realTeamNoteSyncDeps());
-    }
+    if (sessionId && wasAccepted(started)) forwarder.keepContext(sessionId, answeredEffects(started));
+    showNotices(ctx, answeredEffects(started));
 
     // Probe MCP read tools: entirely independent of the capture daemon below
     // (a separate credential — mcp_token, never the tap's ingest/device
@@ -1092,6 +908,20 @@ export function prepareExtension(env: ImplEnv): Candidate {
       }
     }
 
+    // Best-effort hygiene, every session start, as session-start.sh does: a pi-only install has no
+    // other pruner of the sentinels `stopDaemon` leaves; and an earlier version's "no Python 3.11"
+    // note goes (the tap runs on the service's own python now, M9). Never allowed to fail this handler.
+    try {
+      pruneStaleShutdownSentinels({
+        readdirSync: (dir) => fs.readdirSync(dir),
+        statMtimeMs: (path) => fs.statSync(path).mtimeMs,
+        rmSync: (path) => fs.rmSync(path, { force: true }),
+        now: () => Date.now(),
+      });
+      fs.rmSync(pythonMissingFile(process.env), { force: true });
+    } catch {
+      // Never let hygiene block the session.
+    }
     if (!transcriptPath) {
       // In-memory / not-yet-persisted session (e.g. SessionManager.inMemory()) — no
       // JSONL file exists yet for the daemon to tail. Nothing to do.
@@ -1100,13 +930,14 @@ export function prepareExtension(env: ImplEnv): Candidate {
     }
 
     if (!fs.existsSync(transcriptPath)) {
-      // A new session: pi writes its file at the first message. Capture starts
-      // then (`startPendingCapture`), not never.
+      // A new session: pi writes its file at the first message; the service asks for its recorder
+      // then (at the next event), and the footer is read back (`rereadPendingCapture`).
       s.capture.pending.set(sessionId, transcriptPath);
       logLine(`session_start(${event.reason}): ${sessionId}'s session file is not written yet; capture starts once pi writes it`);
       return;
     }
-    await startCapture(ctx, sessionId, transcriptPath, `session_start(${event.reason})`);
+    // The service asked for this session's recorder at its start (above): read the footer back.
+    await rereadCapture(ctx, sessionId);
   };
 
   const onSessionShutdown: EventHandler = async (event, ctx) => {
@@ -1128,6 +959,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     }
     const sessionId = ctx.sessionManager.getSessionId();
     stopDaemon(sessionId, realDaemonDeps());
+    s.capture.pending.delete(sessionId);
     s.capture.spawned.delete(sessionId);
     // A session the Probe service records (its `.hosted` marker): on a quit the
     // service finishes it now, waited on for a few seconds; then the marker goes,
@@ -1135,12 +967,13 @@ export function prepareExtension(env: ImplEnv): Candidate {
     try {
       await finishHostedSession(
         sessionId,
+        { waitS: event.reason === ShutdownReason.Quit ? HOSTED_FINISH_WAIT_S : 0 },
         {
-          // Resolved only if `tap finish` will run (a marker, a quit, a live service).
-          runtime: () => resolveTapRuntime(tapRuntimeDeps()),
-          waitS: event.reason === ShutdownReason.Quit ? HOSTED_FINISH_WAIT_S : 0,
+          ...realDaemonDeps(),
+          // `session.finish` on the service itself: the extension spawns no `tap finish`.
+          finish: (sid, waitS) => callService(s.service.socket, "session.finish", { sid, wait: waitS },
+            waitS * 1000 + 1000, { clientVersion: PACKAGE_VERSION, log: logLine }),
         },
-        { ...realDaemonDeps(), execFile: realTrackingExecFile },
       );
     } catch (err) {
       logLine(`session_shutdown(${event.reason}): hosted finish failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1212,8 +1045,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
   }
 
   const onBeforeAgentStart: EventHandler = async (event, ctx) => {
-    // Not awaited: the prompt must not wait on a spawn.
-    void startPendingCapture(ctx, "before_agent_start");
+    // Not awaited: the prompt must not wait on a footer read.
+    void rereadPendingCapture(ctx, "before_agent_start");
     const sessionId = ctx?.sessionManager?.getSessionId();
     // `probe session state inline` from a terminal moves the switch on disk
     // without a typed `/probe`: read it back, or a cached `off` would return
@@ -1221,7 +1054,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     if (sessionId && ctx && s.probe.state !== ProbeState.Full && inDaemonProfile(s, sessionId) && sessionIsInline(sessionId)) {
       await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
     }
-    forwarder.beginTurn(sessionId, probeIsOff(s) || trackingOffFor(s, sessionId));
+    forwarder.beginTurn(sessionId);
     if (trackingOffFor(s, sessionId)) {
       // Capture already started above; tracking adds nothing: no package
       // skill, no Probe MCP tool, nothing injected into the prompt.
@@ -1241,141 +1074,33 @@ export function prepareExtension(env: ImplEnv): Candidate {
       }
       deactivateProbeTools(api);
     }
-    if (probeIsOff(s)) return;
-    let systemPrompt = event.systemPrompt;
-    if (sessionId && forwarder.isOn(sessionId)) {
-      // A forwarded turn: the service builds the prompt's additions (the team note included); one
-      // it did not answer goes on with no change.
-      const forwarded = await forwardPrompt(event, ctx, sessionId, systemPrompt);
-      if (forwarded === null || (forwarded.systemPrompt === event.systemPrompt && !forwarded.message)) return;
-      return {
-        ...(forwarded.systemPrompt !== event.systemPrompt ? { systemPrompt: forwarded.systemPrompt } : {}),
-        ...(forwarded.message ? { message: { customType: "probe-daemon", content: forwarded.message, display: false } } : {}),
-      };
-    }
-    // Asked again on every prompt (one small config read), not only at
-    // session_start: `--team-items hide` set mid-session stops the very next
-    // injection. Shown again after being hidden, the note is synced and re-read
-    // first (bounded, as at session_start): whichever account is signed in NOW
-    // is whose note this session gets, never a copy cached before.
-    const hiddenNow = teamItemsHidden(process.env);
-    if (!hiddenNow && s.note.hidden && hasProbePointer(process.env)) {
-      await syncTeamNoteThenRead(realTeamNoteSyncDeps());
-      s.note.text = readTeamNote(process.env);
-    }
-    s.note.hidden = hiddenNow;
-    if (s.note.text && !hiddenNow) {
-      systemPrompt += renderTeamNoteForPrompt(s.note.text, teamNoteDocumentPath(process.env));
-    }
-    const inDaemon = s.probe.state === ProbeState.Daemon;
-    let notice: string | null = null;
-    if (daemonProfile) {
-      if (inDaemon && sessionId && ctx) tellResearcherAboutDaemon(s, ctx, sessionId);
-      // `/probe inline` (typed, or from a terminal): the agent hears it once per
-      // stretch, and again after a compaction or resume (`forgetInlineShown`).
-      const since = sessionId ? inlineNoticeDue(sessionId) : null;
-      if (sessionId && since !== null) {
-        const cli = await localCliVersion({ execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env });
-        notice = inlineNotice(resourceRoot, cliHasInlineBridge(cli), sessionId);
-        // The skills it records by, whole, as the daemon's writer reads them.
-        const skills = sessionInlineReadOnly(sessionId) ? "" : inlineSkillsText(resourceRoot);
-        if (skills) notice += `\n\n${skills}`;
-        markInlineShown(sessionId, since);
-      }
-    } else {
-      // Only claim the daemon records while it DOES: its lease is live, or this
-      // is the first turn and it has a key to start with. Otherwise daemonNotice
-      // below tells the model recording is back with it.
-      if (inDaemon) {
-        const deps = realDaemonNoticeDeps();
-        const live = sessionId ? daemonStatus(sessionId, deps).status === DaemonStatus.Live : false;
-        if (live || (!s.probe.lastTurnInDaemon && companionKeyHeld(deps))) {
-          systemPrompt += `\n\n${DAEMON_CONTEXT}`;
-        }
-        // The lease goes live (or lapses) between refreshes: redraw the footer.
-        if (sessionId && ctx?.hasUI) {
-          try {
-            ctx.ui.setStatus("probe-tracking", footerText(s, sessionId, live));
-          } catch (err) {
-            logLine(`tracking footer redraw failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-      }
-      if ((inDaemon || s.probe.lastTurnInDaemon) && sessionId) {
-        notice = daemonNotice(sessionId, inDaemon, realDaemonNoticeDeps());
-      }
-      s.probe.lastTurnInDaemon = inDaemon;
-    }
-    // The daemon's held questions, before the turn starts: pi's own dialog,
-    // the researcher's pick written as the Board's answer (approvals.ts).
-    if (sessionId) await askHeldQuestions(ctx, sessionId, true);
-    // Daemon reads: a new turn, every waiting answer and this turn's one
-    // unasked message (reads.ts), beside the daemon notice.
-    if (sessionId) {
-      try {
-        const box = mailboxFor(sessionId);
-        const served = box.served();
-        if (served || heldQuestionsBoardExists()) startReadsPoller(ctx);
-        if (served) {
-          box.touchAlive("before_agent_start");
-          const turn = box.wasWoken() ? box.currentTurn() : box.newTurn();
-          const texts = box.deliver(turn, "before_agent_start");
-          if (texts.length) {
-            notice = [notice, ...texts].filter(Boolean).join("\n\n");
-            box.markShown(box.lastClaimed, "before_agent_start"); // returned to pi as this turn's message
-            void box.reportDelivered(box.lastClaimed); // Probe hears it was shown (inbox only; never awaited)
-          }
-          readsNotify(ctx, box.researcherNotice());
-        } else {
-          // The server's lane is every session's (R21): what the Probe server and the CLI posted.
-          const texts = box.deliver(box.currentTurn(), "before_agent_start", true, true);
-          if (texts.length) {
-            notice = [notice, ...texts].filter(Boolean).join("\n\n");
-            box.markShown(box.lastClaimed, "before_agent_start");
-          }
-        }
-        notifyServerBanners(ctx, box);
-        // The notices read at session start, for this session's agent (plan T9): once per session.
-        const notices = takeAgentNotices(sessionId);
-        if (notices.texts.length) {
-          notice = [notice, ...notices.texts].filter(Boolean).join("\n\n");
-          for (const claim of notices.claims) claim.commit(); // returned to pi as this turn's message
-        }
-      } catch (err) {
-        logLine(`reads at prompt: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    if (systemPrompt === event.systemPrompt && !notice) return;
+    if (probeIsOff(s) || !sessionId) return;
+    // The service builds the prompt's additions (the team note, daemon reads and notices included);
+    // one it did not answer goes on with no change (service-only task 16).
+    const forwarded = await forwardPrompt(event, ctx, sessionId, event.systemPrompt);
+    if (forwarded === null || (forwarded.systemPrompt === event.systemPrompt && !forwarded.message)) return;
     return {
-      ...(systemPrompt !== event.systemPrompt ? { systemPrompt } : {}),
-      ...(notice ? { message: { customType: "probe-daemon", content: notice, display: false } } : {}),
+      ...(forwarded.systemPrompt !== event.systemPrompt ? { systemPrompt: forwarded.systemPrompt } : {}),
+      ...(forwarded.message ? { message: { customType: "probe-daemon", content: forwarded.message, display: false } } : {}),
     };
   };
 
-  // THE GUARD: refused before the tool runs. In both profiles a write aimed at
-  // the daemon's question folder; in the daemon profile also every `probe`
-  // command but the agent's own and every Probe MCP call. Fires for calls a
-  // codemode script makes too, so an inactive tool cannot slip by.
-  //
-  // THE SERVICE FIRST (plan D38, serviceGuard.ts): the call goes to the Probe
-  // service as Claude Code's PreToolUse payload, and the plugin folder's own
-  // pre-tool routes (the Python guard Claude Code runs) answer within 300 ms;
-  // a refusal of theirs is the answer, in their words. guard.ts runs on every
-  // call all the same, as the floor: the Python guard fails OPEN (a route that
-  // broke exits 0 with nothing to say, which reads as "allowed"), so its allow
-  // never overrides a refusal of guard.ts's, whose rules are a port of the
-  // same ones. No service, an older one, out of time, an unclear answer: guard.ts
-  // decides alone, exactly as before. Not under `off`: such a session never
-  // reaches the service (A2).
+  // THE GUARD, in the Probe service: every tool call goes there (a codemode script's too, so an
+  // inactive tool cannot slip by), and its pre-tool routes (the Python guard Claude Code runs)
+  // refuse it in their own words. No service, an older one, out of time: the call runs (fail open,
+  // as every Probe hook); pi runs no guard of its own (service-only task 16).
   /** A tool call as the service's pi routes read it: the path pi will write resolved here, as pi resolves it. */
+  /** The tool call as the service's guard reads it: never the body of a write or an edit (C1). */
   function toolCallFields(event: any, cwd: string): Record<string, unknown> {
-    const fields: Record<string, unknown> = { tool_name: event.toolName, input: event.input, tool_call_id: event.toolCallId };
+    const raw = typeof event.input === "object" && event.input !== null ? event.input as Record<string, unknown> : {};
+    const input = Object.fromEntries(Object.entries(raw).filter(([name]) => !GATE_BULK_FIELDS.has(name)));
+    const fields: Record<string, unknown> = { tool_name: event.toolName, input, tool_call_id: event.toolCallId };
     const path = (event.input as Record<string, unknown> | undefined)?.path;
     if ((event.toolName === PiTool.Write || event.toolName === PiTool.Edit) && typeof path === "string" && path) {
       try {
         fields.resolved_path = resolveLikePi(path, cwd);
       } catch {
-        // a path pi itself would refuse: no service verdict, pi's own guard decides
+        // a path pi itself would refuse: the service reads the call without it
       }
     }
     return fields;
@@ -1383,59 +1108,31 @@ export function prepareExtension(env: ImplEnv): Candidate {
 
   const onToolCall: EventHandler = async (event, ctx) => {
     // The session file exists by the first tool call. Not awaited: a tool must
-    // not wait on a spawn.
-    void startPendingCapture(ctx, "tool_call");
+    // not wait on a footer read.
+    void rereadPendingCapture(ctx, "tool_call");
     try {
       const sessionId = ctx?.sessionManager?.getSessionId();
-      const daemonProfile = inDaemonProfile(s, sessionId);
+      if (!sessionId) return;
       const cwd = ctx?.cwd ?? process.cwd();
-      if (sessionId && forwarder.isOn(sessionId)) {
-        // A forwarded turn: the service's pre-tool routes decide; pi's own guard does not run.
-        const block = answeredEffects(await forwarder.send(ForwardedEvent.ToolCall, ctx, toolCallFields(event, cwd)))?.block;
-        if (!block) return;
-        logLine(`guard refused ${event.toolName} (the service's routes): ${block.slice(0, 120)}`);
-        return { block: true, reason: block };
+      const fields = toolCallFields(event, cwd);
+      const size = Buffer.byteLength(JSON.stringify(fields));
+      if (size > MAX_GATE_PAYLOAD) {
+        // Too big to check is never let through: the input is the agent's to pad (C1).
+        return { block: true, reason: guardDenied("too_big", `${Math.floor(size / 1024)} KiB; the limit is ${MAX_GATE_PAYLOAD / 1024} KiB`) };
       }
-      let own: string | null = null;
-      try {
-        own = guardToolCall(event.toolName, event.input, {
-          daemonProfile,
-          inline: daemonProfile && sessionIsInline(sessionId),
-          inlineReadOnly: sessionInlineReadOnly(sessionId),
-          env: process.env,
-          cwd,
-        });
-      } catch (err) {
-        // A guard bug must never take the session's tools down with it.
-        logLine(`guard failed open: ${err instanceof Error ? err.message : String(err)}`);
+      const answer = await forwarder.send(ForwardedEvent.ToolCall, ctx, fields);
+      // Only a forgery is refused (`not_harness`: it only ever stops the forger). No service, out of
+      // time (a slow service never stops the agent), or any other refusal: the call goes on, logged.
+      if (answer?.outcome === ForwardOutcome.Refused) {
+        if (answer.refusedReason === REFUSED_NOT_HARNESS) return { block: true, reason: guardDenied("not_harness") };
+        logLine(`guard: the Probe service did not check ${event.toolName} (${answer.refusedReason ?? "refused"}); `
+          + "it went on. If this keeps happening, run `probe doctor`.");
+        return;
       }
-      if (!s.service.asked && !probeIsOff(s)) {
-        // A session that started `off` asked for no socket at session_start.
-        const runtime = resolveTapRuntime(tapRuntimeDeps());
-        if (runtime) askServiceSocket(s, runtime);
-      }
-      const answered = probeIsOff(s)
-        ? null
-        : await guardViaService(
-            {
-              toolName: event.toolName,
-              input: event.input,
-              toolCallId: event.toolCallId,
-              sessionId,
-              transcriptPath: ctx?.sessionManager?.getSessionFile?.(),
-              cwd,
-              daemonProfile,
-              extensionDir: resourceRoot,
-              env: process.env,
-              socket: s.service.socket,
-            },
-            { clientVersion: PACKAGE_VERSION },
-          );
-      const reason = answered?.reason ?? own;
-      if (reason === null) return;
-      const by = answered?.reason ? " (the service's routes)" : "";
-      logLine(`guard refused ${event.toolName}${by}: ${reason.slice(0, 120)}`);
-      return { block: true, reason };
+      const block = answeredEffects(answer)?.block;
+      if (!block) return;
+      logLine(`guard refused ${event.toolName} (the service's routes): ${block.slice(0, 120)}`);
+      return { block: true, reason: block };
     } catch (err) {
       // A guard bug must never take the session's tools down with it.
       logLine(`guard failed open: ${err instanceof Error ? err.message : String(err)}`);
@@ -1449,7 +1146,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // user message and would push/pull far more than needed. See teamNote.ts's
   // module docstring for why this is a full sync, detached, and fail-open.
   const onAgentSettled: EventHandler = async (_event, ctx) => {
-    await startPendingCapture(ctx, "agent_settled");
+    await rereadPendingCapture(ctx, "agent_settled");
     if (probeIsOff(s)) return;
     // The reads poller starts at a prompt only once the daemon serves this
     // session. A daemon that came up mid-turn (a new session's capture starts
@@ -1475,15 +1172,12 @@ export function prepareExtension(env: ImplEnv): Candidate {
         // No session manager on this event: the worker keeps its quiet timer.
       }
     }
-    // The service's turn-end record-keeping (the note's sync among it), else this one's own sync.
-    // Read per settle, not cached: one small file, and an opt-out made in the
-    // wizard mid-session stops the next sync rather than the next session's.
-    if ((await forwarder.send(ForwardedEvent.AgentSettled, ctx)) !== null) return; // forwarded, or queued
-    if (hasProbePointer(process.env) && !teamItemsHidden(process.env)) spawnTeamNoteSync(realTeamNoteSyncDeps());
+    // The service's turn-end record-keeping (the team note's sync among it), or queued for the next one.
+    await forwarder.send(ForwardedEvent.AgentSettled, ctx);
   };
 
   // An inline agent that leaves a summary or a note owed is sent back, as the
-  // plugin's Stop hook does (owed.ts). At `agent_before_settle`, NOT
+  // plugin's Stop hook does (the service's routes decide). At `agent_before_settle`, NOT
   // agent_settled: pi fires that one after every run, a run the researcher
   // stopped (Esc) and a provider error included, and a new turn there would
   // restart an agent they just stopped. Here only a run that `completed` is
@@ -1491,19 +1185,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
   const onAgentBeforeSettle: EventHandler = async (event, ctx) => {
     if (event?.outcome !== ActivityOutcome.Completed || probeIsOff(s)) return;
     const forwarded = await forwarder.send(ForwardedEvent.AgentBeforeSettle, ctx, { outcome: event.outcome });
-    if (forwarded !== null) {
-      const text = answeredEffects(forwarded)?.continueText;
-      return text ? { entries: [{ type: "custom_message", customType: "probe-owed", content: text, display: true }], continue: true } : undefined;
-    }
-    try {
-      const sid = ctx?.sessionManager?.getSessionId();
-      if (!sid || !inDaemonProfile(s, sid) || !sessionIsInline(sid) || !agentOwes(sid)) return;
-      const text = await owedSendBack(sid, { execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env });
-      if (!text) return;
-      return { entries: [{ type: "custom_message", customType: "probe-owed", content: text, display: true }], continue: true };
-    } catch (err) {
-      logLine(`owed before settle: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    const text = answeredEffects(forwarded)?.continueText;
+    return text ? { entries: [{ type: "custom_message", customType: "probe-owed", content: text, display: true }], continue: true } : undefined;
   };
 
   // A compaction took the inline notice out of the agent's context: the next
@@ -1517,8 +1200,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // THE TRACKING SWITCH. `input` fires on the RAW line, before pi expands
   // `/skill:<name>` — which is what lets a `/track-work` typed out of Claude
   // Code habit be rewritten to pi's own spelling instead of reaching the model
-  // as prose pi ignored. See trackingSwitch.ts for why this is so much smaller
-  // than the Python guard it brings to parity.
+  // as prose pi ignored. The switch itself is the service's guard (a typed line, from pi itself).
   const onInput: EventHandler = async (event, ctx) => {
     // Cheap gate FIRST: this handler is on the path of every message the
     // researcher sends, and on all but a handful it must cost one string
@@ -1539,31 +1221,17 @@ export function prepareExtension(env: ImplEnv): Candidate {
     let applied = false;
     if (intent.direction !== null) {
       const sessionId = ctx.sessionManager.getSessionId();
-      // PR 7: a forwarded turn's switch is the service's guard (a typed line, from pi itself).
-      const forwarded = sessionId ? await forwarder.send(ForwardedEvent.Input, ctx, { text: event.text, source: event.source }) : null;
-      if (sessionId && forwarded !== null) {
-        // A forwarded turn: the service's switch; one it did not answer leaves the line unchanged.
-        applied = ranToEnd(forwarded);
-        logLine(`tracking switch: the Probe service ${applied ? "ran it" : `did not (${forwarded.outcome})`}`);
-        if (!applied) return { action: "continue" };
-        await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
-      } else if (sessionId) {
-        applied = await applyTrackingSwitch(intent.direction, sessionId, {
-          spawn: realSwitchSpawn,
-          existsSync: fs.existsSync,
-          isExecutable,
-          env: process.env,
-          log: logLine,
-          agentSessionEnv: agentSessionEnv(),
-        });
-        if (applied) {
-          // Read back through the same atomic host bridge instead of deriving
-          // the result from the requested direction (especially `toggle`).
-          await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
-        }
-      } else {
+      if (!sessionId) {
         logLine("tracking switch skipped: no session id");
+        return { action: "transform", text: intent.canonicalText };
       }
+      // The service's switch (service-only task 16): one it did not answer leaves the line unchanged.
+      forwarder.beginTurn(sessionId);
+      const forwarded = await forwarder.send(ForwardedEvent.Input, ctx, { text: event.text, source: event.source });
+      applied = ranToEnd(forwarded);
+      logLine(`tracking switch: the Probe service ${applied ? "ran it" : `did not (${forwarded?.outcome ?? "no session"})`}`);
+      if (!applied) return { action: "continue" };
+      await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
     }
     // Transform, never "handled": the researcher asked for the skill, and the
     // model still needs the manual — not least to READ THE STATE BACK and say

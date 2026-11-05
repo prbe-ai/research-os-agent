@@ -1,34 +1,15 @@
 #!/usr/bin/env bash
-# SessionEnd hook — terminate the tap daemon for this session.
+# SessionEnd hook — the session ended: the Probe service, which records it, finishes it.
 #
-# Touches the shutdown sentinel before SIGTERMing the wrapper so the
-# crash-recovery loop exits instead of respawning the daemon one more time.
+# Touches the shutdown sentinel, then (`--wait`) asks the service to finish the
+# session (`tap finish`: its recorder's last pass and FINALIZE) and WAITS, bounded,
+# for that: returning at once let the agent exit first, and wherever the agent's
+# exit takes the machine with it (a container, a CI job, `claude -p` in a sandbox)
+# the delivery died with it. Nothing here signals a recorder (service-only task 15):
+# no `tap watch` records a session any more.
 #
-# With `--wait`, it then WAITS, bounded, for the daemon to finish. SIGTERM does
-# not kill the daemon: it makes one last pass that delivers the session's
-# FINALIZE, the only signal that the session is over. Returning at once let the
-# agent exit first, and wherever the agent's exit takes the machine with it (a
-# container, a CI job, `claude -p` in a sandbox) the daemon died mid-delivery:
-# 46 of 51 claude_code sessions the server had to end by itself came from one
-# containerized device.
-#
-# ONE hooks.json ENTRY: this script with `--wait`, under a 20s timeout. Through
-# tap 0.9.24 there were two: the original entry (timeout 3, no flag), kept
-# byte-identical because Codex trusts each hook by a hash of its whole entry,
-# timeout included, and silently skips one whose hash changed until the
-# researcher re-approves it, plus a second entry with `--wait`. Every Probe
-# plugin now keeps exactly one entry per event, so the flagless one is gone: a
-# Codex user who had approved only that one approves this one once in `/hooks`
-# (`probe status` says so, and its `--json` `codex_hooks` tells the desktop
-# app). Codex clamps the 20s to 3s (it says so in `/hooks` as "1 issue loading
-# hooks"; the 20s stays, because Claude Code enforces each hook's own timeout
-# and a container that raises its exit budget needs the full wait).
-#
-# Without the flag the script still stops the daemon and returns at once. A
-# Codex session that started on an older release keeps the two entries it
-# loaded then, and once its start folder is replaced both run THIS script, in
-# either order, so the pid is handed over in a `.stopping` file before the pid
-# file is removed.
+# ONE hooks.json ENTRY: this script with `--wait`, under a 20s timeout (Codex clamps
+# it to 3s). Without the flag it touches the sentinel and returns at once.
 #
 # CLAUDE CODE'S EXIT BUDGET IS NOT THE ENTRY'S TIMEOUT. At exit Claude Code
 # bounds the whole SessionEnd phase at CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
@@ -155,143 +136,19 @@ WATCHER_PREFIX="probe-research-tap"
 # it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
 # variable names there as a Windows path (session-start.sh sets it).
 WATCHER_DIR=/tmp
-case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
+case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac
 PID_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
 SHUTDOWN_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 STOPPING_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping"
 
 touch "$SHUTDOWN_FILE"
 
-# A watcher file of this user's: a regular file, not a link, owned by us. /tmp
-# is shared, so a file anyone else put there names nothing of ours, and a link
-# to a tty or a FIFO would block the read below.
-own_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; }
-# The pid in watcher file $1, or nothing.
-pid_in() {
-    local pid=""
-    own_file "$1" || return 0
-    pid=$(head -c 32 "$1" 2>/dev/null | tr -d '[:space:]' || true)
-    case "$pid" in '' | *[!0-9]*) return 0 ;; esac
-    [ "$pid" -gt 1 ] 2>/dev/null || return 0
-    printf '%s' "$pid"
-}
-# The command line of pid $1: `ps`, else Linux's /proc (a slim container has no
-# `ps`); empty when neither answers.
-cmdline_of() {
-    local cmd=""
-    cmd=$(ps -ww -o command= -p "$1" 2>/dev/null || true)
-    if [ -z "$cmd" ] && [ -r "/proc/$1/cmdline" ]; then
-        cmd=$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null || true)
-    fi
-    printf '%s' "$cmd"
-}
-# Does pid $1 run this session's `tap watch`? Its command line names both, as
-# session-start.sh proves it before replacing a wrapper.
-runs_this_session() {
-    case "$(cmdline_of "$1")" in *"tap watch"*"$SESSION_ID"*) return 0 ;; esac
-    return 1
-}
-# Does the process group pid $1 led still run this session's `tap watch`? The
-# leader itself, or (its wrapper gone, as after a hand-over: the wrapper exits
-# once its TERM trap forwarded) a member of the group: from `ps`, else (no
-# `ps`, or a busybox one that knows no `pgid`/`command`) Linux's /proc, each
-# process's group from its `stat` and its command line from `cmdline`.
-group_runs_this_session() {
-    local group="$1" listing="" d stat rest
-    runs_this_session "$group" && return 0
-    if command -v ps >/dev/null 2>&1; then
-        listing=$(ps -A -ww -o pgid= -o command= 2>/dev/null || true)
-    fi
-    if [ -n "$listing" ]; then
-        printf '%s\n' "$listing" \
-            | awk -v g="$group" -v s="$SESSION_ID" '$1 == g && index($0, "tap watch") && index($0, s) { f = 1 } END { exit !f }'
-        return
-    fi
-    [ -r /proc/self/stat ] || return 1
-    for d in /proc/[0-9]*; do
-        IFS= read -r stat <"$d/stat" 2>/dev/null || continue
-        # `pid (comm) state ppid pgrp ...`: comm may hold spaces, so after the last `) `.
-        rest="${stat##*) }"
-        set -f
-        # shellcheck disable=SC2086
-        set -- $rest
-        set +f
-        [ "${3:-}" = "$group" ] || continue
-        case "$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null || true)" in
-            *"tap watch"*"$SESSION_ID"*) return 0 ;;
-        esac
-    done
-    return 1
-}
+# Nothing here signals a recorder (service-only task 15): the Probe service records the
+# session and finishes it (`tap finish` below). The shutdown sentinel above is a file the
+# service's recorder reads; an older tap's wrapper of this session reads it too.
+rm -f "$PID_FILE" "$STOPPING_FILE" 2>/dev/null || true
 
-# The pid file, or the hand-over a sibling entry left before removing it. Only
-# a pid that is provably THIS session's tap wrapper is ever signalled: /tmp is
-# world-writable and pids are reused, so a pid file the wrapper left when it
-# died (or one a session the service now records kept) can name any process by
-# now, and its group with it. No proof, no signal: the stale pid file is only
-# removed. A hand-over (`.stopping`) is NEVER signalled: the entry that wrote it
-# signalled already. It is only waited on, and only while its group still runs
-# this session's `tap watch`.
-PID=$(pid_in "$PID_FILE")
-HANDED_OVER=0
-if [ -z "$PID" ]; then
-    PID=$(pid_in "$STOPPING_FILE")
-    [ -z "$PID" ] || HANDED_OVER=1
-fi
-LEADER=0
-
-if [ -n "$PID" ] && [ "$HANDED_OVER" = 1 ]; then
-    if kill -0 -- "-$PID" 2>/dev/null && group_runs_this_session "$PID"; then
-        LEADER=1
-    else
-        PID=""
-    fi
-elif [ -n "$PID" ] && runs_this_session "$PID"; then
-    # Written only over nothing or a file of this user's: never through a link.
-    if { [ ! -e "$STOPPING_FILE" ] && [ ! -L "$STOPPING_FILE" ]; } || own_file "$STOPPING_FILE"; then
-        printf '%s' "$PID" >"$STOPPING_FILE" 2>/dev/null || true
-    fi
-    # Kill the wrapper's process group so the Python child dies too — but
-    # ONLY when the wrapper really leads that group.
-    #
-    # `kill -TERM -<PID>` names the process group whose PGID equals PID. A
-    # setsid'd wrapper (0.1.3+) leads its own group, so that is exactly the
-    # wrapper + its child. A pre-0.1.3 wrapper does NOT — it inherited the
-    # hook's PGID.
-    #
-    # The risk is narrower than "a non-leader pid hits some other group": a
-    # PGID exists only because a process with that id led the group, so
-    # while our wrapper holds pid P, no other group can have pgid P. What
-    # CAN happen is an orphaned group — the leader exits, surviving members
-    # keep the group alive, and that pgid is now a free pid. A stale pid
-    # file naming it would then signal strangers. Verify leadership before
-    # using the negated form.
-    # `|| true` is load-bearing under `set -euo pipefail`: ps exits 1 for a
-    # pid that is already gone (the common case — the wrapper may have died
-    # on its own), and without it the assignment aborts this script before
-    # the `rm -f "$PID_FILE"` below, leaking the stale pid file that this
-    # very check exists to defuse.
-    PGID=$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ' || true)
-    if [ -n "$PGID" ] && [ "$PGID" = "$PID" ]; then
-        kill -TERM "-$PID" 2>/dev/null || true
-        LEADER=1
-    elif ! command -v ps >/dev/null 2>&1 && kill -0 -- "-$PID" 2>/dev/null; then
-        # No `ps` (a slim container image) but a group this pid leads
-        # exists: the 0.1.3+ wrapper always leads its own. Signal the
-        # wrapper alone as before, and wait on the group below.
-        kill -TERM "$PID" 2>/dev/null || true
-        LEADER=1
-    else
-        # Not a group leader: signal the wrapper alone. Its TERM trap
-        # forwards to the python child, so both still stop.
-        kill -TERM "$PID" 2>/dev/null || true
-    fi
-else
-    PID=""
-fi
-rm -f "$PID_FILE" 2>/dev/null || true
-
-# `--wait`: stay until the wrapper's group (the daemon) has exited, so the agent
+# `--wait`: stay until the service has finished the session, so the agent
 # cannot exit, and take a container down, before the FINALIZE leaves. Not on
 # `clear` or `resume`: the agent keeps running (and so does the delivery), and a
 # wait there would freeze the researcher's /clear.
@@ -373,18 +230,7 @@ if [ -s "$HOSTED_FILE" ]; then
     rm -f "$HOSTED_FILE" 2>/dev/null || true
 fi
 
-if [ "$WAIT" = 1 ]; then
-    if [ "$LEADER" = 1 ] && [ "$WAITS" = 1 ]; then
-        wait_while kill -0 -- "-$PID"
-    fi
-    rm -f "$STOPPING_FILE" 2>/dev/null || true
-fi
-
-# Deliberately do NOT rm the shutdown sentinel here. If the wrapper missed the
-# forwarded TERM (raced mid-respawn) or a daemon child outlived it, the sentinel
-# is the only remaining stop signal — the wrapper's respawn loop and the daemon's
-# per-tick _shutdown_observed() both watch it. Deleting it would strand that
-# orphan running. The next session-start for this session_id clears the stale
-# sentinel before spawning a fresh wrapper.
+# Deliberately do NOT rm the shutdown sentinel here: a recorder still making its last
+# pass reads it. The next session-start for this session_id clears it.
 
 exit 0

@@ -24,14 +24,10 @@
  * of consent logic that disagree about what "resume" means is exactly the
  * drift worth avoiding.
  *
- * THE WRITE IS NOT REIMPLEMENTED EITHER. This spawns the CLI's existing
- * `probe session track|untrack|toggle`, which the CLI documents as the path
- * "for reconciling a machine where that hook is absent". There is one writer
- * of the tracking signal and it stays in Python.
+ * THE WRITE IS THE SERVICE'S. `extension.ts` forwards the typed line (`input`) to the Probe
+ * service, whose prompt routes (the Python guard) move the switch (service-only task 16): this
+ * file only reads the line and words the notice.
  */
-
-import { type PathEnv } from "./paths.js";
-import { findProbeBinary, type ProbeBinaryDeps } from "./teamNote.js";
 
 /** Verbatim from `hooks/tracking_guard.py`; keep the two in step. */
 const OFF_WORDS = new Set(["off", "stop", "disable", "end"]);
@@ -166,112 +162,4 @@ export function switchAppliedNotice(direction: SwitchDirection): string {
     "Read the resulting state back with `probe session status` and report that, " +
     "rather than describing what tracking does.)"
   );
-}
-
-/**
- * The CLI call each direction makes. ARGUMENT LISTS, not one verb: the switch
- * grew a value, and `session state <name>` is two tokens where `track` was one.
- *
- * The write is still not reimplemented here -- this spawns the CLI's own
- * commands, so there is exactly one writer of the state and it stays in Python.
- */
-//
-// The LONG spellings are sent on purpose, even though the CLI now prints the
-// short ones: this extension ships on its own release train, so it routinely
-// runs against a probe that predates `read` and would reject it. `full` and
-// `read-only` are understood by every version, old and new.
-const SUBCOMMAND: Record<SwitchDirection, readonly string[]> = {
-  full: ["state", "full"],
-  "read-only": ["state", "read-only"],
-  off: ["state", "off"],
-  cycle: ["toggle"],
-  // New in the CLI with the researcher-set inline mode: an older probe refuses
-  // the word (exit 1) and the switch reads as not moved.
-  inline: ["state", "inline"],
-};
-
-/**
- * The CLI refuses a switch move from inside an agent's session the daemon
- * records -- the agent moving it -- so the researcher's own `/probe` is spawned
- * without any coding agent's session variable (`agentSessionEnv`); `--session`
- * names the session.
- */
-function switchEnv(env: PathEnv, agentSessionEnv: readonly string[]): PathEnv {
-  const child: Record<string, string | undefined> = { ...env, PROBE_AGENT: "pi" };
-  for (const name of agentSessionEnv) delete child[name];
-  return child as PathEnv;
-}
-
-/**
- * A child we can WAIT ON, which `daemon.ts`/`teamNote.ts`'s `SpawnFn` is not:
- * those return `{pid, unref}` because both detach and never look back. This
- * one has to resolve on exit — see `applyTrackingSwitch` for why the write is
- * awaited rather than fired and forgotten.
- */
-export interface SwitchChild {
-  on: (event: string, cb: (arg: unknown) => void) => void;
-}
-
-export type SwitchSpawnFn = (
-  command: string,
-  args: string[],
-  options: { detached: boolean; stdio: "ignore"; env: PathEnv },
-) => SwitchChild;
-
-export interface TrackingSwitchDeps extends ProbeBinaryDeps {
-  spawn: SwitchSpawnFn;
-  log: (message: string) => void;
-  /** Every coding agent's session variable (the harness registry's `session_env`). */
-  agentSessionEnv?: readonly string[];
-}
-
-/**
- * Write the signal, and RESOLVE ONLY ONCE THE WRITE HAS LANDED.
- *
- * Deliberately awaited, unlike `spawnTeamNoteSync`'s detached fire-and-forget.
- * The very next thing that happens is the model receiving the skill text,
- * which instructs it to read the state back with `probe session status`; a
- * detached write would race that read and the model would report the OLD
- * state as authoritative. The write itself is a local marker file, so the cost
- * is the CLI's import time and nothing else, and it is only ever paid on a
- * line that already matched a switch spelling.
- *
- * Never throws and never rejects: a broken switch must degrade to "the skill
- * says it did not move", which the agent is already told how to report, rather
- * than taking down the researcher's turn.
- */
-export async function applyTrackingSwitch(
-  direction: SwitchDirection,
-  sessionId: string,
-  deps: TrackingSwitchDeps,
-): Promise<boolean> {
-  const binary = findProbeBinary(deps);
-  if (!binary) {
-    deps.log("tracking switch skipped: no probe CLI found on PATH or in the documented fallback locations");
-    return false;
-  }
-  try {
-    const child = deps.spawn(binary, ["session", ...SUBCOMMAND[direction], "--session", sessionId], {
-      detached: false,
-      stdio: "ignore",
-      env: switchEnv(deps.env, deps.agentSessionEnv ?? []),
-    });
-    const code = await waitForExit(child);
-    if (code !== 0) {
-      deps.log(`tracking switch (${direction}) exited ${code}`);
-      return false;
-    }
-    deps.log(`tracking switch: ${direction} for ${sessionId}`);
-    return true;
-  } catch (err) {
-    deps.log(`tracking switch (${direction}) failed: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
-  }
-}
-
-function waitForExit(child: SwitchChild): Promise<number> {
-  return new Promise((resolve) => {
-    child.on("error", () => resolve(-1));
-    child.on("exit", (code) => resolve(typeof code === "number" ? code : -1));
-  });
 }

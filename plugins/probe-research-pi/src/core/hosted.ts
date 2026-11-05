@@ -44,7 +44,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, win32 } from "node:path";
 
@@ -242,26 +242,6 @@ const machineKeys = createMachineKeys();
 /** `paths.lock_path`: the first service lock to try on this machine. */
 export function serviceLockFile(env: PathEnv = process.env, platform: NodeJS.Platform = process.platform): string {
   return machineKeys.lockFiles(env, platform)[0];
-}
-
-/** A `.hosted` marker's identity: a new or rewritten one (`tap record` writes it whole) is another. */
-export interface MarkerStamp {
-  ino: string;
-  mtimeNs: string;
-}
-
-/** The session's `.hosted` marker as it is now (lstat, no link followed), or null when there is none. */
-export function hostedMarkerStamp(sessionId: string): MarkerStamp | null {
-  try {
-    const info = lstatSync(hostedFile(sessionId), { bigint: true });
-    return { ino: String(info.ino), mtimeNs: String(info.mtimeNs) };
-  } catch {
-    return null;
-  }
-}
-
-export function sameMarkerStamp(a: MarkerStamp | null, b: MarkerStamp | null): boolean {
-  return a === null || b === null ? a === b : a.ino === b.ino && a.mtimeNs === b.mtimeNs;
 }
 
 /**

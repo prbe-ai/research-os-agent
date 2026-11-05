@@ -16,6 +16,9 @@ from .env import (
     HOOK_PROXY_V2,
     HOOK_REPLY_ACTIONS,
     HOOK_ROUTES_SERVICE,
+    HOOK_RUN_OPTIONS,
+    HOOK_RUN_ROOT_ENVS,
+    HOOK_RUN_WAITS,
     HOOK_WAIT_MS,
     MAX_CONTEXT_VALUE,
     MAX_HOOK_EVENT_NAME,
@@ -25,6 +28,7 @@ from .env import (
     MAX_HOOK_QUEUE_ENV,
     MAX_HOOK_QUEUE_ITEM,
     MAX_HOOK_WAIT_MS,
+    MAX_STATUSLINE_PAYLOAD,
     MAX_TELEMETRY_ENTRIES,
     hook_queue_env,
     runtime_env_name,
@@ -197,6 +201,17 @@ def need_hook_run(params: dict) -> dict:
         env          the session's environment (at most MAX_HOOK_ENV strings)
         cwd          the session's folder (absolute)
         timeout_ms   how long the caller waits (default HOOK_WAIT_MS)
+        harness      optional: the harness registry id of the hook that sent it (a dispatcher a
+                     harness ran itself, service-only task 13): the service checks the caller
+                     is that harness's hook, then serves every lane
+        options      optional: what follows the lane (HOOK_RUN_OPTIONS)
+        root_env     optional, with `harness`: the variable its routes read the folder from
+                     (HOOK_RUN_ROOT_ENVS; default Claude Code's)
+        event_id     optional, with `harness`: the event's id (32 lowercase hex), the same one a
+                     client that got no answer spools it under: whichever runs it first claims it
+                     (`<queue>/<event_id>.claim`), so it runs once
+        wait         optional, with `harness`, on the stop lane: a held wait (HOOK_RUN_WAITS), run
+                     as a slice until just before the caller stops waiting
     """
     root = _need_path(params, "plugin_root")
     lane = params.get("lane")
@@ -206,16 +221,24 @@ def need_hook_run(params: dict) -> dict:
     payload = params.get("payload")
     if not isinstance(payload, dict):
         raise invalid_params("payload must be a JSON object")
+    harness = params.get("harness")
+    if harness is not None and not is_agent_id(harness):
+        raise invalid_params("harness must be a harness registry id")
     named = payload.get("hook_event_name")
-    if named is not None and named != event:
-        raise invalid_params(f"payload.hook_event_name must be {event!r} on lane {lane!r}")
-    payload = {**payload, "hook_event_name": event}
+    # A harness's own hook keeps the name its adapter gave (Kimi's typed skill on turn-started is a prompt).
+    if harness is None or not isinstance(named, str):
+        if named is not None and named != event:
+            raise invalid_params(f"payload.hook_event_name must be {event!r} on lane {lane!r}")
+        payload = {**payload, "hook_event_name": event}
     env = need_env(params)
     cwd = _need_path(params, "cwd")
     timeout = params.get("timeout_ms", HOOK_WAIT_MS)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= MAX_HOOK_WAIT_MS:
         raise invalid_params(f"timeout_ms must be an integer from 1 to {MAX_HOOK_WAIT_MS}")
-    return {
+    options = params.get("options", [])
+    if not isinstance(options, list) or not all(option in HOOK_RUN_OPTIONS for option in options):
+        raise invalid_params(f"options must be a list of {sorted(HOOK_RUN_OPTIONS)}")
+    request = {
         "root": root,
         "lane": lane,
         "event": event,
@@ -224,7 +247,43 @@ def need_hook_run(params: dict) -> dict:
         "env": dict(env),
         "cwd": cwd,
         "timeout_s": timeout / 1000.0,
+        "harness": harness,
     }
+    if options:
+        request["argv"] = [lane, *options]
+    root_env = params.get("root_env")
+    if root_env is not None:
+        if harness is None or root_env not in HOOK_RUN_ROOT_ENVS:
+            raise invalid_params(f"root_env must be one of {sorted(HOOK_RUN_ROOT_ENVS)}, with a harness")
+        request["root_env"] = root_env
+    event_id = params.get("event_id")
+    if event_id is not None:
+        if harness is None or not _is_event_id(event_id):
+            raise invalid_params(f"event_id must be {HOOK_EVENT_ID_LEN} lowercase hex digits, with a harness")
+        request["event_id"] = event_id
+    wait = params.get("wait")
+    if wait is not None:
+        if harness is None or wait not in HOOK_RUN_WAITS or lane != "stop":
+            raise invalid_params(f"wait must be one of {sorted(HOOK_RUN_WAITS)}, with a harness, on the stop lane")
+        request["wait"] = wait
+    return request
+
+
+def need_statusline_render(values: dict) -> dict:
+    """`statusline.render`'s params, checked: `{payload (str), env}`.
+
+        payload  the status-line command's stdin, as it read it (a string; empty when a chain
+                 before it drained the pipe); parsed here, never by the command
+        env      the few variables the renderer reads (`jobs/statusline_render.py`)
+    """
+    raw = values.get("payload", "")
+    if not isinstance(raw, str) or len(raw) > MAX_STATUSLINE_PAYLOAD:
+        raise invalid_params(f"payload must be a string of at most {MAX_STATUSLINE_PAYLOAD} characters")
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        payload = {}
+    return {"payload": payload if isinstance(payload, dict) else {}, "env": need_env(values)}
 
 
 def _need_proxy_fields(values: dict) -> dict:
@@ -387,6 +446,9 @@ def need_hook_queue(params: dict) -> dict:
         cwd          the event's working folder (absolute)
         at           when it happened (epoch seconds; optional): the queue
                      runs events oldest first
+        sent         optional: true when the event was first sent as `hooks.run` under this id
+                     (a harness's run of the dispatcher, `hooks/_hook_forward.py`): the queue runs
+                     it only if it can still claim the id, so one the service ran never runs twice
 
     The whole item is at most MAX_HOOK_QUEUE_ITEM bytes as JSON."""
     event_id = params.get("id")
@@ -421,6 +483,8 @@ def need_hook_queue(params: dict) -> dict:
         raise invalid_params("at must be a number (epoch seconds)")
     item = {"id": event_id, "plugin_root": root, "lane": lane, "payload": payload, "env": hook_queue_env(env),
             "cwd": cwd, "at": float(at)}
+    if params.get("sent") is True:
+        item["sent"] = True
     if len(json.dumps(item).encode("utf-8")) > MAX_HOOK_QUEUE_ITEM:
         raise invalid_params(f"a queued event must be at most {MAX_HOOK_QUEUE_ITEM} bytes as JSON")
     return item
@@ -521,6 +585,41 @@ def need_mailbox_claim(params: dict) -> dict:
         raise invalid_params("token must be at most 64 letters, digits or underscores")
     out.update(names=list(dict.fromkeys(names)), by=by, token=token)
     return out
+
+
+#: What of the caller's environment `probe session initialize` reads, run by the service for pi
+#: (pi's `trackingChildEnv`): where its state and config are, its settings' overrides, where pi and its
+#: capture live. Never what names code to run (PATH: the child's commands are the service's own).
+SESSION_INITIALIZE_ENV = frozenset({
+    "XDG_STATE_HOME", "XDG_CONFIG_HOME", "PROBE_CONFIG_PATH", "PROBE_SESSION_TRACKING",
+    "PROBE_SESSION_STATE", "PI_CODING_AGENT_DIR", "PROBE_PI_TAP_PLUGIN_DIR",
+})
+#: An inbox message's id in pi's shown log (`mailbox.INBOX_ID_PREFIX` then 32 hex), at most this many at once.
+INBOX_MESSAGE_ID = re.compile(r"s[0-9a-f]{32}")
+MAX_DELIVERED = 64
+
+
+def need_session_initialize(values: dict) -> dict:
+    """`session.initialize`: `{sid, cwd, agent, env}`: the session, its start folder (absolute), the
+    agent calling (a harness id; pi's by default) and the part of its environment the command reads
+    (SESSION_INITIALIZE_ENV: anything else is dropped)."""
+    agent = values.get("agent", "pi")  # harness-literal-ok: the one extension that calls it
+    if not is_agent_id(agent):
+        raise invalid_params("agent must be a harness registry id")
+    env = need_env(values)
+    return {"sid": need_sid(values), "cwd": _need_path(values, "cwd"), "agent": agent,
+            "env": {k: v for k, v in env.items() if k in SESSION_INITIALIZE_ENV}}
+
+
+def need_mailbox_delivered(values: dict) -> dict:
+    """`mailbox.delivered`: `{sid, message_ids, env}`: the inbox messages (INBOX_MESSAGE_ID, at most
+    MAX_DELIVERED) the caller showed its agent, and its environment (the daemon's key and the
+    Probe API travel with it, D11)."""
+    ids = values.get("message_ids")
+    if (not isinstance(ids, list) or not ids or len(ids) > MAX_DELIVERED
+            or not all(isinstance(i, str) and INBOX_MESSAGE_ID.fullmatch(i) for i in ids)):
+        raise invalid_params(f"message_ids must be 1 to {MAX_DELIVERED} inbox message ids")
+    return {"sid": need_sid(values), "message_ids": list(dict.fromkeys(ids)), "env": need_env(values)}
 
 
 def need_mailbox_answer(params: dict) -> dict:

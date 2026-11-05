@@ -10,11 +10,9 @@ test_ensure_daemon_hook.py and test_codex_research_os_contract.py, unchanged.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import shutil
-import signal
 import subprocess
 import time
 import uuid
@@ -30,13 +28,13 @@ FIXTURE_SESSION = "c1c22c25-6382-4e79-8f00-a1a45e3c8e77"  # the one with recorde
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="the hooks are POSIX shell")
 
-#: Stands in for the daemon's interpreter ($PLUGIN_ROOT/.venv/bin/python3):
-#: records what session-start.sh spawns and starts nothing.
+#: Stands in for the tap's interpreter ($PLUGIN_ROOT/.venv/bin/python3): records what session-start.sh
+#: asks the Probe service (`tap record`, not taken: nothing records here).
 STUB_PYTHON = """#!/bin/bash
-if [ "$1" = "-c" ]; then
-    shift 6  # -c SHIM /bin/bash -c WRAPPER wrapper
+if [ "$1 $2 $3" = "-m tap record" ]; then
+    shift 3
     printf '%s\\n' "$@" >"$STUB_SPAWN"
-    echo $$ >"$6"
+    exit 1
 fi
 exit 0
 """
@@ -108,7 +106,7 @@ def kimi(kimi_fixtures, tmp_path):
         "wire": session_dir / "agents" / "main" / "wire.jsonl", "fixtures": kimi_fixtures,
     }
     yield ctx
-    for suffix in (".pid", ".shutdown", ".owner", ".stopping"):
+    for suffix in (".pid", ".shutdown", ".owner", ".stopping", ".hosted"):
         Path(f"/tmp/probe-research-tap-watcher-{sid}{suffix}").unlink(missing_ok=True)
 
 
@@ -123,13 +121,13 @@ def _run(ctx, event: str, payload: str, *, cwd: Path | None = None):
 def test_session_start_finds_the_wire_from_kimi_s_index(kimi) -> None:
     result = _run(kimi, "SessionStart", _payload("SessionStart", kimi["fixtures"], kimi["sid"]))
     assert result.returncode == 0, result.stderr
-    spawned = (kimi["tmp"] / "spawn.args").read_text().splitlines()
-    sid, _cwd, _py, root, log, pid_file, prefix, flag, transcript = spawned
-    assert sid == kimi["sid"], "Probe stores the bare UUID, never session_<uuid>"
-    assert (flag, Path(transcript)) == ("--transcript", kimi["wire"])
-    assert Path(root) == kimi["plugin"]
-    assert Path(log) == kimi["state"] / "logs" / f"{kimi['sid']}.log"
-    assert (prefix, pid_file) == ("probe-research-tap", f"/tmp/probe-research-tap-watcher-{kimi['sid']}.pid")
+    asked = (kimi["tmp"] / "spawn.args").read_text().splitlines()
+    flag, sid, _cwd_flag, _cwd, root_flag, root, within_flag, _within, transcript_flag, transcript = asked
+    assert within_flag == "--within", "bounded by the hook's own budget"
+    assert (flag, sid) == ("--session-id", kimi["sid"]), "Probe stores the bare UUID, never session_<uuid>"
+    assert (transcript_flag, Path(transcript)) == ("--transcript", kimi["wire"])
+    assert (root_flag, Path(root)) == ("--plugin-root", kimi["plugin"])
+    assert not Path(f"/tmp/probe-research-tap-watcher-{kimi['sid']}.pid").exists(), "nothing records here"
     # The version stamp read the Kimi manifest, the folder its registry row names.
     assert (kimi["state"] / ".installed_version").read_text() == MANIFEST["version"]
 
@@ -148,7 +146,7 @@ def test_kimi_s_own_token_variable_is_enough(kimi) -> None:
     (kimi["state"] / ".token").unlink()
     kimi["env"]["PROBE_KIMI_TAP_TOKEN"] = "ros_ing_kimi_env_token"
     _run(kimi, "SessionStart", _payload("SessionStart", kimi["fixtures"], kimi["sid"]))
-    assert (kimi["tmp"] / "spawn.args").read_text().splitlines()[0] == kimi["sid"]
+    assert (kimi["tmp"] / "spawn.args").read_text().splitlines()[:2] == ["--session-id", kimi["sid"]]
 
 
 def test_session_start_without_a_wire_starts_nothing(kimi) -> None:
@@ -191,34 +189,26 @@ def test_turn_end_marks_the_canonical_session_at_the_wire_s_size(kimi) -> None:
     assert turn["offset"] == kimi["wire"].stat().st_size
 
 
-def _fake_daemon(sid: str, linger_s: float) -> subprocess.Popen:
-    """A wrapper as session-start.sh starts one: its command line names `tap
-    watch` and the session id, which session-end.sh checks before signalling."""
-    proc = subprocess.Popen(
-        ["bash", "-c", f'trap "sleep {linger_s}; exit 0" TERM; while :; do sleep 0.05; done'
-         ' # "$PY" -m tap watch --session-id "$1"', "wrapper", sid],
-        start_new_session=True,
-    )
-    Path(f"/tmp/probe-research-tap-watcher-{sid}.pid").write_text(str(proc.pid))
-    time.sleep(0.3)
-    return proc
-
-
-def test_session_end_stops_the_canonical_session_and_waits_its_full_budget(kimi) -> None:
-    """Kimi awaits its SessionEnd hooks up to the entry's timeout, so the
-    `--wait` entry waits for the FINALIZE past Claude Code's 1.5s budget."""
-    proc = _fake_daemon(kimi["sid"], linger_s=2.5)
+def test_session_end_finishes_the_canonical_session_and_waits_its_full_budget(kimi) -> None:
+    """Kimi awaits its SessionEnd hooks up to the entry's timeout, so the `--wait` entry waits for
+    the service's FINALIZE (`tap finish`) past Claude Code's 1.5s budget."""
+    hosted = Path(f"/tmp/probe-research-tap-watcher-{kimi['sid']}.hosted")
+    hosted.write_text(str(os.getpid()))
+    # The interpreter the hook finds: `tap finish` takes 2.5 s to answer; everything else runs as is.
+    shim = kimi["tmp"] / "bin" / "python3"
+    shim.parent.mkdir()
+    shim.write_text(f'#!/bin/bash\n[ "$1 $2 $3" = "-m tap finish" ] && {{ sleep 2.5; exit 0; }}\n'
+                    f'exec {shutil.which("python3")} "$@"\n')
+    shim.chmod(0o755)
     try:
         started = time.monotonic()
-        _run(kimi, "SessionEnd", _payload("SessionEnd", kimi["fixtures"], kimi["sid"]))
+        env = {**kimi["env"], "PATH": f"{shim.parent}:{kimi['env']['PATH']}"}
+        _run({**kimi, "env": env}, "SessionEnd", _payload("SessionEnd", kimi["fixtures"], kimi["sid"]))
         elapsed = time.monotonic() - started
         assert Path(f"/tmp/probe-research-tap-watcher-{kimi['sid']}.shutdown").is_file()
-        assert proc.wait(timeout=5) == 0
-        assert elapsed >= 2.2, f"returned after {elapsed:.2f}s, before the daemon finished"
+        assert elapsed >= 2.2, f"returned after {elapsed:.2f}s, before the service finished"
     finally:
-        with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait(timeout=10)
+        hosted.unlink(missing_ok=True)
 
 
 # --- the manifest ------------------------------------------------------------------

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..sanitizers import codex as codex_sanitize, kimi_code as kimi_sanitize, pi as pi_sanitize, claude_code as sanitize
 from ..sanitizers.claude_code import CallModels, call_models
+from ..pinned import open_transcript
 #: The sanitizer modules a registry row can name (`capture.sanitizer`). A new
 #: harness adds its module here and in the Makefile's sync-tap-core list.
 _SANITIZER_MODULES = {
@@ -67,7 +68,7 @@ def _resume_call_models(state: dict, path: Path, sanitize_line, markers: tuple[b
         return models
     start = max(0, at - CALL_MODELS_LOOKBACK_BYTES)
     try:
-        with path.open("rb") as handle:
+        with open_transcript(path) as handle:
             handle.seek(start)
             window = handle.read(at - start)
     except OSError:

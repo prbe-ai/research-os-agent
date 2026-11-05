@@ -159,20 +159,18 @@ def _watch_commands(session_id: str, timeout: float = 20.0) -> list[str]:
 
 def test_an_old_python3_runs_the_tap_on_the_probe_cli_interpreter(machine) -> None:
     """THE regression: python3 on PATH is 3.9, the Probe CLI's interpreter is new
-    enough. The tap must run there, not crash-loop on python3."""
+    enough. The tap must run there, not crash on python3: its `tap record` (the
+    Probe service records the session, tap 0.10.45) runs on the CLI's interpreter."""
     _cli_python(machine["home"], sys.executable)
     (machine["state"] / ".python-missing").write_text("python3 3.9.6\n")
 
     answer = _session_start(machine)
 
     assert answer == {"continue": True}
-    watches = _watch_commands(machine["sid"])
-    assert watches, "no `tap watch` is running: the tap died on the old python3"
-    assert all(line.startswith(f"{sys.executable} -m tap watch") for line in watches), watches
-    time.sleep(1.5)
-    assert _watch_commands(machine["sid"], timeout=1), "the tap did not stay up"
+    assert _watch_commands(machine["sid"], timeout=1) == [], "nothing records here: no `tap watch` of its own"
     log = (machine["state"] / "logs" / f"{machine['sid']}.log").read_text()
     assert "StrEnum" not in log
+    assert "tap: the Probe service" in log, log  # `tap record` ran to its answer on the new interpreter
     assert not (machine["state"] / ".python-missing").exists(), "a stale verdict outlived a found interpreter"
     assert (machine["state"] / ".python").read_text().strip() == sys.executable
 

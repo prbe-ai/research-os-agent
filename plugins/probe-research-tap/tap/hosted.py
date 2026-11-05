@@ -36,6 +36,7 @@ ENDED = "ended"  # the session ended and its recorder finished it
 PAUSED = "paused"  # told to leave without finishing (a service restart)
 STOPPED = "stopped"  # the loop returned for another reason (no token, killswitch, claimed elsewhere)
 FAILED = "failed"  # an error the service's guard restarts after
+REFUSED = "refused"  # its pinned transcript was swapped (`tap.main.EXIT_TRANSCRIPT_SWAPPED`): never again
 
 
 @dataclass
@@ -136,6 +137,8 @@ def _argv(session: dict) -> list[str]:
     argv = ["--session-id", str(session["sid"]), "--cwd", str(session["cwd"])]
     if session.get("transcript"):
         argv += ["--transcript", str(session["transcript"])]
+        if session.get("transcript_identity"):
+            argv += ["--transcript-identity", str(session["transcript_identity"])]
     else:
         argv += ["--transcript-dir", str(session["transcript_dir"])]
     return argv
@@ -186,6 +189,9 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
                 code = tap_main.main(_argv(session), hosted=controls)
             except SystemExit as exc:  # argparse, or a sys.exit deep inside
                 return FAILED, f"exited {exc.code!r}"
+            if code == tap_main.EXIT_TRANSCRIPT_SWAPPED:
+                _drop_marker(cfg.hosted_file(str(session["sid"])), str(session["sid"]), mine)
+                return REFUSED, "its transcript was swapped after the service accepted it"
             if controls.pause.is_set():
                 return PAUSED, ""
             if controls.stop.is_set() or cfg.shutdown_sentinel(str(session["sid"])).exists():

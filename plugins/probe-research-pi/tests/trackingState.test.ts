@@ -1,52 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { vi } from "vitest";
 
 import {
   initializeTrackingState,
   parseProfile,
   Recorder,
+  SESSION_INITIALIZE,
   trackingStatusText,
-  type TrackingExecFileFn,
+  type TrackingStateDeps,
 } from "../src/core/trackingState.js";
 
+/** The Probe service as `initializeTrackingState` asks it: `session.initialize` answers `{state}`, the
+ * JSON `probe session initialize` prints (the service runs it: service-only task 16). */
+function service(state: unknown, calls: Array<{ method: string; params: Record<string, unknown>; waitMs: number }> = []):
+  TrackingStateDeps["call"] {
+  return async (method, params, waitMs) => {
+    calls.push({ method, params, waitMs });
+    return state === null ? null : { state };
+  };
+}
+
+function deps(call: TrackingStateDeps["call"], env: Record<string, string> = { PATH: "/usr/bin", HOME: "/home/x" }): TrackingStateDeps {
+  return { call, env, log: () => {} };
+}
+
 describe("initializeTrackingState", () => {
-  it("delegates initialization to the atomic CLI bridge and parses its state", async () => {
-    const calls: Array<{ command: string; args: string[] }> = [];
-    const execFile: TrackingExecFileFn = (command, args, _options, callback) => {
-      calls.push({ command, args });
-      callback(
-        null,
-        JSON.stringify({
-          session_id: "pi-session-1",
-          tracking: false,
-          signal: "off",
-          seeded: true,
-          source: "/repo/.probe/config.json",
-        }),
-        "",
-      );
-    };
-
-    const state = await initializeTrackingState("pi-session-1", "/repo/packages/app", {
-      execFile,
-      existsSync: () => true,
-      isExecutable: () => true,
-      env: { PATH: "/usr/bin", HOME: "/home/x" },
-      log: () => {},
-    });
-
-    expect(calls).toEqual([
-      {
-        command: "/usr/bin/probe",
-        args: [
-          "session",
-          "initialize",
-          "--session",
-          "pi-session-1",
-          "--cwd",
-          "/repo/packages/app",
-        ],
-      },
+  it("asks the Probe service to initialize the session and parses its state: pi spawns no CLI", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown>; waitMs: number }> = [];
+    const answer = { session_id: "pi-session-1", tracking: false, signal: "off", seeded: true, source: "/repo/.probe/config.json" };
+    const state = await initializeTrackingState("pi-session-1", "/repo/packages/app", deps(service(answer, calls)));
+    expect(calls.map(({ method, params }) => [method, params.sid, params.cwd, params.agent])).toEqual([
+      [SESSION_INITIALIZE, "pi-session-1", "/repo/packages/app", "pi"],
     ]);
     expect(state).toEqual({
       tracking: false,
@@ -65,20 +48,8 @@ describe("initializeTrackingState", () => {
     { sent: "lean", read: Recorder.Agent },
     { sent: 1, read: Recorder.Agent },
   ])("reads profile $sent as $read, and never fails the payload over it", async ({ sent, read }) => {
-    const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
-      callback(
-        null,
-        JSON.stringify({ session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine", profile: sent }),
-        "",
-      );
-    };
-    const state = await initializeTrackingState("pi-session-1", "/repo", {
-      execFile,
-      existsSync: () => true,
-      isExecutable: () => true,
-      env: { PATH: "/usr/bin", HOME: "/home/x" },
-      log: () => {},
-    });
+    const answer = { session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine", profile: sent };
+    const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
     expect(state?.profile).toBe(read);
     expect(parseProfile(sent)).toBe(read);
   });
@@ -93,162 +64,46 @@ describe("initializeTrackingState", () => {
     { sent: 3, read: undefined },
     { sent: undefined, read: undefined },
   ])("reads the retired-config notice $sent leniently", async ({ sent, read }) => {
-    const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
-      callback(
-        null,
-        JSON.stringify({
-          session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine",
-          retired_config_notice: sent,
-        }),
-        "",
-      );
+    const answer = {
+      session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine",
+      retired_config_notice: sent,
     };
-    const state = await initializeTrackingState("pi-session-1", "/repo", {
-      execFile,
-      existsSync: () => true,
-      isExecutable: () => true,
-      env: { PATH: "/usr/bin", HOME: "/home/x" },
-      log: () => {},
-    });
+    const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
     expect(state?.tracking).toBe(true);
     expect(state?.retiredConfigNotice).toBe(read);
   });
 
-  it("fails open when the CLI does not return a valid tracking state", async () => {
-    const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
-      callback(null, '{"tracking":"off"}', "");
-    };
-
-    const state = await initializeTrackingState("pi-session-1", "/repo", {
-      execFile,
-      existsSync: () => true,
-      isExecutable: () => true,
-      env: { PATH: "/usr/bin", HOME: "/home/x" },
-      log: () => {},
-    });
-
-    expect(state).toBeNull();
-  });
-
   it.each([
-    {
-      name: "another session",
-      payload: {
-        session_id: "pi-session-2",
-        tracking: false,
-        signal: "off",
-        seeded: false,
-        source: "session",
-      },
-    },
-    {
-      name: "a contradictory boolean and signal",
-      payload: {
-        session_id: "pi-session-1",
-        tracking: true,
-        signal: "off",
-        seeded: false,
-        source: "session",
-      },
-    },
-  ])("rejects a payload for $name", async ({ payload }) => {
-    const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
-      callback(null, JSON.stringify(payload), "");
-    };
-
-    const state = await initializeTrackingState("pi-session-1", "/repo", {
-      execFile,
-      existsSync: () => true,
-      isExecutable: () => true,
-      env: { PATH: "/usr/bin", HOME: "/home/x" },
-      log: () => {},
-    });
-
-    expect(state).toBeNull();
+    { name: "an invalid state", state: { tracking: "off" } },
+    { name: "another session", state: { session_id: "pi-session-2", tracking: false, signal: "off", seeded: false, source: "session" } },
+    { name: "a contradictory boolean and signal",
+      state: { session_id: "pi-session-1", tracking: true, signal: "off", seeded: false, source: "session" } },
+    { name: "no service (or no reading from it)", state: null },
+  ])("reads $name as unknown", async ({ state }) => {
+    expect(await initializeTrackingState("pi-session-1", "/repo", deps(service(state)))).toBeNull();
   });
 
-  it("settles on its own deadline and force-kills a stuck CLI", async () => {
-    vi.useFakeTimers();
-    try {
-      const kill = vi.fn();
-      const execFile: TrackingExecFileFn = () => ({ kill });
-
-      const pending = initializeTrackingState("pi-session-1", "/repo", {
-        execFile,
-        existsSync: () => true,
-        isExecutable: () => true,
-        env: { PATH: "/usr/bin", HOME: "/home/x" },
-        log: () => {},
-        timeoutMs: 25,
-      });
-      await vi.advanceTimersByTimeAsync(25);
-
-      await expect(pending).resolves.toBeNull();
-      expect(kill).toHaveBeenCalledWith("SIGKILL");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not forward unrelated parent-process secrets", async () => {
-    let childEnv: Record<string, string | undefined> = {};
-    const execFile: TrackingExecFileFn = (_command, _args, options, callback) => {
-      childEnv = options.env;
-      callback(
-        null,
-        JSON.stringify({
-          session_id: "pi-session-1",
-          tracking: true,
-          signal: "on",
-          seeded: true,
-          source: "shipped",
-        }),
-        "",
-      );
-    };
-
-    await initializeTrackingState("pi-session-1", "/repo", {
-      execFile,
-      existsSync: () => true,
-      isExecutable: () => true,
-      env: {
-        PATH: "/usr/bin",
-        HOME: "/home/x",
-        XDG_STATE_HOME: "/state",
-        PI_CODING_AGENT_DIR: "/pi-home",
-        PROBE_PI_TAP_PLUGIN_DIR: "/pi-tap",
-        PRBE_API_KEY: "must-not-leak",
-      },
-      log: () => {},
-    });
-
-    expect(childEnv).toMatchObject({
+  it("hands the service only what the command reads of pi's environment, and names pi", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown>; waitMs: number }> = [];
+    await initializeTrackingState("pi-session-1", "/repo", deps(service(null, calls), {
       PATH: "/usr/bin",
       HOME: "/home/x",
       XDG_STATE_HOME: "/state",
-      // pi's home and tap folder: without them the CLI reads capture state
-      // from the default folders and the footer says "not installed".
       PI_CODING_AGENT_DIR: "/pi-home",
       PROBE_PI_TAP_PLUGIN_DIR: "/pi-tap",
-      PROBE_AGENT: "pi",
-    });
-    expect(childEnv).not.toHaveProperty("PRBE_API_KEY");
+      PRBE_API_KEY: "must-not-leak",
+    }));
+    const env = calls[0].params.env as Record<string, string>;
+    // pi's home and tap folder: without them the CLI reads capture state from the default folders.
+    expect(env).toMatchObject({ XDG_STATE_HOME: "/state", PI_CODING_AGENT_DIR: "/pi-home", PROBE_PI_TAP_PLUGIN_DIR: "/pi-tap" });
+    expect(env).not.toHaveProperty("PRBE_API_KEY");
   });
 
-  it("fails open when launching the CLI throws synchronously", async () => {
-    const execFile: TrackingExecFileFn = () => {
-      throw new Error("spawn exploded");
+  it("reads a call that throws as unknown", async () => {
+    const call: TrackingStateDeps["call"] = async () => {
+      throw new Error("socket exploded");
     };
-
-    await expect(
-      initializeTrackingState("pi-session-1", "/repo", {
-        execFile,
-        existsSync: () => true,
-        isExecutable: () => true,
-        env: { PATH: "/usr/bin", HOME: "/home/x" },
-        log: () => {},
-      }),
-    ).resolves.toBeNull();
+    await expect(initializeTrackingState("pi-session-1", "/repo", deps(call))).resolves.toBeNull();
   });
 });
 

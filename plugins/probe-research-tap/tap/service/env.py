@@ -121,6 +121,17 @@ MAX_HOOK_EVENT_NAME = 64
 #: one a dispatcher gives a warm host before it runs the event itself.
 HOOK_WAIT_MS = 300
 MAX_HOOK_WAIT_MS = 60_000
+#: `hooks.run {plugin_root}`'s `options` (passed after the lane): what a harness-run dispatcher
+#: forwards (`hooks/dispatch.py` UNSHOWN). Never `--record-keeping`: only the queue runs that.
+HOOK_RUN_OPTIONS = frozenset({"--unshown"})
+#: `hooks.run {plugin_root, harness}`'s `root_env`: the variable the harness named the plugin's
+#: folder by, which its routes read (`$ROOT`): Codex's, or Claude Code's (Kimi's adapter sets it too).
+HOOK_RUN_ROOT_ENVS = frozenset({"PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"})
+#: `hooks.run {plugin_root, harness, wait}`: a held wait the service runs as slices (Claude Code's Stop
+#: wake from the plugin's own `claude-reads.json`, service-only task 13), on the stop lane only.
+HOOK_RUN_WAITS = frozenset({"reads"})
+#: `statusline.render`'s payload (the status-line command's stdin, a string) is at most this long.
+MAX_STATUSLINE_PAYLOAD = 256 * 1024
 #: `hooks.run`'s `env` (the session's environment, as a harness hands its
 #: hooks theirs): at most this many variables, each value at most this long,
 #: as a recorder's (`recorders.MAX_ENV`).

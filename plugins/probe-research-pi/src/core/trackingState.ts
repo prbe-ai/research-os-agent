@@ -101,8 +101,10 @@ export type TrackingExecFileFn = (
   callback: (error: Error | null, stdout: string, stderr: string) => void,
 ) => TrackingChild | void;
 
-export interface TrackingStateDeps extends ProbeBinaryDeps {
-  execFile: TrackingExecFileFn;
+export interface TrackingStateDeps {
+  /** One request to the Probe service (`serviceForward.callService` on its socket): its result, or null. */
+  call: (method: string, params: Record<string, unknown>, waitMs: number) => Promise<Record<string, unknown> | null>;
+  env: PathEnv;
   log: (message: string) => void;
   timeoutMs?: number;
 }
@@ -143,75 +145,35 @@ export function trackingChildEnv(env: PathEnv): PathEnv {
   return child;
 }
 
+/** `session.initialize`'s method name (`protocol.Method.SESSION_INITIALIZE`). */
+export const SESSION_INITIALIZE = "session.initialize";
+
+/**
+ * Seed and read this session's state through the Probe service (`session.initialize`, which runs
+ * `probe session initialize` with what of pi's environment it reads, `trackingChildEnv`): the
+ * extension spawns no CLI (service-only task 16). Null with no service, or no reading: unknown.
+ */
 export async function initializeTrackingState(
   sessionId: string,
   cwd: string,
   deps: TrackingStateDeps,
 ): Promise<TrackingState | null> {
-  const binary = findProbeBinary(deps);
-  if (!binary) {
-    deps.log("tracking initialization skipped: no probe CLI found");
-    return null;
-  }
-
-  const timeoutMs = deps.timeoutMs ?? 5_000;
-  let result: { error: Error | null; stdout: string; stderr: string };
+  const timeoutMs = deps.timeoutMs ?? 6_000;
+  const env = Object.fromEntries(Object.entries(trackingChildEnv(deps.env)).filter((entry): entry is [string, string] =>
+    typeof entry[1] === "string"));
+  let answer: Record<string, unknown> | null;
   try {
-    result = await new Promise((resolve, reject) => {
-      let settled = false;
-      let child: TrackingChild | undefined;
-      const finish = (value: typeof result): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(deadline);
-        resolve(value);
-      };
-      const deadline = setTimeout(() => {
-        if (settled) return;
-        try {
-          child?.kill("SIGKILL");
-        } catch {
-          // The deadline still settles startup even if the process vanished
-          // between the timeout and the kill.
-        }
-        finish({
-          error: new Error(`timed out after ${timeoutMs}ms`),
-          stdout: "",
-          stderr: "",
-        });
-      }, timeoutMs);
-
-      try {
-        child = deps.execFile(
-          binary,
-          ["session", "initialize", "--session", sessionId, "--cwd", cwd],
-          {
-            env: trackingChildEnv(deps.env),
-            encoding: "utf8",
-            // The promise's own deadline is authoritative. Node's execFile
-            // timeout waits for pipe closure after signaling the child, which
-            // can still hang when a descendant retains stdout/stderr.
-            timeout: 0,
-            maxBuffer: 64 * 1024,
-          },
-          (error, stdout, stderr) => finish({ error, stdout, stderr }),
-        ) || undefined;
-      } catch (err) {
-        clearTimeout(deadline);
-        reject(err);
-      }
-    });
+    answer = await deps.call(SESSION_INITIALIZE, { sid: sessionId, cwd, agent: env.PROBE_AGENT, env }, timeoutMs);
   } catch (err) {
-    deps.log(
-      `tracking initialization failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    deps.log(`tracking initialization failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
-
-  if (result.error) {
-    deps.log(`tracking initialization failed: ${result.error.message}`);
+  const state = answer?.state;
+  if (typeof state !== "object" || state === null) {
+    deps.log(`tracking initialization: no reading from the Probe service${answer?.reason ? ` (${String(answer.reason)})` : ""}`);
     return null;
   }
+  const result = { stdout: JSON.stringify(state) };
 
   try {
     const value = JSON.parse(result.stdout) as Record<string, unknown>;

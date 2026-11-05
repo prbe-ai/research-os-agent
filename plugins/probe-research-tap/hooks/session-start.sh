@@ -21,20 +21,10 @@ set -euo pipefail
 
 PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
-# Git Bash on Windows: the Windows path of this script's `/tmp`, for the Python
-# side and the Probe service's recorder of this session (`tap/config.py`
-# WATCHER_DIR_ENV): the temp folder Python finds there need not be it.
-case "${OSTYPE:-}" in
-msys* | cygwin*)
-    PROBE_TAP_WATCHER_DIR=$(cygpath -w /tmp 2>/dev/null || true)
-    [ -n "$PROBE_TAP_WATCHER_DIR" ] && export PROBE_TAP_WATCHER_DIR
-    ;;
-esac
 # The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
-# it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
-# variable names there as a Windows path (session-start.sh sets it).
+# it names an absolute folder, else /tmp.
 WATCHER_DIR=/tmp
-case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
+case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac
 HOOK_INPUT="$(cat)"
 REGISTRY_ENV=""
 case "$SOURCE" in
@@ -73,19 +63,6 @@ else
 fi
 LOG_DIR="$PLUGIN_DIR/logs"
 mkdir -p "$LOG_DIR"
-# Git Bash: the watcher folder (its `/tmp`), kept in the tap's state folder for
-# what this hook does not start: `probe session status`, `probe doctor` and the
-# status line run from other shells, without PROBE_TAP_WATCHER_DIR. Rewritten
-# only when it changed, whole (a reader sees the old folder or the new one).
-if [ -n "${PROBE_TAP_WATCHER_DIR:-}" ] && case "${OSTYPE:-}" in msys* | cygwin*) true ;; *) false ;; esac; then
-    WATCHER_DIR_FILE="$PLUGIN_DIR/.watcher_dir"
-    if [ "$(cat "$WATCHER_DIR_FILE" 2>/dev/null || true)" != "$PROBE_TAP_WATCHER_DIR" ]; then
-        printf '%s' "$PROBE_TAP_WATCHER_DIR" >"$WATCHER_DIR_FILE.$$" 2>/dev/null \
-            && mv -f "$WATCHER_DIR_FILE.$$" "$WATCHER_DIR_FILE" 2>/dev/null \
-            || rm -f "$WATCHER_DIR_FILE.$$" 2>/dev/null || true
-    fi
-fi
-
 # Prune leaked shutdown sentinels. session-end.sh deliberately never deletes
 # one (it is the last-resort stop signal for an orphaned daemon), and only a
 # later SessionStart *for the same session id* clears it — but session ids are
@@ -121,26 +98,13 @@ cmdline_of() {
 # live for days: pruning it by age alone left a live session reading "not
 # started" in `probe session status` and the status line.
 keep_hosted() {
-    local pid lock base
+    local pid
     # Not a regular file (a link to a tty, a FIFO): never read, never ours.
     { [ -f "$1" ] && [ ! -L "$1" ]; } || return 1
     [ -O "$1" ] || return 0
     pid=$(head -c 32 "$1" 2>/dev/null | tr -d '[:space:]' || true)
     case "$pid" in '' | *[!0-9]*) return 1 ;; esac
     [ "$pid" -gt 1 ] || return 1
-    case "${OSTYPE:-}" in
-    msys* | cygwin*)
-        # A Windows pid, which Git Bash's `kill` and `ps` do not know: the
-        # service names itself in its lock file (`server._name_holder`).
-        base=$(cygpath -u "${LOCALAPPDATA:-}" 2>/dev/null || true)
-        [ -n "$base" ] || return 1
-        for lock in "$base"/probe/service/*/service.lock; do
-            [ -f "$lock" ] || continue
-            [ "$(head -c 64 "$lock" 2>/dev/null | tr -s ' \r\n' ' ' | cut -d' ' -f1)" = "$pid" ] && return 0
-        done
-        return 1
-        ;;
-    esac
     kill -0 "$pid" 2>/dev/null || return 1
     case "$(cmdline_of "$pid")" in *probe.service*) return 0 ;; esac
     return 1
@@ -339,147 +303,10 @@ case "${PROBE_HOOK_PARENT_PID:-}" in '' | *[!0-9]*) ;; *) OWNER_FROM="$PROBE_HOO
 PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
     "$PY" -m tap owner --session-id "$SESSION_ID" --from-pid "$OWNER_FROM" </dev/null >/dev/null 2>&1 || true
 
-PID_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
-# The tap version the live wrapper was started from, written beside its pid
-# file by whatever spawned it (this hook below, `tap start`). Taps before 0.9.16
-# wrote none; their wrapper's command line names its versioned plugin folder.
-VERSION_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.version"
-
-#: The first tap on protocol 2. A protocol-1 daemon's session cannot be taken
-#: over: the new daemon would refuse it every tick ("legacy transcript coverage
-#: is unverified"), so one older than this is left to finish on its own.
-PROTOCOL2_TAP="0.4.5"
-
-# Exit 0 when tap version $1 is older than $2 (x.y.z). Never "older" when
-# either is unknown or not plain digits, so nothing is replaced on a guess.
-tap_older() {
-    local live="$1" ours="$2" a b i
-    [ -n "$ours" ] || return 1
-    [ -n "$live" ] || return 1
-    for i in 1 2 3; do
-        a="${live%%.*}"
-        b="${ours%%.*}"
-        case "$a" in '' | *[!0-9]*) return 1 ;; esac
-        case "$b" in '' | *[!0-9]*) return 1 ;; esac
-        [ "$a" -lt "$b" ] && return 0
-        [ "$a" -gt "$b" ] && return 1
-        if [ "$live" = "${live#*.}" ]; then live=0; else live="${live#*.}"; fi
-        if [ "$ours" = "${ours#*.}" ]; then ours=0; else ours="${ours#*.}"; fi
-    done
-    return 1
-}
-
-# A watcher file of this user's: a regular file, not a link, owned by us. /tmp
-# is shared, so a file anyone else put there names nothing of ours, and a link
-# to a tty or a FIFO would block a read.
-own_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; }
-
-# Remove the session's pid file when it names no wrapper of this session: its
-# wrapper is gone (it gave up after 5 restarts, was killed, or the machine slept
-# through it), or its pid now runs something else (pids are reused). Left, it
-# says "a wrapper runs this session" to everything that reads it after this hook
-# hosts the session or starts a new wrapper, and session-end.sh would act on it.
-# Kept: an empty one (a wrapper writing its pid: it truncates, then writes), and
-# a live pid whose command line cannot be read (no proof either way). A link or
-# a file that is not a regular one is never read, and goes.
-drop_dead_pid_file() {
-    local old
-    if [ -L "$PID_FILE" ] || { [ -e "$PID_FILE" ] && [ ! -f "$PID_FILE" ]; }; then
-        rm -f "$PID_FILE" 2>/dev/null || true
-        return 0
-    fi
-    own_file "$PID_FILE" || return 0
-    old=$(head -c 32 "$PID_FILE" 2>/dev/null | tr -d '[:space:]' || true)
-    case "$old" in
-        '') return 0 ;;
-        *[!0-9]*) rm -f "$PID_FILE" 2>/dev/null || true; return 0 ;;
-    esac
-    if [ "$old" -le 1 ] 2>/dev/null || ! kill -0 "$old" 2>/dev/null; then
-        rm -f "$PID_FILE" 2>/dev/null || true
-        return 0
-    fi
-    case "$(cmdline_of "$old")" in
-        '' | *"tap watch"*"$SESSION_ID"*) ;;
-        *) rm -f "$PID_FILE" 2>/dev/null || true ;;
-    esac
-}
-drop_dead_pid_file
-
-# If a daemon is already running for this session_id (e.g. resumed session),
-# don't spawn another -- unless an OLDER tap started it.
-#
-# A resumed session hands its surviving daemon to the new agent process (the
-# owner hand-over above), and the daemon is the code its own tap version
-# loaded. So after an update, the restart that is supposed to apply it kept the
-# old daemon instead: anthrogen's dev pod ran tap 0.9.3 for a session born on
-# 10-04 and resumed under a newer tap on 10-06, three days after its tap had
-# been updated to 0.9.14 (2026-10-07). The machine then reports that old tap,
-# and nothing local says so: `.installed_version` above already reads the new
-# one. So a daemon an older tap started is stopped -- its last pass and
-# finalize, exactly as at SessionEnd, after which the stream continues as on
-# any resume -- and this version's daemon takes the session over. Never the
-# other way: an older tap resuming a session never replaces a newer daemon.
-if own_file "$PID_FILE" && kill -0 "$(head -c 32 "$PID_FILE" | tr -d '[:space:]')" 2>/dev/null; then
-    LIVE_VER=""
-    own_file "$VERSION_FILE" && LIVE_VER=$(head -c 64 "$VERSION_FILE" 2>/dev/null | tr -d '[:space:]' || true)
-    OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
-    case "$OLD_PID" in '' | *[!0-9]*) OLD_PID="" ;; esac
-    # Only a pid that is provably THIS session's tap wrapper is stopped: /tmp is
-    # world-writable and pids are reused, and the check above only proves that
-    # SOME process holds this pid. Its command line from `ps`, else Linux's
-    # /proc (a slim container has no `ps`); neither means no proof, and it is
-    # left alone.
-    OLD_CMD=""
-    if [ -n "$OLD_PID" ]; then
-        OLD_CMD=$(cmdline_of "$OLD_PID")
-    fi
-    case "$OLD_CMD" in
-        *"tap watch"*"$SESSION_ID"*) OURS=1 ;;
-        *) OURS="" ;;
-    esac
-    # A wrapper from a tap before 0.9.16 recorded no version: the versioned
-    # folder (Claude Code's and Codex's plugin caches) in its command line says.
-    if [ -z "$LIVE_VER" ] && [[ "$OLD_CMD" =~ /(probe-research-tap|prbe-cc-tap-plugin|prbe-codex-tap-plugin)/([0-9]+\.[0-9]+\.[0-9]+)(/|[[:space:]]|$) ]]; then
-        LIVE_VER="${BASH_REMATCH[2]}"
-    fi
-    if [ -z "$OURS" ] || ! tap_older "$LIVE_VER" "$RUNNING_VER" \
-        || tap_older "$LIVE_VER" "$PROTOCOL2_TAP"; then
-        printf '{"continue": true}\n'
-        exit 0
-    fi
-    echo "[$(date -u +%FT%TZ)] tap $LIVE_VER daemon (wrapper $OLD_PID) still runs this session; replacing it with $RUNNING_VER" >>"$LOG_FILE"
-    # session-end.sh's stop, without its sentinel (the new wrapper's first check
-    # would exit on it): the group when the wrapper leads one (pgid from `ps`,
-    # or, with no `ps`, a live group this pid leads), else the wrapper, whose
-    # TERM trap forwards to the daemon. Waits up to 3s for the last pass, inside
-    # this hook's 10s. A daemon still finishing after that holds the session's
-    # journal lock: the new daemon cannot take it and exits 0, its wrapper
-    # retries at most 5 times a minute and then gives up, and ensure-daemon.sh
-    # restarts capture on the next prompt. Nothing is lost: the transcript is
-    # read from the journal's offset, whichever daemon reads it.
-    OLD_PGID=$(ps -o pgid= -p "$OLD_PID" 2>/dev/null | tr -d ' ' || true)
-    if [ -n "$OLD_PGID" ] && [ "$OLD_PGID" = "$OLD_PID" ]; then
-        kill -TERM "-$OLD_PID" 2>/dev/null || true
-        for _ in $(seq 1 15); do kill -0 -- "-$OLD_PID" 2>/dev/null || break; sleep 0.2; done
-    elif ! command -v ps >/dev/null 2>&1 && kill -0 -- "-$OLD_PID" 2>/dev/null; then
-        kill -TERM "$OLD_PID" 2>/dev/null || true
-        for _ in $(seq 1 15); do kill -0 -- "-$OLD_PID" 2>/dev/null || break; sleep 0.2; done
-    else
-        kill -TERM "$OLD_PID" 2>/dev/null || true
-        for _ in $(seq 1 15); do kill -0 "$OLD_PID" 2>/dev/null || break; sleep 0.2; done
-    fi
-    rm -f "$PID_FILE"
-fi
-
-# No live wrapper for this session_id, so any leftover shutdown sentinel is
-# stale (SessionEnd no longer deletes it — see session-end.sh). Clear it before
-# spawning, or the wrapper's first `[ -f "$SHUTDOWN" ] && exit 0` check would
-# immediately kill the fresh daemon on a resumed session.
-SHUTDOWN_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
-rm -f "$SHUTDOWN_FILE"
-# The last SessionEnd's hand-over goes with it: no wrapper of this session runs
-# now, and session-end.sh would otherwise wait on whatever pid it names.
-rm -f "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping" 2>/dev/null || true
+# A session's stale shutdown sentinel and hand-over (an older tap's wrapper left them, or the
+# last SessionEnd): its recorder starts below, and must not read them as a stop.
+rm -f "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown" \
+    "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping" 2>/dev/null || true
 
 if [ -n "$TRANSCRIPT_PATH" ]; then
     TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")
@@ -487,162 +314,23 @@ else
     TRANSCRIPT_ARGS=(--transcript-dir "${PRBE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}")
 fi
 
-# The Probe service records this session itself when it can (plan A2): one
-# thread of the service instead of a wrapper and a `tap watch` per session.
-# `tap record` writes the service's pid to the session's `.hosted` marker
-# (ensure-daemon.sh's fast path and session-end.sh read it). Bounded at 6s,
-# inside this hook's 10s; any other answer (no service, an older one, no
-# owner, PROBE_TAP_HOSTED=0) starts the wrapper below, as before.
-HOSTED=""
-if [ "${PROBE_TAP_HOSTED:-1}" != 0 ] && PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
-    "$PY" -m tap record --session-id "$SESSION_ID" --cwd "$CWD" --plugin-root "$PLUGIN_ROOT" \
+# THE PROBE SERVICE RECORDS THIS SESSION, one thread of it (plan A2): `tap record`
+# starts the service when none answers and writes its pid to the session's `.hosted`
+# marker (ensure-daemon.sh's fast path and session-end.sh read it). Bounded at 6s,
+# inside this hook's 10s; the prompt's heal (ensure-daemon.sh, a 5s hook) asks for
+# less (TAP_RECORD_WITHIN_S). A service that does not take it leaves the session for
+# the next prompt's heal: nothing records here (service-only task 15).
+if PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
+    "$PY" -m tap record --session-id "$SESSION_ID" --cwd "$CWD" --plugin-root "$PLUGIN_ROOT" --within "${TAP_RECORD_WITHIN_S:-6}" \
     "${TRANSCRIPT_ARGS[@]}" </dev/null >>"$LOG_FILE" 2>&1; then
-    HOSTED=1
-    rm -f "$VERSION_FILE" 2>/dev/null || true
-    # A wrapper's pid file that outlived it: the service records the session
-    # now, and `probe session status` and session-end.sh must not read it. One
-    # a wrapper wrote since the check above (a concurrent start) is live: kept.
-    drop_dead_pid_file
     echo "[$(date -u +%FT%TZ)] tap: the Probe service records this session (tap ${RUNNING_VER:-unknown})" >>"$LOG_FILE"
-fi
-
-if [ -z "$HOSTED" ]; then
-rm -f "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
-
-# Which tap the wrapper below runs, for the next resume's check above. Written
-# before the spawn, so there is no moment when a live wrapper carries an older
-# one's version; unknown (no manifest) leaves none, which never replaces.
-# Written only over nothing or a file of this user's: never through a link.
-if [ -n "$RUNNING_VER" ] && { { [ ! -e "$VERSION_FILE" ] && [ ! -L "$VERSION_FILE" ]; } || own_file "$VERSION_FILE"; }; then
-    printf '%s' "$RUNNING_VER" >"$VERSION_FILE" 2>/dev/null || true
 else
-    rm -f "$VERSION_FILE" 2>/dev/null || true
+    rm -f "${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted" 2>/dev/null || true
+    echo "[$(date -u +%FT%TZ)] tap: the Probe service did not take this session; the next prompt asks again" >>"$LOG_FILE"
 fi
-
-# Crash-recovery wrapper: respawn up to 5 times per minute.
-# Self-terminates when shutdown sentinel exists (SessionEnd touches it), and
-# when `tap watch` exits 12 (tap/handback.py EXIT_HANDED_OVER): the Probe
-# service took the session over, so its pid file goes with it.
-#
-# The wrapper runs as a SESSION LEADER (see the spawn below), so its PID is
-# also its PGID and nothing outside its own group can take it down. It still
-# forwards SIGTERM/SIGINT to the python child explicitly: the child is in this
-# group, but an explicit forward is what makes a plain `kill -TERM <wrapper>`
-# (no negation) tear down both, which is the fallback session-end.sh uses for
-# pre-0.1.3 wrappers that are NOT group leaders.
-#
-# First action is rewriting the pid file with the wrapper's own $$: the hook
-# records `$!`, which is correct on the fast path but stale if the setsid shim
-# had to fork (see the spawn). Making the wrapper authoritative removes that
-# race rather than reasoning about when it can happen.
-WRAPPER_SCRIPT='
-SID="$1"; CWD="$2"; PY="$3"; ROOT="$4"; LOG="$5"; PIDF="$6"; PREFIX="$7"; shift 7
-echo $$ >"$PIDF"
-SHUTDOWN="${PIDF%.pid}.shutdown"
-RESTART_COUNT=0
-WINDOW_START=$(date +%s)
-CHILD_PID=""
-trap '\''[ -n "$CHILD_PID" ] && kill -TERM "$CHILD_PID" 2>/dev/null; exit 0'\'' TERM INT
-while true; do
-    [ -f "$SHUTDOWN" ] && exit 0
-    NOW=$(date +%s)
-    if [ $((NOW - WINDOW_START)) -ge 60 ]; then
-        WINDOW_START=$NOW
-        RESTART_COUNT=0
-    fi
-    if [ "$RESTART_COUNT" -ge 5 ]; then
-        echo "[$(date -u +%FT%TZ)] tap: too many restarts in 1min, giving up" >>"$LOG"
-        exit 1
-    fi
-    "$PY" -m tap watch --session-id "$SID" --cwd "$CWD" --plugin-root "$ROOT" "$@" >>"$LOG" 2>&1 &
-    CHILD_PID=$!
-    CODE=0
-    wait "$CHILD_PID" 2>/dev/null || CODE=$?
-    CHILD_PID=""
-    [ -f "$SHUTDOWN" ] && exit 0
-    # 12: the Probe service records the session now (tap/handback.py): done.
-    if [ "$CODE" = 12 ]; then
-        [ "$(cat "$PIDF" 2>/dev/null)" = "$$" ] && rm -f "$PIDF"
-        exit 0
-    fi
-    RESTART_COUNT=$((RESTART_COUNT + 1))
-    sleep 5
-done
-'
-
-# Detach the wrapper into ITS OWN SESSION via setsid(2).
-#
-# `nohup ... & disown` was NOT enough and this is the bug it hid: nohup only
-# ignores SIGHUP, and disown only clears the shell's job table. Neither changes
-# the process group, so the wrapper inherited the hook's PGID and any SIGTERM
-# delivered to that group killed the daemon seconds after SessionStart —
-# measured: wrapper PID 7006 / PGID 6958, dead in 14-34s, while an otherwise
-# identical setsid'd daemon ran indefinitely.
-#
-# macOS ships no setsid(1), which is what the old comment here concluded was
-# fatal — but python3 exposes os.setsid() and this hook already requires
-# python3 (it parses the hook payload above), so the capability was always
-# available. The shim setsids, then execs the wrapper IN PLACE, so $! stays the
-# wrapper's PID and PID == PGID (a true group leader).
-#
-# setsid(2) fails with EPERM if the caller is already a group leader (a shell
-# with job control puts each job in its own group). Hooks run non-interactively
-# so the fast path holds, but fall back to fork-then-setsid rather than leave
-# the daemon unisolated — the child rewrites the pid file, so a changed PID is
-# still recorded correctly.
-PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
-    nohup "$PY" -c '
-import os, sys
-if os.name == "nt":
-    # No setsid there, and execv does not quote its arguments (Git Bash hands
-    # `/bin/bash` over as `C:/Program Files/Git/usr/bin/bash`): a child of its
-    # own process group, which the wrapper rewrites the pid file for.
-    import subprocess
-    subprocess.Popen(sys.argv[1:], creationflags=0x00000200)  # CREATE_NEW_PROCESS_GROUP
-    os._exit(0)
-try:
-    os.setsid()
-except OSError:
-    if os.fork() != 0:
-        os._exit(0)
-    os.setsid()
-os.execv(sys.argv[1], sys.argv[1:])
-' /bin/bash -c "$WRAPPER_SCRIPT" wrapper \
-    "$SESSION_ID" "$CWD" "$PY" "$PLUGIN_ROOT" "$LOG_FILE" "$PID_FILE" "$WATCHER_PREFIX" "${TRANSCRIPT_ARGS[@]}" \
-    </dev/null >>"$LOG_FILE" 2>&1 &
-disown
-
-# The WRAPPER is the sole author of the pid file (it writes its own $$ first
-# thing). This hook deliberately does NOT also write `$!`.
-#
-# Writing both raced: whichever landed last won, and `$!` can name an
-# intermediate that is not the session leader — so the recorded pid was
-# sometimes a non-leader, which is precisely what session-end.sh's group-kill
-# decision keys on. One author, no race. Wait briefly so a concurrent
-# SessionStart for this same session sees the file and does not double-spawn.
-for _ in $(seq 1 40); do
-    [ -s "$PID_FILE" ] && break
-    sleep 0.05
-done
-
-# Spawn-failure diagnostics. A resumed session was observed clearing the stale
-# sentinel (so this script provably ran to at least that point) and then leaving
-# NO pid file, NO process and NO log line — the outage was completely invisible,
-# and piping the same payload in by hand worked first try. Whatever the cause,
-# the next occurrence should say so in the log. Never fatal: the contract is
-# fail-open, and the reconciler recovers the transcript regardless.
-if [ ! -s "$PID_FILE" ]; then
-    echo "[$(date -u +%FT%TZ)] tap: wrapper wrote no pid file within 2s (spawn failed?); \
-session=$SESSION_ID py=$PY root=$PLUGIN_ROOT — transcript will be recovered by the reconciler" \
-        >>"$LOG_FILE"
-elif ! kill -0 "$(cat "$PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
-    echo "[$(date -u +%FT%TZ)] tap: wrapper pid $(cat "$PID_FILE" 2>/dev/null) not alive just \
-after spawn; session=$SESSION_ID — transcript will be recovered by the reconciler" >>"$LOG_FILE"
-fi
-fi  # no hosted recorder
 
 # Tell the researcher what was redacted from their LAST session. The daemon
-# has no terminal of its own — it is spawned detached below and everything it
+# has no terminal of its own — it runs in the Probe service and everything it
 # logs goes to a file nobody reads — so this hook's `systemMessage` is the only
 # channel that actually reaches a human. A credential we quietly removed and
 # never mentioned leaves the key live and the researcher unaware, which is the
@@ -651,7 +339,8 @@ fi  # no hosted recorder
 # Bounded and fail-open: a 5s cap, stderr discarded, and any failure just means
 # no message. Never a reason a session fails to start.
 NOTICE=""
-if [ -n "${PY:-}" ] && [ -x "$PY" ]; then
+# Not from the prompt's heal (TAP_HEAL): its 5s hook has no room, and the notice is the start's.
+if [ -z "${TAP_HEAL:-}" ] && [ -n "${PY:-}" ] && [ -x "$PY" ]; then
     NOTICE=$(cd "$PLUGIN_ROOT" 2>/dev/null && timeout 5 "$PY" -m tap redaction-notice 2>/dev/null || true)
 fi
 if [ -n "$NOTICE" ]; then

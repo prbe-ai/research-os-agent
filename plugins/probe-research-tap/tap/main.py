@@ -89,6 +89,7 @@ from tap.transcripts.journal import (
     recoverable,
 )
 from tap.storage import FileOffset, Storage
+from tap.transcripts import pinned
 from tap.transcripts.transcripts import read_new, validate_json
 
 log = logging.getLogger("probe-research-tap")
@@ -287,6 +288,10 @@ def _wait_for_codex_transcript(
     return None
 
 
+#: The pinned transcript became a link or another file (`transcripts.pinned`): recording stopped for good.
+EXIT_TRANSCRIPT_SWAPPED = 13
+
+
 def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
     """`tap watch`. `hosted`: run as one session's thread of the Probe service
     (`tap.hosted`, plan A2): an object with `stop` and `pause` events; then
@@ -301,9 +306,14 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
     # change that stops passing it must not argparse-exit the daemon into a
     # silent capture outage. session-start.sh still passes it (harmless).
     parser.add_argument("--plugin-root", required=False, default=None, type=Path)
+    # The file the Probe service accepted for a fenced caller (`dev:ino`): every read is pinned to it.
+    parser.add_argument("--transcript-identity", default=None)
     args = parser.parse_args(argv)
     if args.transcript is None and args.transcript_dir is None:
         parser.error("--transcript or --transcript-dir is required")
+    identity = pinned.parse_identity(args.transcript_identity) if args.transcript_identity else None
+    if args.transcript_identity and (identity is None or args.transcript is None):
+        parser.error("--transcript-identity takes dev:ino, with --transcript")
     if sources.harness(cfg.current_source()).transcripts.get("watch") != "dir" and args.transcript is None:
         # A harness whose row says `watch: dir` (Codex) resolves its transcript
         # by scanning --transcript-dir. Every other one is required to pass
@@ -401,10 +411,19 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
         )
 
     code = None
+    if identity is not None:
+        pinned.set_pin(transcript_path, identity)
     try:
-        code = _run_durable_loop(config, storage, **({"offer": offer} if offer is not None else {}))
+        try:
+            code = _run_durable_loop(config, storage, **({"offer": offer} if offer is not None else {}))
+        except pinned.TranscriptSwapped as exc:
+            # A fenced caller's file swapped after the service accepted it: nothing more of it is read.
+            log.error("transcript swapped: %s; recording stopped", exc)
+            code = EXIT_TRANSCRIPT_SWAPPED
         return code
     finally:
+        if identity is not None:
+            pinned.clear_pin(transcript_path)
         if offer is not None:
             link = offer.link  # a newer one, after a take-back
         if link is not None:
@@ -609,6 +628,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
             _beat(c)
             if _paused(c):
                 return 0
+            # A pinned transcript (a fenced caller's) is still the file the service accepted.
+            pinned.check_pinned(c.transcript_path)
             stopping = _shutdown_observed(c)
             if looped:
                 # Still here a pass later (ingestion off, the server unreachable):

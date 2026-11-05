@@ -63,7 +63,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -934,7 +933,7 @@ def _service_syncs_notes(feedback: bool) -> bool:
         return _service_call.notes_sync(
             "reconcile", rules_for=[os.environ.get("PROBE_AGENT") or ""], feedback=feedback
         )
-    except Exception:  # noqa: BLE001 - spawn as before
+    except Exception:  # noqa: BLE001 - the next session start asks again
         return False
 
 
@@ -962,32 +961,10 @@ def _spawn_session_maintenance() -> str | None:
     # it is the lab's shared document, and an agent has no business writing to
     # it unless what it wrote belongs to the team either way. So an edit that
     # exists is an edit that should land, and the toggle has no opinion about it.
-    command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync'
-    # Feedback for the Probe team the researcher said yes to and that was
-    # not sent yet (offline, or the answer hook's own send failed).
-    feedback = _feedback_unsent()
-    if feedback:
-        command += f'; {shlex.quote(binary)} feedback flush'
-    # The Probe service runs the same three, once per machine and debounced
-    # (`notes.sync`), with the CLI it runs from, where it answers: a session
-    # start then spawns nothing. (`PROBE_BIN` is always set here -- session-
-    # start.sh exports the `probe` it resolved -- so it says nothing about
-    # which CLI the researcher meant; `team-note-sync.sh` resolves its own.)
-    if _service_syncs_notes(feedback):
-        return None
-    try:
-        subprocess.Popen(  # noqa: S602 -- fixed command, only the resolved binary path varies
-            ["/bin/sh", "-c", command],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except Exception:
-        # A machine with no probe on PATH, a read-only home, a fork that fails:
-        # all mean the session starts without a refreshed file, which is exactly
-        # how sessions started before this existed.
-        return None
+    # The Probe service runs `agent-rules refresh`, `notes sync` and, when the researcher
+    # said yes to unsent feedback, `feedback flush`, once per machine and debounced
+    # (`notes.sync`): this route runs in the service and only asks (service-only plan, task 14).
+    _service_syncs_notes(_feedback_unsent())
     return None
 
 
@@ -1437,47 +1414,23 @@ def _managed_cli(probe_bin: str) -> bool:
         return False
 
 
-#: `sh -c` with $1 = the probe binary and "$@" = the wizard's update argv: ask
-#: the service first, and run the wizard's update as before when it cannot be
-#: asked (a CLI older than the service exits 2, one whose service does not
-#: start exits 1). Not on 75: that is `probe` turned away by the update
-#: barrier, so the service is updating right now.
-_SERVICE_CHECK_OR_UPDATE = '"$1" service check-now --trigger session; s=$?; [ "$s" = 0 ] || [ "$s" = 75 ] || exec "$@"'
-
-
-def _service_on() -> bool:
-    """Is the Probe service this machine's updater? On every POSIX machine: it
-    has no switch (`probe.service.client`)."""
-    return os.name == "posix"
-
-
 def _spawn_autoupdate(probe_bin: str) -> None:
-    """Fire the upgrade and forget it. Never raises into the hook."""
-    # The same rule as the CLI's own readers, for the `probe` it would update:
-    # an explicit `false` in any known state folder is off; no choice is ON for
-    # the managed CLI (computed here, never written) and off for any other install.
+    """Ask the Probe service for an update check (`update.check_now`, trigger `session`): its
+    updater applies one on a quiet machine. Nothing is spawned here (service-only plan, task 14).
+    Never raises into the hook."""
     enabled, _default = version_policy.autoupdate_state(_autoupdate_settings(), managed=_managed_cli(probe_bin))
     if not enabled:
         return
-    # No `--channel`: there is one channel, and the flag it used to pass did
-    # nothing. Newer CLIs still ACCEPT it (hidden and ignored) because a plugin
-    # updates on the user's schedule, so older copies of this file keep working.
-    # `wizard --action update`, not the deprecated `probe update`.
-    argv = [probe_bin, "wizard", "--action", "update", "--yes"]
-    if _service_on():
-        # The Probe service owns updates here (plan Q4): it applies them only on
-        # a quiet machine, so this hook asks it instead of spawning its own.
-        argv = ["/bin/sh", "-c", _SERVICE_CHECK_OR_UPDATE, "sh", *argv]
     try:
-        subprocess.Popen(  # noqa: S603 - resolved binary; the shell runs a fixed script
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,  # survives this hook exiting
-        )
-    except (OSError, ValueError):
-        pass  # fail-open: a broken auto-update must never block a session
+        import importlib.util  # noqa: PLC0415
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_service_call.py")
+        spec = importlib.util.spec_from_file_location("_probe_hooks._service_call", path)
+        _service_call = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_service_call)
+        _service_call.call("update.check_now", {"trigger": "session"})
+    except Exception:  # noqa: BLE001 - fail-open: a missed check never blocks a session
+        pass
 
 
 #: A cached manifest older than this means fetches have been FAILING, not merely

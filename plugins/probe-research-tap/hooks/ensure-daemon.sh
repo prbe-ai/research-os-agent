@@ -1,14 +1,15 @@
 #!/bin/bash
-# UserPromptSubmit: make sure this session still has a capture daemon.
+# UserPromptSubmit: make sure the Probe service still records this session.
 #
-# Nothing else does. SessionStart spawns one and SessionEnd stops it, so a
-# daemon that never started (spawn failed, machine asleep at start) or died
-# mid-session (crash loop exhausted, a sibling agent's teardown SIGTERMed the
-# shared watcher prefix) stays dead until a genuinely NEW session starts.
+# Nothing else does. SessionStart asks the service to record it (`tap record`) and
+# SessionEnd asks it to finish, so a session whose start the service never took
+# (none could start, a restart in between) or whose service died stays unrecorded
+# until a genuinely NEW session starts. The heal asks again: session-start.sh, which
+# only asks the service (service-only task 15); nothing records here.
 #
 # THE COMMON PATH MUST BE FREE. This runs on every prompt, alongside two other
-# hooks. A live daemon costs one file read and one `kill -0`: no python, no
-# subprocess, no network. Only the rare unhealthy case pays for a spawn.
+# hooks. A recorded session costs one file read and one `kill -0`: no python, no
+# subprocess, no network. Only the rare unrecorded case pays for an ask.
 # An open session runs the INSTALLED tap's copy of this script when that is
 # another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
 # First of all, before stdin is read.
@@ -109,10 +110,9 @@ own_pid() {
 }
 
 # The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
-# it names an absolute folder, else /tmp. Git Bash: its own /tmp, which that
-# variable names there as a Windows path (session-start.sh sets it).
+# it names an absolute folder, else /tmp.
 WATCHER_DIR=/tmp
-case "${OSTYPE:-}" in msys* | cygwin*) ;; *) case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac ;; esac
+case "${PROBE_TAP_WATCHER_DIR:-}" in /*) WATCHER_DIR="$PROBE_TAP_WATCHER_DIR" ;; esac
 PIDF="${WATCHER_DIR}/${PREFIX}-watcher-${SID}.pid"
 PID=""
 if [ -f "$PIDF" ]; then
@@ -135,11 +135,6 @@ if [ -f "$HOSTF" ] && [ ! -L "$HOSTF" ] && [ -O "$HOSTF" ] && [ -s "$HOSTF" ]; t
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
         quiet_exit
     fi
-    # Git Bash on Windows: its `kill` knows MSYS pids, not the Windows pid the
-    # marker holds. The marker is trusted there: the service rewrites it each
-    # time it resumes a session, and the OS keeper (a Task Scheduler task)
-    # starts a gone service again within a minute.
-    case "${OSTYPE:-}" in msys* | cygwin* | win*) [ -n "$PID" ] && quiet_exit ;; esac
     # The service that recorded it is gone (a crash, a kill): no ten-minute
     # wait below; starting it again resumes every session it recorded.
     HOSTED_GONE=1
@@ -198,13 +193,13 @@ mkdir -p "$STATE/heal" 2>/dev/null || true
 
 # Never `exec`, and never propagate session-start.sh's status. This hook is
 # fail-open by contract, and on UserPromptSubmit an exit code of 2 BLOCKS the
-# user's prompt — so a spawn that went wrong must not be able to cost the
+# user's prompt — so an ask that went wrong must not be able to cost the
 # researcher their turn. session-start.sh already logs its own failures.
 if [ -n "$REGISTRY_ENV" ]; then
     # Kimi Code injects a UserPromptSubmit hook's stdout into the model's
     # context as text, so session-start.sh's Claude Code JSON stays out of it.
-    printf '%s' "$HOOK_INPUT" | "$ROOT/hooks/session-start.sh" >/dev/null || true
+    printf '%s' "$HOOK_INPUT" | TAP_HEAL=1 TAP_RECORD_WITHIN_S=3 "$ROOT/hooks/session-start.sh" >/dev/null || true
 else
-    printf '%s' "$HOOK_INPUT" | "$ROOT/hooks/session-start.sh" || true
+    printf '%s' "$HOOK_INPUT" | TAP_HEAL=1 TAP_RECORD_WITHIN_S=3 "$ROOT/hooks/session-start.sh" || true
 fi
 exit 0

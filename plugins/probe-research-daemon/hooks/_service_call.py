@@ -4,10 +4,10 @@
 Two hooks used to spawn detached work of their own on every event: the status
 line's server read (`statusline_refresh.py`, a fetch per due tool call per
 session) and the team note's sync (`version_check.py` at a session's start,
-`team-note-sync.sh` at every Stop and at a session's end). Where a service
-answers they ask it instead (`statusline.refresh`, `notes.sync`), and it runs
-that work once per machine on its own schedule. They spawn it as before
-whenever this says no:
+`team-note-sync.sh` at every Stop and at a session's end). They ask the service
+(`statusline.refresh`, `notes.sync`), which runs that work once per machine on
+its own schedule; nothing is spawned when this says no (service-only plan,
+task 14: the work waits for the next ask):
 
     no service       no socket file (none runs), Windows, or a socket folder
                      that is not this user's alone
@@ -23,8 +23,7 @@ byte for byte) says where the service listens.
 
     python3 _service_call.py notes-sync push|reconcile
 
-is `team-note-sync.sh`'s: exit 0 when the service took the sync, 1 when the
-hook must spawn its own.
+is `team-note-sync.sh`'s: exit 0 when the service took the sync, 1 when it did not.
 """
 
 from __future__ import annotations
@@ -117,7 +116,7 @@ def call(method: str, params: dict, *, timeout: float = TIMEOUT_S):
                 buffer += chunk
         finally:
             sock.close()
-    except Exception:  # noqa: BLE001 - a hook contracted to silence: the caller spawns its own
+    except Exception:  # noqa: BLE001 - a hook contracted to silence
         return None
 
 

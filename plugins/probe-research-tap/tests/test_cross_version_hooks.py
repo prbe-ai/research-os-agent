@@ -221,40 +221,6 @@ def _wait(predicate, seconds: float = 5.0) -> bool:
 PAIRS = [("0.10.17", "this"), ("this", "0.10.17")]
 IDS = ["0.10.17-started-this-tree-continues", "this-tree-started-0.10.17-continues-(rollback)"]
 
-
-@pytest.mark.parametrize(("starts", "continues"), PAIRS, ids=IDS)
-def test_the_other_releases_watcher_is_found_and_stopped(tmp_path, sid, starts, continues):
-    s = Session(tmp_path, sid, hosted_by=None)
-    started = s.hook(starts, "session-start.sh", {"transcript_path": str(s.transcript), "cwd": str(tmp_path),
-                                                 "hook_event_name": "SessionStart", "source": "startup"})
-    assert started.returncode == 0, started.stderr
-    assert _wait(lambda: s.notes("watching")), (started.stderr, s.log.read_text() if s.log.exists() else "")
-    wrapper = int(_watcher(sid, ".pid").read_text().strip())
-    assert _alive(wrapper)
-    # The prompt check of the other release: the watcher is there, so nothing new.
-    prompt = s.hook(continues, "ensure-daemon.sh", {"hook_event_name": "UserPromptSubmit", "prompt": "go"})
-    assert prompt.returncode == 0, prompt.stderr
-    time.sleep(0.5)
-    assert len(s.notes("watching")) == 1, "a second watcher for one session"
-    assert int(_watcher(sid, ".pid").read_text().strip()) == wrapper
-    # Turn end: the mark the daemon reads, where it reads it.
-    sessions = tmp_path / "xdg-state" / "probe" / "sessions"
-    sessions.mkdir(parents=True)
-    (sessions / f"{sid}.state").write_text("daemon\n")
-    turn = s.hook(continues, "turn-end.sh", {"hook_event_name": "Stop", "transcript_path": str(s.transcript)})
-    assert turn.returncode == 0, turn.stderr
-    assert json.loads((sessions / f"{sid}.turn").read_text())["offset"] == s.transcript.stat().st_size
-    # Session end of the other release stops what the first one started.
-    ended = s.hook(continues, "session-end.sh", {"hook_event_name": "SessionEnd", "reason": "prompt_input_exit"},
-                   "--wait")
-    assert ended.returncode == 0, ended.stderr
-    watch_pid = int(s.notes("watching")[0][2])
-    assert _wait(lambda: not _alive(wrapper) and not _alive(watch_pid)), "the watcher outlived its SessionEnd"
-    assert s.notes("stopped"), "its `tap watch` got no stop"
-    assert not _watcher(sid, ".pid").exists()
-    assert _watcher(sid, ".shutdown").exists()
-
-
 @pytest.mark.parametrize(("starts", "continues"), PAIRS, ids=IDS)
 def test_a_session_the_service_records_is_left_to_it_and_finished_through_it(tmp_path, sid, service, starts,
                                                                              continues):

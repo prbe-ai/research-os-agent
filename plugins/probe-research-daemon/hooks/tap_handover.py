@@ -66,7 +66,7 @@ prompt:
                   as the old tap's healer would have (never while capture is
                   off, its `.disabled`)
     off           neither a move nor a heal for a session whose Probe switch
-                  is `off` (`dispatch.session_off`): off means not captured
+                  is `off` (`session_off`): off means not captured
                   (owner, 2026-10-24). Looked at again after LATER_S
 
 Known cost: a tap below 0.10.13 finalizes on the way out, so the stop queues
@@ -444,11 +444,11 @@ def decide(payload: dict, env=None) -> dict | None:
         if not version or version >= HANDBACK_TAP or version < PROTOCOL2_TAP:
             return {"sid": sid, "skip": f"tap {live['version'] or 'unknown'} needs no hand-over"}
     # Off means not captured (owner, 2026-10-24): neither a move nor a heal for
-    # a session whose Probe switch is `off` (`dispatch.session_off`, the
-    # machine's default when the session has none; unreadable reads as off),
-    # as the tap's `.disabled` above stops the heal. Looked at again later: one
+    # a session whose Probe switch is `off` (`session_off`, the machine's
+    # default when the session has none; unreadable reads as off), as the
+    # tap's `.disabled` above stops the heal. Looked at again later: one
     # switched back on is moved then.
-    if _sibling("dispatch").session_off(payload):
+    if session_off(payload):
         return {"sid": sid, "later": "this session's Probe switch is off"}
     newest = installed_tap(finds, values)
     if newest is None or (live is not None and numbers(newest[1]) <= numbers(live["version"])):
@@ -507,16 +507,31 @@ def _later(sid: str, mark: bool = False, base: "str | None" = None) -> bool:
         return False
 
 
-def _child_env() -> dict:
-    """This environment without what the hook dispatcher set for its own call
-    (`dispatch.OWNED_ENV`: a deadline, a host): never the detached child's,
-    nor the session's environment the service saves from `tap record`."""
+#: What the hook dispatcher and the service set for an event's own run: never the detached child's.
+DISPATCHER_ENV = frozenset({"PROBE_HOOKS_HANDED_OVER", "PROBE_HOOK_HOSTED", "PROBE_HOOK_HOST", "PROBE_HOOK_DEADLINE",
+                            "PROBE_HOOK_PARENT_PID"})
+
+
+def session_off(payload: dict) -> bool:
+    """Is this session's Probe switch `off`, by its own state or else the machine's default (as the
+    guard reads it)? True when it cannot be read: nothing is started then."""
     try:
-        owned = set(_sibling("dispatch").OWNED_ENV)
-    except Exception:  # noqa: BLE001 - a broken sibling: the names it has today
-        owned = {"PROBE_HOOKS_HANDED_OVER", "PROBE_HOOK_HOSTED", "PROBE_HOOK_HOST", "PROBE_HOOK_DEADLINE",
-                 "PROBE_HOOK_PARENT_PID"}
-    return {k: v for k, v in os.environ.items() if k not in owned}
+        marker = _sibling("_session_marker")
+        sid = payload.get("session_id")
+        state = marker.session_state(sid) if isinstance(sid, str) else None
+        if state is None:
+            cwd = payload.get("cwd")
+            state, _source = marker.resolve_state_default(cwd if isinstance(cwd, str) and cwd else None)
+        return state == marker.STATE_OFF
+    except Exception:  # noqa: BLE001 - unreadable: start nothing
+        return True
+
+
+def _child_env() -> dict:
+    """This environment without what the hook dispatcher set for its own call (a deadline, a
+    host): never the detached child's, nor the session's environment the service saves from
+    `tap record`."""
+    return {k: v for k, v in os.environ.items() if k not in DISPATCHER_ENV}
 
 
 def hook(stdin) -> int:

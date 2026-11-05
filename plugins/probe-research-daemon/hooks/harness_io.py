@@ -30,7 +30,7 @@ as `dispatch.sh` moves Claude Code's and Codex's), so a Kimi session left open
 across an update runs the installed hooks; then the payload is
 normalized ONCE, and the event's lane runs through the dispatcher
 (`dispatch.serve`, the same path `dispatch.sh` takes for Claude Code and Codex:
-the Probe service's warm host, else here), with this process's stdout caught so
+handed to the Probe service, which runs the routes), with this process's stdout caught so
 the dispatcher's merged output is translated once. Other harnesses' session-id
 variables, inherited when Kimi runs inside one, are dropped first
 (`foreign_session_envs`): route gates read them before the payload. `--unshown` goes to the
@@ -413,7 +413,7 @@ def foreign_session_envs(row) -> list:
 
 def run_event(argv: "list[str]") -> int:
     """`--event <event> [--unshown]`: every route of the event's lane, through
-    the dispatcher (`dispatch.serve`: warm host, else here), on the payload put
+    the dispatcher (`dispatch.serve`: in the Probe service), on the payload put
     in Claude's shape once; its merged output translated once."""
     event = argv[0] if argv else ""
     options = [a for a in argv[1:] if a in (UNSHOWN_FLAG, RECORD_KEEPING_FLAG)]
@@ -528,6 +528,23 @@ def main(argv: "list[str]") -> int:
     if argv[0] == EVENT_FLAG:
         hand_over(argv)
         return run_event(argv[1:])
+    if not _run_by_service():
+        # A per-script entry (a Kimi session that started on a manifest from before the dispatcher's
+        # one entry per event, 0.163.0 and older) runs one route: only the Probe service runs routes.
+        return 0
+    return run_script(argv)
+
+
+def _run_by_service() -> bool:
+    """The Probe service's run of this file (`dispatch.run_by_service`)."""
+    try:
+        return bool(os.environ.get(_VIA_ENV)) or _load_dispatch().run_by_service()
+    except Exception:  # noqa: BLE001 -- unreadable: not the service's
+        return False
+
+
+def run_script(argv: "list[str]") -> int:
+    """`<hook> [args]`: one route, as a per-script entry ran it, in the Probe service's run."""
     hook = argv[0] if os.path.isabs(argv[0]) else os.path.join(_HERE, argv[0])
     raw_in = sys.stdin.buffer.read()
     adapted = _adapt(raw_in)

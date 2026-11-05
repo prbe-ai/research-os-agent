@@ -12,8 +12,7 @@
  * is queued for the next service (`queueEvent`, NotAccepted only: a NoAnswer may have run), and
  * the extension asks for a service. It never runs Probe's logic itself.
  *
- * WHEN (D47): per turn, from this machine's migration ledger (`isForwarding`), read at a turn
- * boundary and kept for the turn; a rollback is a `legacy` switch there.
+ * WHEN: every turn of a session, on every machine (service-only task 16: pi runs no code of its own).
  */
 
 import { randomBytes } from "node:crypto";
@@ -35,13 +34,8 @@ export const REPLY_ACTIONS = "actions";
 export const ROUTES_SERVICE = "service";
 /** `hooks.ack`: settle a delivery receipt. */
 export const HOOKS_ACK = "hooks.ack";
-/** The ledger the CLI writes (`shared/harness/hook_migration`): `<service dir>/hooks/migrations.json`. */
-export const LEDGER_FOLDER = "hooks";
-export const LEDGER_NAME = "migrations.json";
-/** A ledger side (`hook_migration.Side`): pi's events go to the service. */
-export const SIDE_SHIM = "shim";
-/** The registry id pi's ledger record is filed under. */
-export const PI_HARNESS = "pi"; // harness-literal-ok: pi's own extension naming its ledger record
+/** The registry id the service checks this extension's events against. */
+export const PI_HARNESS = "pi"; // harness-literal-ok: pi's own extension naming itself to the service
 /** A protocol reply line longer than this is not read (`wire.MAX_LINE_BYTES`). */
 const MAX_LINE_BYTES = 1024 * 1024;
 const NOTIFICATION_METHOD = "event";
@@ -59,8 +53,15 @@ export const ForwardedEvent = {
 } as const;
 export type ForwardedEventName = (typeof ForwardedEvent)[keyof typeof ForwardedEvent];
 
-/** How a forward ended (D50). */
-export const ForwardOutcome = { Answered: "answered", NotAccepted: "not_accepted", NoAnswer: "no_answer" } as const;
+/**
+ * How a forward ended (D50). `NotAccepted`: no service reached, or one that cannot run it (an older
+ * service: no v2, an error answer). `Refused`: a running service would not run it and said why (a
+ * caller it does not serve): never "no service", so nothing is queued or started for it. `NoAnswer`:
+ * sent, and no answer in time (it may have run).
+ */
+export const ForwardOutcome = {
+  Answered: "answered", NotAccepted: "not_accepted", Refused: "refused", NoAnswer: "no_answer",
+} as const;
 export type ForwardOutcomeValue = (typeof ForwardOutcome)[keyof typeof ForwardOutcome];
 
 export interface ForwardRequest {
@@ -115,6 +116,7 @@ function ask<T>(
   read: (result: unknown) => T,
   notAccepted: T,
   noAnswer: T,
+  cap: string | null = CAP_HOOKS_PROXY_V2,
 ): Promise<T> {
   return new Promise((done) => {
     if (!socketPath || !(deps.privateFolder ?? privateFolder)(dirname(socketPath))) {
@@ -166,7 +168,7 @@ function ask<T>(
         }
         if (message.id === 1) {
           const caps = (message.result as Record<string, unknown> | undefined)?.caps;
-          if (!Array.isArray(caps) || !caps.includes(CAP_HOOKS_PROXY_V2)) {
+          if (cap !== null && (!Array.isArray(caps) || !caps.includes(cap))) {
             finish(notAccepted); // an older service: pi runs its own code
             return;
           }
@@ -188,7 +190,8 @@ function readAnswer(result: unknown, log?: (message: string) => void): ForwardAn
   if (typeof result !== "object" || result === null) return { ...NOT_ACCEPTED, outcome: ForwardOutcome.NoAnswer };
   const fields = result as Record<string, unknown>;
   if (typeof fields.refused === "string") {
-    return { ...NOT_ACCEPTED, refusedReason: typeof fields.reason === "string" ? fields.reason : null };
+    // A running service's word that it will not run it: not "no service" (nothing queued, none started).
+    return { ...NOT_ACCEPTED, outcome: ForwardOutcome.Refused, refusedReason: typeof fields.reason === "string" ? fields.reason : null };
   }
   const exitCode = typeof fields.exit_code === "number" && Number.isInteger(fields.exit_code) ? fields.exit_code : null;
   return {
@@ -216,6 +219,17 @@ export function forwardEvent(socketPath: string | null, request: ForwardRequest,
   };
   return ask(socketPath, ServiceMethod.HooksRun, params, request.waitMs ?? request.timeoutMs + 500, deps,
     (result) => readAnswer(result, deps.log), NOT_ACCEPTED, { ...NOT_ACCEPTED, outcome: ForwardOutcome.NoAnswer });
+}
+
+/**
+ * One plain request to the service (a method of its own, not an event): its result object, or null
+ * (no service, an older one without the method, an error answer, no answer within `waitMs`). Never rejects.
+ */
+export function callService(socketPath: string | null, method: string, params: Record<string, unknown>, waitMs: number,
+  deps: ForwardDeps): Promise<Record<string, unknown> | null> {
+  const read = (result: unknown): Record<string, unknown> | null =>
+    typeof result === "object" && result !== null && !Array.isArray(result) ? result as Record<string, unknown> : null;
+  return ask(socketPath, method, params, waitMs, deps, read, null, null, null);
 }
 
 /** `hooks.ack`: this answer's daemon messages were shown (or could not be). True when the service settled it. */
@@ -277,21 +291,4 @@ export function piConfigRoot(env: PathEnv): string {
     return isAbsolute(expanded) ? expanded : resolve(expanded);
   }
   return join(env.HOME || homedir(), ".pi", "agent");
-}
-
-/**
- * Does this machine send pi's events to the service (D47)? pi's ledger record for this config
- * folder ends in a `shim` switch. The ledger lives in the service's folder (`serviceDir`); an
- * unreadable ledger reads as no (pi runs its own code). Read at a turn boundary only.
- */
-export function isForwarding(serviceDir: string | null, env: PathEnv, read: (path: string) => string = (p) => readFileSync(p, "utf-8")): boolean {
-  if (!serviceDir) return false;
-  try {
-    const ledger = JSON.parse(read(join(serviceDir, LEDGER_FOLDER, LEDGER_NAME))) as Record<string, unknown>;
-    const harnesses = ledger.harnesses as Record<string, Record<string, { switches?: { to?: string }[] }>> | undefined;
-    const switches = harnesses?.[PI_HARNESS]?.[piConfigRoot(env)]?.switches;
-    return Array.isArray(switches) && switches.length > 0 && switches[switches.length - 1]?.to === SIDE_SHIM;
-  } catch {
-    return false;
-  }
 }

@@ -17,14 +17,12 @@ stores the project its last write landed in (`<session>.scope`), and
 
 CONTRACT — this is a hook, so it inherits the house rules:
 
-  * NEVER BLOCKS. The observing process throttles, then hands the fetch on
-    and returns. A slow or unreachable API costs the tool call nothing. Where
-    the Probe service answers, it takes the fetch (`statusline.refresh`): ONE
-    child per plugin folder on its schedule, `fetch-all` below, refreshes
-    every session that asked, instead of a process per session per refresh.
-    Else (no service, an older one, a credential in this environment the
-    service cannot be given) a DETACHED child of this script does it
-    (`start_new_session`, as telemetry.py's sender does), as before.
+  * NEVER BLOCKS. The observing process throttles, then hands the fetch to
+    the Probe service and returns (`statusline.refresh`): ONE child per plugin
+    folder on its schedule, `fetch-all` below, refreshes every session that
+    asked. Nothing fetches here (service-only plan, task 14): a request the
+    service cannot take (an older one, a credential in this environment it
+    cannot be given) waits for the next due refresh.
   * SILENT ALWAYS. Exit 0 whatever happens; print nothing on stdout, which for a
     PostToolUse hook is a channel that can alter the session.
   * NOT TELEMETRY, so deliberately NOT gated on `PROBE_TELEMETRY`. That
@@ -40,7 +38,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import subprocess
 import sys
 import threading
 import time
@@ -88,7 +85,7 @@ def _load(name: str):
 #: Files the status-line install copies out of this directory, and that this
 #: hook keeps current. See `probe.cli.statusline.RENDERER_FILES` -- the installer
 #: side owns the list; this is its runtime twin.
-RENDERER_FILES = ("statusline.py", "_session_marker.py")
+RENDERER_FILES = ("statusline.py", "_service_paths.py")
 
 
 def install_dir() -> str:
@@ -831,41 +828,20 @@ def _service_takes(session_id: str) -> bool:
         except Exception:  # noqa: BLE001 - then the service's child resolves its default
             agent = None
         return bool(service.statusline_refresh(session_id, root, agent=agent))
-    except Exception:  # noqa: BLE001 - a hook contracted to silence: spawn as before
+    except Exception:  # noqa: BLE001 - a hook contracted to silence
         return False
 
 
 def spawn(session_id: str) -> None:
-    """Hand the fetch on (the service, else a detached copy of this script)
-    and return at once."""
-    if _service_takes(session_id):
-        return
-    try:
-        subprocess.Popen(  # noqa: S603 - sys.executable + this file
-            [sys.executable, os.path.abspath(__file__), "fetch", session_id],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except (OSError, ValueError):
-        pass
+    """Hand the fetch to the Probe service (`statusline.refresh`) and return at once. This route
+    runs in the service, which fetches on its own schedule: nothing is fetched here (service-only
+    plan, task 14)."""
+    _service_takes(session_id)
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
-    # Detached child: do the work, then get out. Re-checks the gate because it
-    # was spawned some milliseconds ago and an uninstall in between should stop
-    # the request rather than let one last one through.
-    if argv[:1] == ["fetch"]:
-        session_id = argv[1] if len(argv) > 1 else ""
-        if session_id and not disabled() and installed():
-            try:
-                refresh(session_id)
-            except BaseException:  # noqa: BLE001 - detached and silent by contract
-                pass
-        return 0
     # The Probe service's child: every session that asked, in one process.
     if argv[:1] == ["fetch-all"]:
         try:

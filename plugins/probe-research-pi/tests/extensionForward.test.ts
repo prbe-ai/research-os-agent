@@ -1,7 +1,7 @@
 /**
- * pi's events go to the Probe service on a machine whose ledger moved pi there (PR 7, D47/D50),
- * through the real shim and implementation, against a stand-in service on a real Unix socket.
- * With no ledger mark, or a service that does not take them, pi's own code runs as before.
+ * pi's events go to the Probe service (PR 7, D50; service-only task 16: every turn, on every
+ * machine), through the real shim and implementation, against a stand-in service on a real Unix
+ * socket. A service that does not take them leaves the turn unchanged: pi runs no code of its own.
  *
  * Its own file: the socket path is asked once per pi process, so every test here shares one.
  */
@@ -35,7 +35,7 @@ vi.mock("node:child_process", () => ({
 
 const { registerExtension } = await import("./shimHarness.js");
 const { findServiceDir } = await import("../src/forwarding.js");
-const { CAP_HOOKS_PROXY_V2, piConfigRoot } = await import("../src/serviceForward.js");
+const { CAP_HOOKS_PROXY_V2 } = await import("../src/serviceForward.js");
 
 let root: string;
 let extensionDir: string;
@@ -64,19 +64,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 afterEach(async () => {
   await service?.close();
   service = null;
-  mark(null);
 });
-
-/** This machine's ledger: pi moved to the service (`shim`), or no ledger at all. */
-function mark(side: "shim" | "legacy" | null): void {
-  const ledger = join(findServiceDir(process.env)!, "hooks", "migrations.json");
-  if (side === null) {
-    rmSync(ledger, { force: true });
-    return;
-  }
-  mkdirSync(join(ledger, ".."), { recursive: true });
-  writeFileSync(ledger, JSON.stringify({ v: 1, harnesses: { pi: { [piConfigRoot(process.env)]: { switches: [{ at: 1, to: side }] } } } }));
-}
 
 async function serve(behaviour: (request: Record<string, unknown>) => Behaviour, caps = [CAP_HOOKS_PROXY_V2]): Promise<FakeService> {
   service = await fakeService(SOCKET, behaviour, { caps });
@@ -119,9 +107,8 @@ async function start(): Promise<{ on: (name: string) => (event: unknown, ctx: un
   return { on: (name) => handlers.get(name) as (event: unknown, ctx: unknown) => Promise<any>, ctx };
 }
 
-describe("on a machine whose ledger moved pi to the service", () => {
+describe("every turn goes to the service", () => {
   it("runs the session start there and keeps its context for every turn's prompt", async () => {
-    mark("shim");
     const fake = await serve((request) => {
       if (eventOf(request) === "session_start") return { result: answer({ actions: [{ kind: "context", text: "SERVICE CONTEXT" }, { kind: "notify", text: "hello person", level: "info" }] }) };
       if (eventOf(request) === "before_agent_start") {
@@ -142,7 +129,6 @@ describe("on a machine whose ledger moved pi to the service", () => {
   });
 
   it("asks the service's pre-tool routes, and only them: pi's own guard does not run", async () => {
-    mark("shim");
     const fake = await serve((request) => (eventOf(request) === "tool_call"
       ? { result: answer({ actions: [{ kind: "block", text: "`bash` refused by the routes" }] }) }
       : { result: answer({ actions: [] }) }));
@@ -160,8 +146,39 @@ describe("on a machine whose ledger moved pi to the service", () => {
       .toBeUndefined();
   });
 
+  it("sends a big write without its body, and refuses a tool call too big to check without asking (C1)", async () => {
+    const fake = await serve(() => ({ result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    const big = "x".repeat(2 << 20);
+    expect(await on("tool_call")({ toolName: "write", toolCallId: "w1", input: { path: "notes.md", content: big } }, ctx)).toBeUndefined();
+    const sent = JSON.parse((fake.requests.filter((r) => eventOf(r) === "tool_call").at(-1)!.params as Record<string, unknown>).payload as string);
+    expect(sent.input).toEqual({ path: "notes.md" });
+    const before = fake.requests.length;
+    for (const size of [300 * 1024, 1200 * 1024]) {
+      const refused = await on("tool_call")({ toolName: "bash", toolCallId: "b1", input: { command: "echo " + "a".repeat(size) } }, ctx);
+      expect(refused.block).toBe(true);
+      expect(refused.reason).toContain("too large for Probe's guard");
+    }
+    expect(fake.requests.length).toBe(before);
+  });
+
+  it("refuses only a forged tool call; out of time or any other refusal goes on", async () => {
+    let reply: Record<string, unknown> = { refused: "the caller is not a running pi process", reason: "not_harness" };
+    await serve((request) => (eventOf(request) === "tool_call" ? { result: reply } : { result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    const forged = await on("tool_call")({ toolName: "bash", toolCallId: "c2", input: { command: "ls" } }, ctx);
+    expect(forged.block).toBe(true);
+    expect(forged.reason).toContain("found no running agent");
+    // A slow service never stops the agent; a broken plugin folder (the service's `no_routes`) neither.
+    reply = answer({ actions: [], exit_code: null, timed_out: true });
+    expect(await on("tool_call")({ toolName: "bash", toolCallId: "c3", input: { command: "ls" } }, ctx)).toBeUndefined();
+    reply = { refused: "the dispatcher would not run: the plugin folder is incomplete", reason: "no_routes" };
+    expect(await on("tool_call")({ toolName: "bash", toolCallId: "c4", input: { command: "ls" } }, ctx)).toBeUndefined();
+  });
+
   it("sends the typed switch only for a line a person typed", async () => {
-    mark("shim");
     const fake = await serve(() => ({ result: answer({ actions: [] }) }));
     const { on, ctx } = await start();
     await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
@@ -175,7 +192,6 @@ describe("on a machine whose ledger moved pi to the service", () => {
   });
 
   it("continues a completed run the service's owed route sends back, and never a stopped one", async () => {
-    mark("shim");
     const fake = await serve((request) => (eventOf(request) === "agent_before_settle"
       ? { result: answer({ actions: [{ kind: "continue", text: "write your summary first" }] }) }
       : { result: answer({ actions: [] }) }));
@@ -190,7 +206,6 @@ describe("on a machine whose ledger moved pi to the service", () => {
   });
 
   it("never ends the session at a reload", async () => {
-    mark("shim");
     const fake = await serve(() => ({ result: answer({ actions: [] }) }));
     const { on, ctx } = await start();
     await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
@@ -199,25 +214,26 @@ describe("on a machine whose ledger moved pi to the service", () => {
   });
 });
 
-describe("pi's own code runs when the service does not take the turn", () => {
-  it("with no ledger mark: nothing goes to v2, the guard asks as before", async () => {
-    const fake = await serve(() => ({ result: denial("`Write` refused") }));
+describe("pi runs no code of its own when the service does not take the turn", () => {
+  it("with no ledger mark at all: every turn goes to the service", async () => {
+    const fake = await serve((request) => (eventOf(request) === "tool_call"
+      ? { result: answer({ actions: [{ kind: "block", text: "`write` refused" }] }) }
+      : { result: answer({ actions: [] }) }));
     const { on, ctx } = await start();
     await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
     const refused = await on("tool_call")({ toolName: "write", input: { path: "notes.md", content: "x" } }, ctx);
     expect(refused).toEqual({ block: true, reason: "`write` refused" });
-    expect(forwarded(fake)).toEqual([]);
+    expect(forwarded(fake)).toEqual(expect.arrayContaining(["session_start", "before_agent_start", "tool_call"]));
   });
 
-  it("with a service from before v2: a forwarded turn goes on unchanged and queues its record-keeping", async () => {
-    mark("shim");
+  it("with a service from before v2: a turn goes on unchanged and queues its record-keeping", async () => {
     const fake = await serve(() => ({ result: denial("`Write` refused") }), []);
     const { on, ctx } = await start();
     expect(await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx)).toBeUndefined();
     expect(await on("tool_call")({ toolName: "write", input: { path: "notes.md", content: "x" } }, ctx)).toBeUndefined();
     expect(await on("input")({ text: "/skill:track-work off", source: "interactive" }, ctx)).toEqual({ action: "continue" });
-    // Nothing asked of v1 and nothing run here: only the hello that found no v2.
-    expect(fake.requests.every((r) => r.method === "service.hello")).toBe(true);
+    // No event asked of v1 and nothing run here: the hellos, and the plain methods pi calls (its session state).
+    expect(fake.requests.filter((r) => (r.params as Record<string, unknown> | undefined)?.payload !== undefined)).toEqual([]);
     const queue = join(findServiceDir(process.env)!, "hooks-queue");
     const before = existsSync(queue) ? readdirSync(queue).filter((name) => name.endsWith(".json")).length : 0;
     await on("agent_settled")({}, ctx);
@@ -227,14 +243,5 @@ describe("pi's own code runs when the service does not take the turn", () => {
     expect(events.filter((e) => e.event === "agent_settled")).toEqual([
       expect.objectContaining({ v: 2, routes: "service", harness: "pi", event: "agent_settled" }),
     ]);
-    expect(events.filter((e) => e.event === "session_start")).toHaveLength(1);
-  });
-
-  it("after a rollback: the next turn is pi's own", async () => {
-    mark("legacy");
-    const fake = await serve(() => ({ result: answer({ actions: [] }) }));
-    const { on, ctx } = await start();
-    await on("before_agent_start")({ prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
-    expect(forwarded(fake)).toEqual([]);
   });
 });

@@ -1,22 +1,13 @@
-"""`python -m tap start` — the ONE place a capture daemon is spawned.
+"""`python -m tap start` — the ONE place a caller asks for a session to be captured: the gates, then the Probe service.
 
-Before this, the same detached crash-recovery spawn existed twice: as a bash
-string in `hooks/session-start.sh` and as a TypeScript string in
-`probe-research-pi/src/core/daemon.ts::buildWrapperScript`. Two copies of a
-process-lifecycle contract (pid file, shutdown sentinel, restart window,
-TERM forwarding) is where lifecycle bugs live, and a third caller was about
-to arrive: the probe CLI's self-heal.
+Callers (the Probe service for a pi session, the probe CLI's self-heal) get exit codes instead of
+re-implementing the killswitch, `.disabled_paths`, token and transcript checks.
+Past the gates, the Probe service records the session (`tap record`, plan A2):
+nothing records here (service-only task 15). A service that does not take it is
+EXIT_NOT_RECORDED, and the caller asks again later.
 
-WHY GATES LIVE HERE AND NOT IN CALLERS. Each caller would otherwise have to
-re-implement the killswitch, `.disabled_paths`, token and transcript checks,
-and they would drift. Callers get exit codes instead, which is also what
-lets a caller RENDER the reason without knowing how it was decided.
-
-The interpreter check is the one gate that is new rather than moved. The
-wrapper respawns a dying daemon five times per minute and then gives up
-silently; an interpreter below 3.11 fails that way every time, which reads
-as "capture mysteriously does not work". Refusing up front, with the version
-in the message, turns a silent loop into one line.
+The interpreter check stays: the tap needs 3.11, and refusing up front, with the
+version in the message, turns a silent failure into one line.
 """
 
 from __future__ import annotations
@@ -29,9 +20,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from tap import __version__
 from tap import config as cfg
-from tap.handback import EXIT_HANDED_OVER
 
 EXIT_OK = 0
 EXIT_NOT_PAIRED = 2
@@ -39,50 +28,10 @@ EXIT_KILLSWITCH = 3
 EXIT_DISABLED_PATH = 4
 EXIT_NO_TRANSCRIPT = 5
 EXIT_INTERPRETER_TOO_OLD = 6
+#: Past every gate, the Probe service did not take the session (none could start, an older one).
+EXIT_NOT_RECORDED = 7
 
 MIN_PYTHON = (3, 11)
-
-#: Verbatim from `daemon.ts::buildWrapperScript`, which is verbatim from
-#: `hooks/session-start.sh`. Positional args, not env, so the wrapper text is
-#: identical for every caller and a snapshot test can pin it. A `tap watch`
-#: that handed its session to the Probe service (`tap/handback.py`) exits
-#: EXIT_HANDED_OVER: the wrapper ends, and its pid file goes.
-WRAPPER = "\n".join(
-    [
-        'SID="$1"; CWD="$2"; PY="$3"; LOG="$4"; PIDF="$5"; PREFIX="$6"; shift 6',
-        'echo $$ >"$PIDF"',
-        'SHUTDOWN="${PIDF%.pid}.shutdown"',
-        "RESTART_COUNT=0",
-        "WINDOW_START=$(date +%s)",
-        'CHILD_PID=""',
-        "trap '[ -n \"$CHILD_PID\" ] && kill -TERM \"$CHILD_PID\" 2>/dev/null; exit 0' TERM INT",
-        "while true; do",
-        '  [ -f "$SHUTDOWN" ] && exit 0',
-        "  NOW=$(date +%s)",
-        "  if [ $((NOW - WINDOW_START)) -ge 60 ]; then",
-        "    WINDOW_START=$NOW",
-        "    RESTART_COUNT=0",
-        "  fi",
-        '  if [ "$RESTART_COUNT" -ge 5 ]; then',
-        '    echo "[$(date -u +%FT%TZ)] tap: too many restarts in 1min, giving up" >>"$LOG"',
-        "    exit 1",
-        "  fi",
-        '  "$PY" -m tap watch --session-id "$SID" --cwd "$CWD" "$@" >>"$LOG" 2>&1 &',
-        "  CHILD_PID=$!",
-        "  CODE=0",
-        '  wait "$CHILD_PID" 2>/dev/null || CODE=$?',
-        '  CHILD_PID=""',
-        '  [ -f "$SHUTDOWN" ] && exit 0',
-        f'  if [ "$CODE" = {EXIT_HANDED_OVER} ]; then',
-        '    [ "$(cat "$PIDF" 2>/dev/null)" = "$$" ] && rm -f "$PIDF"',
-        "    exit 0",
-        "  fi",
-        "  RESTART_COUNT=$((RESTART_COUNT + 1))",
-        "  sleep 5",
-        "done",
-    ]
-)
-
 
 def _looks_like_the_uploader(pid: int) -> bool:
     """Ask the OS what the process IS before believing a /tmp filename.
@@ -138,7 +87,8 @@ def _record(args) -> bool:
 
     return record_client.try_record(
         argparse.Namespace(session_id=args.session_id, cwd=args.cwd, transcript=args.transcript,
-                           transcript_dir=None, plugin_root=args.plugin_root)
+                           transcript_dir=None, plugin_root=args.plugin_root,
+                           transcript_identity=getattr(args, "transcript_identity", None))
     )
 
 
@@ -177,23 +127,9 @@ def daemon_state(session_id: str) -> tuple[str, int | None]:
     return ("running" if _looks_like_the_uploader(pid) else "stale", pid)
 
 
-def _default_spawn(argv: list[str]) -> None:
-    # Fixed /bin/sh, no shell interpolation: every element of argv is ours.
-    child = subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        env={**os.environ, "PROBE_TAP_SOURCE": cfg.capture_source()},
-    )
-    del child  # Detached on purpose; nothing here waits on it.
-
-
 def main(
     argv: list[str] | None = None,
     *,
-    spawn: Callable[[list[str]], None] = _default_spawn,
     version_info: tuple[int, ...] | None = None,
     record: Callable[[argparse.Namespace], bool] = _record,
 ) -> int:
@@ -202,6 +138,8 @@ def main(
     parser.add_argument("--cwd", required=True, type=Path)
     parser.add_argument("--transcript", required=True, type=Path)
     parser.add_argument("--plugin-root", required=False, default=None, type=Path)
+    # The file the Probe service accepted for a fenced caller (`dev:ino`): its recorder reads that one only.
+    parser.add_argument("--transcript-identity", required=False, default=None)
     args = parser.parse_args(argv)
 
     if (version_info or sys.version_info)[:2] < MIN_PYTHON:
@@ -228,42 +166,7 @@ def main(
         with contextlib.suppress(OSError):
             cfg.pid_file(args.session_id).unlink()
 
-    # The Probe service records it itself when it can (plan A2): no wrapper.
+    # The Probe service records it (plan A2); a sentinel a finished run left must not stop it.
     with contextlib.suppress(OSError):
         cfg.shutdown_sentinel(args.session_id).unlink()
-    if record(args):
-        return EXIT_OK
-
-    log_dir = cfg.log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{args.session_id}.log"
-
-    # A resumed session's previous run leaves its sentinel behind on purpose
-    # (session-end.sh never deletes one). With no live wrapper it is stale,
-    # and a fresh wrapper's first check would exit on it immediately.
-    with contextlib.suppress(OSError):
-        cfg.shutdown_sentinel(args.session_id).unlink()
-
-    # Which tap this wrapper runs, beside its pid file: hooks/session-start.sh
-    # replaces a daemon an OLDER tap started when the session resumes, and a
-    # daemon with no record is from a tap before 0.9.16.
-    with contextlib.suppress(OSError):
-        cfg.version_file(args.session_id).write_text(__version__, encoding="utf-8")
-
-    spawn(
-        [
-            "/bin/sh",
-            "-c",
-            WRAPPER,
-            "sh",
-            args.session_id,
-            str(args.cwd),
-            sys.executable,
-            str(log_file),
-            str(cfg.pid_file(args.session_id)),
-            cfg.watcher_prefix(),
-            "--transcript",
-            str(args.transcript),
-        ]
-    )
-    return EXIT_OK
+    return EXIT_OK if record(args) else EXIT_NOT_RECORDED

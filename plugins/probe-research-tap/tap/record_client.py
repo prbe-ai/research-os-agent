@@ -1,4 +1,4 @@
-"""Ask the Probe service to record this session, instead of a `tap watch` of its own (plan A2).
+"""Ask the Probe service to record this session (plan A2): the only recorder there is (service-only task 15).
 
     python -m tap record  --session-id S --cwd C (--transcript T | --transcript-dir D) [--plugin-root R]
     python -m tap recording --session-id S
@@ -10,9 +10,9 @@ session's id, folder and transcript, this plugin folder (the service runs the
 newest one it is given), the session's mode, its agent process (`tap owner`'s
 record) and the environment variables a recorder reads (TAP_ENV, never the
 rest of the agent's environment). Exit 0: the service records it (and
-`cfg.hosted_file` names the service's pid), start no `tap watch`. Anything
-else (exit 1: no service, an older one, Windows, refused, PROBE_TAP_HOSTED=0):
-start `tap watch` as before. Bounded: at most TOTAL_S, inside SessionStart's 10 s.
+`cfg.hosted_file` names the service's pid). Anything else (exit 1: no service,
+an older one, refused, PROBE_TAP_HOSTED=0): nothing records it, and the next
+prompt's heal asks again. Bounded: at most TOTAL_S, inside SessionStart's 10 s.
 
 `recording`: exit 0 when the service records the session now.
 
@@ -40,7 +40,7 @@ from tap import config as cfg
 from tap import owner as session_owner
 from tap.service.protocol import Method
 
-#: "0": never ask the service; every session gets its own `tap watch` (the way back).
+#: "0": never ask the service (nothing then records the session: a test, a fault being chased).
 HOSTED_ENV = "PROBE_TAP_HOSTED"
 #: The environment a recorder reads, by name or prefix: where the agent and
 #: Probe keep their files, how the network is reached, the tap's own settings.
@@ -81,12 +81,16 @@ def enabled() -> bool:
     return os.name in ("posix", "nt") and os.environ.get(HOSTED_ENV, "1") != "0"
 
 
+#: What `ensure` answers when a service is, or is about to be, there to wait for (`start.Ensured`):
+#: anything else (no interpreter, confined, uninstalling, its back-off) means none is coming.
+COMING = frozenset({"running", "spawned", "starting"})
+
+
 def _connection(start: bool, deadline: float):
     from tap.service import client
 
     conn = client.connect(min(CALL_TIMEOUT_S, max(0.1, deadline - time.monotonic())))
-    if conn is None and start:
-        client.ensure()
+    if conn is None and start and client.ensure() in COMING:
         while conn is None and time.monotonic() < deadline:
             time.sleep(0.05)
             conn = client.connect(min(CALL_TIMEOUT_S, max(0.1, deadline - time.monotonic())))
@@ -109,7 +113,7 @@ def _call(method: str, params: dict, *, deadline: float, start: bool = False):
     try:
         conn.sock.settimeout(max(0.1, deadline - time.monotonic()))
         return conn.call(method, params)
-    except Exception:  # noqa: BLE001 -- an older service (unknown method), a refusal: `tap watch`
+    except Exception:  # noqa: BLE001 -- an older service (unknown method), a refusal: not recorded
         return None
     finally:
         conn.close()
@@ -200,6 +204,8 @@ def _params(args) -> dict:
         "tap_root": os.path.abspath(str(root)),
         "tap_version": __version__,
         "env": tap_env(),
+        # The file the Probe service accepted for a fenced caller (`dev:ino`): its recorder reads only it.
+        **({"transcript_identity": args.transcript_identity} if getattr(args, "transcript_identity", None) else {}),
     }
 
 
@@ -208,7 +214,7 @@ def try_record(args) -> bool:
     if not enabled():
         return False
     try:
-        deadline = time.monotonic() + TOTAL_S
+        deadline = time.monotonic() + _within(args)
         params = _params(args)
         answer = _call(Method.SESSION_RECORD, params, deadline=deadline, start=True)
         while isinstance(answer, dict) and answer.get("restart") and time.monotonic() < deadline:
@@ -218,9 +224,16 @@ def try_record(args) -> bool:
         if isinstance(answer, dict) and answer.get("recording") is True:
             _write_hosted(args.session_id, answer.get("pid"))
             return True
-    except Exception:  # noqa: BLE001 -- `tap watch` is always the way back
+    except Exception:  # noqa: BLE001 -- not recorded: the next prompt's heal asks again
         pass
     return False
+
+
+def _within(args) -> float:
+    """`record`'s whole budget: `--within` (the caller's hook has less than SessionStart's: the
+    prompt's heal, 5 s in all), at most TOTAL_S."""
+    within = getattr(args, "within", None)
+    return max(0.5, min(TOTAL_S, within)) if isinstance(within, (int, float)) and within > 0 else TOTAL_S
 
 
 def record(args) -> int:
@@ -250,6 +263,7 @@ def main(command: str, argv: list[str]) -> int:
         parser.add_argument("--transcript")
         parser.add_argument("--transcript-dir")
         parser.add_argument("--plugin-root")
+        parser.add_argument("--within", type=float, default=None)
     if command == "finish":
         parser.add_argument("--wait", type=float, default=0.0)
     try:
@@ -258,7 +272,7 @@ def main(command: str, argv: list[str]) -> int:
         return 1
     try:
         return {"record": record, "recording": recording, "finish": finish}[command](args)
-    except Exception:  # noqa: BLE001 -- `tap watch` is always the way back
+    except Exception:  # noqa: BLE001 -- not recorded: the next prompt's heal asks again
         return 1
 
 

@@ -8,6 +8,9 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
+
+from ..pinned import open_transcript
+
 # Raw history can be much larger than its sanitized pending delivery. Its
 # immutable disk copy needs space for the source, not the upload queue limit.
 SNAPSHOT_FREE_RESERVE_BYTES = 100 * 1024 * 1024
@@ -340,7 +343,7 @@ class EnsureMixin:
                 )
                 fd, temporary = tempfile.mkstemp(dir=self.directory)
                 try:
-                    with os.fdopen(fd, "wb") as target, path.open("rb") as source:
+                    with os.fdopen(fd, "wb") as target, open_transcript(path) as source:
                         left = snapshot_end
                         while left:
                             chunk = source.read(min(left, 1024 * 1024))

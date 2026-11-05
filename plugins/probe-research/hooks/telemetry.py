@@ -16,9 +16,10 @@ output at all):
     could alter the session. Any failure exits 0 silently.
   * NO NETWORK on the hook path. The observing process parses stdin, updates a
     tiny state file, and hands the event to a DETACHED sender
-    (start_new_session, the same escape hatch _spawn_autoupdate uses) which does
-    the enrichment (identity, versions) and the POST with a short timeout. A
-    PostHog outage costs the session nothing.
+    (start_new_session) which does the enrichment (identity, versions) and hands
+    the batch to the Probe service (`telemetry.send`), which posts it from a
+    thread of its own (service-only plan, task 14: nothing here posts to
+    PostHog). A PostHog outage costs the session nothing.
   * METADATA ONLY. Event properties are ids, versions, whitelisted skill/entity/
     verb names and booleans. No prompts, no commands, no paths, no contents.
   * KILLSWITCH. PROBE_TELEMETRY=off (or 0/false/no/disabled) disables everything.
@@ -404,7 +405,7 @@ def build_batch(events: list[dict], ident: dict, pv: str | None, cv: str | None)
 
 
 def send_from_stdin() -> None:
-    """Detached sender: enrich with identity + versions, POST, fail silent."""
+    """Detached sender: enrich with identity + versions, hand to the service, fail silent."""
     events = json.load(sys.stdin)
     if not isinstance(events, list) or not events:
         return
@@ -423,7 +424,23 @@ def send_from_stdin() -> None:
         e.get("event") in (EVENT_SESSION_STARTED, EVENT_SESSION_SUMMARY) for e in events
     )
     cv = cli_version() if enrich_cli else None
-    _core.post_batch(build_batch(events, ident, pv, cv))
+    send_batch(build_batch(events, ident, pv, cv))
+
+
+def send_batch(entries: list[dict]) -> None:
+    """The batch to the Probe service (`telemetry.send`), which posts it; dropped when none
+    takes it (observability never becomes observable)."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._service_call"
+    module = sys.modules.get(key)
+    if module is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_service_call.py")
+        spec = importlib.util.spec_from_file_location(key, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        spec.loader.exec_module(module)
+    module.call("telemetry.send", {"entries": entries[:256]})  # MAX_TELEMETRY_ENTRIES
 
 
 # ---------------------------------------------------------------------------

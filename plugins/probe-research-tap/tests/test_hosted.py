@@ -412,13 +412,42 @@ def test_anything_but_recording_means_tap_watch(tmp_path, monkeypatch, answer):
     assert not (tmp_path / "s-1.hosted").exists()
 
 
+@pytest.mark.parametrize("ensured", ["unavailable", "confined", "uninstalling", "backoff"])
+def test_no_service_coming_is_never_waited_for(monkeypatch, ensured):
+    """`ensure`'s answer decides (M7): with none coming, `record` asks no more and returns at once."""
+    from tap.service import client
+
+    connects = []
+    monkeypatch.setattr(client, "connect", lambda timeout: connects.append(timeout))
+    monkeypatch.setattr(client, "ensure", lambda: ensured)
+    started = time.monotonic()
+    assert record_client._connection(True, time.monotonic() + 5) is None
+    assert time.monotonic() - started < 0.5 and len(connects) == 1
+
+
+def test_record_never_waits_past_its_callers_budget(tmp_path, monkeypatch):
+    """The prompt's heal (a 5s hook) asks `--within 3`: a service that is coming and never answers
+    holds it no longer than that."""
+    from tap.service import client
+
+    monkeypatch.setenv(record_client.HOSTED_ENV, "1")
+    monkeypatch.setattr(client, "connect", lambda timeout: None)
+    monkeypatch.setattr(client, "ensure", lambda: "spawned")
+    started = time.monotonic()
+    args = _args(tmp_path)
+    args.within = 0.6
+    assert record_client.record(args) == 1
+    assert time.monotonic() - started < 1.5
+    assert record_client._within(args) == 0.6 and record_client._within(_args(tmp_path)) == record_client.TOTAL_S
+
+
 def test_switched_off_never_asks(tmp_path, monkeypatch):
     monkeypatch.setenv(record_client.HOSTED_ENV, "0")
     monkeypatch.setattr(record_client, "_call", lambda *a, **k: pytest.fail("asked the service"))
     assert record_client.record(_args(tmp_path)) == 1
 
 
-def test_tap_start_lets_the_service_record_before_spawning(tmp_path, monkeypatch):
+def test_tap_start_asks_the_service_and_never_records_itself(tmp_path, monkeypatch):
     transcript = tmp_path / "t.jsonl"
     transcript.write_text("")
     monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "plugin"))
@@ -426,12 +455,13 @@ def test_tap_start_lets_the_service_record_before_spawning(tmp_path, monkeypatch
     monkeypatch.setattr(cfg, "pid_file", lambda sid: tmp_path / f"{sid}.pid")
     monkeypatch.setattr(cfg, "shutdown_sentinel", lambda sid: tmp_path / f"{sid}.shutdown")
     monkeypatch.setattr(tap_start, "_hosted", lambda sid: None)
-    spawned, asked = [], []
+    asked = []
     argv = ["--session-id", "s-1", "--cwd", str(tmp_path), "--transcript", str(transcript)]
-    assert tap_start.main(argv, spawn=spawned.append, record=lambda a: asked.append(a) or True) == 0
-    assert asked and asked[0].session_id == "s-1" and spawned == []
-    assert tap_start.main(argv, spawn=spawned.append, record=lambda a: False) == 0
-    assert len(spawned) == 1, "the service could not: the wrapper, as before"
+    assert tap_start.main(argv, record=lambda a: asked.append(a) or True) == 0
+    assert asked and asked[0].session_id == "s-1"
+    # The service could not: not recorded, and no `tap watch` of its own (service-only task 15).
+    assert tap_start.main(argv, record=lambda a: False) == tap_start.EXIT_NOT_RECORDED
+    assert not (tmp_path / "s-1.pid").exists()
 
 
 def test_a_hosted_session_reads_as_running(tmp_path, monkeypatch):

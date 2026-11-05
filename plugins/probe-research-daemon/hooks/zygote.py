@@ -3,9 +3,9 @@
     python3 -S hooks/zygote.py <socket> <service pid>
 
 The Probe service starts one per installed plugin folder that sessions use
-(`probe.service.hookhosts`) and stops it with itself. `dispatch.sh` -> `dispatch.py`
-hands each event here instead of running it, when this answers in time
-(`dispatch.via_host`): the event runs in a child forked from this process, so
+(`probe.service.hookhosts`) and stops it with itself. The service, and only the service
+(service-only D7), hands an event here instead of running a fresh `dispatch.sh`
+(`probe.service.hooks.hooks._via_host`): the event runs in a child forked from this process, so
 it starts with the dispatcher, the routes' shared modules and their bytecode
 already loaded, in exactly the state a fresh `python3 -S` would have them --
 the parent never runs an event itself, so nothing one event leaves behind
@@ -98,7 +98,7 @@ _KEY: list = []
 
 
 def key_path(sock_path: str) -> str:
-    """`/tmp/probe-<uid>/hooks-<hash>.key` beside `.../hooks-<hash>.sock` (`dispatch.host_key_path`)."""
+    """`/tmp/probe-<uid>/hooks-<hash>.key` beside `.../hooks-<hash>.sock` (`probe.service.hooks.hooks.host_key_path`)."""
     stem = sock_path[: -len(".sock")] if sock_path.endswith(".sock") else sock_path
     return stem + KEY_SUFFIX
 

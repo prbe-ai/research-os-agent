@@ -1,4 +1,4 @@
-"""`tap start` — gates, pid-file states, and the spawn contract."""
+"""`tap start` — gates, pid-file states, and the Probe service as the only recorder (service-only task 15)."""
 
 from __future__ import annotations
 
@@ -54,95 +54,88 @@ def _args(tmp_path, **over):
     ]
 
 
+class _Service:
+    """The Probe service as `tap start` asks it (`record`): what it was asked, and its answer."""
+
+    def __init__(self, takes: bool = True) -> None:
+        self.takes = takes
+        self.asked: list = []
+
+    def __call__(self, args) -> bool:
+        self.asked.append(args)
+        return self.takes
+
+
 def test_unpaired_refuses_with_its_own_exit_code(plugin_dir, tmp_path):
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_NOT_PAIRED
-    assert spawned == []
+    service = _Service()
+    assert tap_start.main(_args(tmp_path), record=service) == tap_start.EXIT_NOT_PAIRED
+    assert service.asked == []
 
 
 def test_killswitch_refuses(paired, tmp_path):
     (paired / ".disabled").write_text("", encoding="utf-8")
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_KILLSWITCH
-    assert spawned == []
+    service = _Service()
+    assert tap_start.main(_args(tmp_path), record=service) == tap_start.EXIT_KILLSWITCH
+    assert service.asked == []
 
 
 def test_disabled_path_refuses(paired, tmp_path):
     (paired / ".disabled_paths").write_text(str(tmp_path) + "\n", encoding="utf-8")
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_DISABLED_PATH
-    assert spawned == []
+    service = _Service()
+    assert tap_start.main(_args(tmp_path), record=service) == tap_start.EXIT_DISABLED_PATH
+    assert service.asked == []
 
 
 def test_missing_transcript_refuses(paired, tmp_path):
-    spawned = []
-    code = tap_start.main(
-        _args(tmp_path, transcript=tmp_path / "gone.jsonl"), spawn=spawned.append
-    )
+    service = _Service()
+    code = tap_start.main(_args(tmp_path, transcript=tmp_path / "gone.jsonl"), record=service)
     assert code == tap_start.EXIT_NO_TRANSCRIPT
-    assert spawned == []
+    assert service.asked == []
 
 
-def test_old_interpreter_refuses_instead_of_crash_looping(paired, tmp_path):
-    spawned = []
-    code = tap_start.main(
-        _args(tmp_path), spawn=spawned.append, version_info=(3, 10, 14)
-    )
+def test_old_interpreter_refuses(paired, tmp_path):
+    service = _Service()
+    code = tap_start.main(_args(tmp_path), record=service, version_info=(3, 10, 14))
     assert code == tap_start.EXIT_INTERPRETER_TOO_OLD
-    assert spawned == []
+    assert service.asked == []
 
 
-def test_happy_path_spawns_once_and_passes_the_transcript(paired, tmp_path):
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_OK
-    assert len(spawned) == 1
-    argv = spawned[0]
-    assert argv[0] == "/bin/sh"
-    assert argv[1] == "-c"
-    assert "--transcript" in argv
-    assert argv[-1].endswith("session.jsonl")
+def test_past_the_gates_the_service_is_asked_once_with_the_transcript(paired, tmp_path):
+    service = _Service()
+    assert tap_start.main(_args(tmp_path), record=service) == tap_start.EXIT_OK
+    [asked] = service.asked
+    assert asked.session_id == SID and str(asked.transcript).endswith("session.jsonl")
+    assert not cfg.version_file(SID).exists() and not cfg.pid_file(SID).exists(), "nothing records here"
 
 
-def test_a_spawn_records_which_tap_started_it(paired, tmp_path):
-    """hooks/session-start.sh replaces a daemon an OLDER tap started when the
-    session resumes, and reads a missing record as a tap before 0.9.16: a
-    daemon this spawner started must say its version, or the next resume under
-    the same tap would stop and restart it for nothing."""
-    from tap import __version__
-
-    assert tap_start.main(_args(tmp_path), spawn=lambda argv: None) == tap_start.EXIT_OK
-    assert cfg.version_file(SID).read_text(encoding="utf-8") == __version__
-    assert cfg.version_file(SID).parent == cfg.pid_file(SID).parent
+def test_a_service_that_does_not_take_it_is_not_recorded_and_nothing_starts_here(paired, tmp_path):
+    """Service-only task 15: no `tap watch` of its own; the next prompt's heal asks again."""
+    assert tap_start.main(_args(tmp_path), record=_Service(takes=False)) == tap_start.EXIT_NOT_RECORDED
+    assert not cfg.pid_file(SID).exists()
 
 
-def test_live_daemon_is_already_running_not_a_second_spawn(paired, tmp_path, monkeypatch):
+def test_a_live_old_wrapper_is_already_running(paired, tmp_path, monkeypatch):
+    """A `tap watch` an older tap started still records the session: left to it."""
     cfg.pid_file(SID).write_text(str(os.getpid()), encoding="utf-8")
     monkeypatch.setattr(tap_start, "_looks_like_the_uploader", lambda pid: True)
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_OK
-    assert spawned == []
+    service = _Service()
+    assert tap_start.main(_args(tmp_path), record=service) == tap_start.EXIT_OK
+    assert service.asked == []
 
 
-def test_dead_pid_is_stale_so_the_spawn_proceeds(paired, tmp_path):
-    pf = cfg.pid_file(SID)
-    pf.write_text("999999999", encoding="utf-8")
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_OK
-    assert len(spawned) == 1
+def test_a_dead_or_foreign_pid_is_stale_and_the_service_is_asked(paired, tmp_path, monkeypatch):
+    for pid, ours in (("999999999", True), (str(os.getpid()), False)):
+        cfg.pid_file(SID).write_text(pid, encoding="utf-8")
+        monkeypatch.setattr(tap_start, "_looks_like_the_uploader", lambda _pid, ours=ours: ours)
+        service = _Service()
+        assert tap_start.main(_args(tmp_path), record=service) == tap_start.EXIT_OK
+        assert len(service.asked) == 1 and not cfg.pid_file(SID).exists()
 
 
-def test_live_pid_that_is_not_the_tap_is_stale(paired, tmp_path, monkeypatch):
-    cfg.pid_file(SID).write_text(str(os.getpid()), encoding="utf-8")
-    monkeypatch.setattr(tap_start, "_looks_like_the_uploader", lambda pid: False)
-    spawned = []
-    assert tap_start.main(_args(tmp_path), spawn=spawned.append) == tap_start.EXIT_OK
-    assert len(spawned) == 1
-
-
-def test_a_stale_shutdown_sentinel_is_cleared_before_spawning(paired, tmp_path):
+def test_a_stale_shutdown_sentinel_is_cleared_before_asking(paired, tmp_path):
     sentinel = cfg.shutdown_sentinel(SID)
     sentinel.write_text("", encoding="utf-8")
-    tap_start.main(_args(tmp_path), spawn=lambda argv: None)
+    tap_start.main(_args(tmp_path), record=_Service())
     assert not sentinel.exists()
 
 
@@ -191,11 +184,10 @@ def test_a_resume_while_the_hosted_session_finishes_records_it_again(paired, tmp
 
     monkeypatch.setattr(record_client, "hosted_pid", lambda sid: 4242)
     monkeypatch.setattr(record_client, "recording", lambda args: 0)
-    asked, spawned = [], []
-    code = tap_start.main(_args(tmp_path), spawn=spawned.append, record=lambda a: asked.append(a) or True)
+    asked = []
+    code = tap_start.main(_args(tmp_path), record=lambda a: asked.append(a) or True)
     assert code == tap_start.EXIT_OK
     assert len(asked) == 1, "the resumed session was never asked to be recorded"
-    assert spawned == []
     assert not sentinel.exists(), "the sentinel would end the resumed session's recorder"
 
 
@@ -204,9 +196,9 @@ def test_a_hosted_session_that_is_not_finishing_is_already_running(paired, tmp_p
 
     monkeypatch.setattr(record_client, "hosted_pid", lambda sid: 4242)
     monkeypatch.setattr(record_client, "recording", lambda args: 0)
-    asked, spawned = [], []
-    code = tap_start.main(_args(tmp_path), spawn=spawned.append, record=lambda a: asked.append(a) or True)
-    assert (code, asked, spawned) == (tap_start.EXIT_OK, [], [])
+    asked = []
+    code = tap_start.main(_args(tmp_path), record=lambda a: asked.append(a) or True)
+    assert (code, asked) == (tap_start.EXIT_OK, [])
     assert tap_start.daemon_state(SID) == ("running", 4242)
 
 
@@ -227,7 +219,7 @@ def test_pi_0_6_2s_resume_with_no_watcher_files_clears_the_sentinel_and_asks(pai
     sentinel.touch()
     assert tap_start.daemon_state(SID) == ("none", None)
     asked = []
-    code = tap_start.main(_args(tmp_path), spawn=lambda argv: None, record=lambda a: asked.append(a) or True)
+    code = tap_start.main(_args(tmp_path), record=lambda a: asked.append(a) or True)
     assert (code, len(asked), sentinel.exists()) == (tap_start.EXIT_OK, 1, False)
 
 

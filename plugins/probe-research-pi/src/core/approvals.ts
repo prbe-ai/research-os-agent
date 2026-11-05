@@ -39,7 +39,6 @@
 import { join } from "node:path";
 
 import { approvalsDir, type PathEnv } from "./paths.js";
-import { spawnDetachedProbe, type TeamNoteSyncDeps } from "./teamNote.js";
 
 /** `approvals.WAITING`: the only state a question is asked in. */
 export const REQUEST_WAITING = "waiting";
@@ -271,36 +270,4 @@ export class QuestionAsker {
       this.state.open = false;
     }
   }
-}
-
-/**
- * Fire a detached `probe feedback flush` and return at once. Never throws: a
- * failure leaves the yes on disk, and the next session start's flush sends it.
- */
-export function spawnFeedbackFlush(deps: TeamNoteSyncDeps): void {
-  spawnDetachedProbe(deps, ["feedback", "flush"], "feedback flush");
-}
-
-/**
- * Is a feedback question answered and not acted on yet (`version_check._feedback_unsent`)?
- * A few small file reads, so session start spawns a cold `probe` only when
- * there is something to send.
- */
-export function feedbackUnsent(deps: ApprovalsDeps): boolean {
-  let names: string[];
-  try {
-    names = deps.readdirSync(requestsDir(deps.env)).filter((name) => name.endsWith(".json"));
-  } catch {
-    return false;
-  }
-  for (const name of names) {
-    const req = readJson(join(requestsDir(deps.env), name), deps);
-    if (typeof req !== "object" || req === null) continue;
-    const { policy, state, outcome } = req as Record<string, unknown>;
-    if (policy !== FEEDBACK_POLICY) continue;
-    if (state === REQUEST_APPROVED && outcome === FEEDBACK_UNSENT) return true;
-    if (state === REQUEST_VOID && outcome === FEEDBACK_OLD_DAEMON_VOID) return true;
-    if (state === REQUEST_WAITING && deps.existsSync(join(approvalsDir(deps.env), "answers", name))) return true;
-  }
-  return false;
 }

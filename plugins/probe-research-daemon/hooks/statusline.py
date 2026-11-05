@@ -1,233 +1,154 @@
 #!/usr/bin/env python3
-"""Probe Research status-line segment: is this session's work landing in Probe?
+"""Probe Research status-line segment: the command that prints what the Probe service draws (service-only D14).
 
-Reads the status-line payload on stdin, prints ONE bounded segment, exits 0.
-
-    (nothing)                           Probe is not configured on this machine
-      ● tracking                        configured; this session has recorded nothing
-      ● tracking → bird-sql-sft         its work is filed under that project
-      ● tracking → bird-sql-sft · running  ...and a run it opened is executing now
-      ◐ tracking → bird-sql-sft · not capturing session transcript: halted
-                                        ...work lands, but no transcript daemon is watching
-      ● read-only                       searching prior work, recording nothing
-      ● off                             not calling Probe at all (RED, not yellow)
+Reads the status-line payload on stdin, hands it to this machine's Probe service
+(`statusline.render`, drawn by `probe.service.jobs.statusline_render`), prints the ONE line
+it answers, exits 0. When no service answers it prints exactly `Probe: service down` (T39)
+and asks for one (`probe.service.client ensure`, detached, at most every ENSURE_EVERY_S):
+the next render finds it. Nothing here reads Probe's state or decides what to show.
 
 CONTRACT — this runs on a RENDER PATH, once per status-line update:
 
-  * NO NETWORK, and no `probe` subprocess. The answer comes from a marker file
-    that `statusline_refresh.py` keeps warm in the background. `probe --version`
-    alone costs ~300ms of interpreter and imports; this renders in ~26ms measured
-    against the system python3, which is the entire reason it imports nothing of
-    ours but one vendored stdlib module loaded by explicit path. Adding an import
-    here is not free -- pulling in `urllib.request` alone doubled it.
-  * SILENT ON EVERY FAILURE. A traceback here is a broken prompt, and stderr
-    from a status-line command is logged on every render. Exit 0 with empty
-    stdout instead.
-  * ONE LINE, NEVER A NEWLINE. Claude Code splits this command's stdout on
-    newlines and renders each as its own status row.
+  * NO NETWORK, and no `probe` subprocess on the way to an answer: one local socket
+    round trip. `_service_paths.py` (copied beside this file) says where the socket is.
+  * SILENT ON EVERY FAILURE. Exit 0; a traceback here is a broken prompt.
+  * ONE LINE, NEVER A NEWLINE. Claude Code renders each stdout line as its own row.
 
-KIMI CODE (`$KIMI_CODE_HOME/tui.toml` `[status_line] command`) runs this too,
-with `KIMI_CODE_STATUS_LINE=1` set. Its command REPLACES Kimi's footer line 1
-and only the first stdout line counts, so there the output is the whole line:
-Kimi's own `model  ~/cwd  branch` (or the first line of a researcher's own
-command, handed over in `PROBE_SL_PREFIX` by the chain) followed by the
-segment. Kimi kills the command after 300 ms; this stays at the same ~26 ms.
+KIMI CODE (`$KIMI_CODE_HOME/tui.toml` `[status_line] command`) runs this too, with
+`KIMI_CODE_STATUS_LINE=1` set: the service then draws Kimi's whole footer line 1. Kimi
+kills the command after 300 ms (TIMEOUT_S stays inside it).
 
-STDIN MAY BE EMPTY, and that is a supported case rather than a bug. The
-status line is a single global slot, so this command is typically CHAINED
-after somebody else's — and a predecessor that does `input=$(cat)` has already
-drained the pipe. The wizard's status-line step builds a chain that tees stdin to
-both sides, but a hand-written chain will not, so fall back to the session id
-in the environment before giving up.
+STDIN MAY BE EMPTY (a chained command before this one drained it): the service then finds the
+session in the environment this hands over (RENDER_ENV).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
+import time
+
+#: The whole exchange (connect, hello, render), at most: inside Kimi's 300 ms.
+TIMEOUT_S = 0.25
+#: What the command prints when no service answers (T39, decided string).
+SERVICE_DOWN = "Probe: service down"
+#: The variables the service's renderer reads (`statusline_render.py`): the prefix, colour, the home
+#: folder, and the caller's own Probe credential and config file (D11: they travel with the request;
+#: the service never reads its own environment's); by suffix, every agent's session or thread
+#: variable for a drained stdin and an agent's status-line switch, named by no agent here.
+RENDER_ENV = ("PROBE_SL_PREFIX", "NO_COLOR", "HOME", "PROBE_TOKEN", "PROBE_MCP_TOKEN", "PROBE_CONFIG_PATH")
+RENDER_ENV_SUFFIX = ("_SESSION_ID", "_THREAD_ID", "_STATUS_LINE")
+MAX_PAYLOAD = 256 * 1024
+#: A detached `ensure` is started at most this often (its stamp in the service's folder).
+ENSURE_EVERY_S = 30.0
+ENSURE_STAMP = "statusline.ensured"
 
 
-def _load(name: str):
-    """A vendored sibling module, by EXPLICIT path only.
-
-    Never a bare import: sys.path can carry the user's project directory, and
-    executing a same-named stranger inside a status-line command would be
-    arbitrary code execution on every render. Mirrors telemetry.py's `_load_core`.
-    """
+def _paths():
+    """`_service_paths.py` beside this file, by EXPLICIT path only (never a bare import: a
+    same-named module in the user's project would run on every render)."""
     import importlib.util  # noqa: PLC0415
 
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name + ".py")
-    spec = importlib.util.spec_from_file_location(name, path)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_service_paths.py")
+    spec = importlib.util.spec_from_file_location("_probe_statusline_service_paths", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def _kimi() -> bool:
-    """Kimi Code sets this on its status-line command's environment."""
-    return os.environ.get("KIMI_CODE_STATUS_LINE") == "1"
+def render_env(environ) -> dict:
+    return {k: v for k, v in environ.items()
+            if (k in RENDER_ENV or k.endswith(RENDER_ENV_SUFFIX)) and len(v) <= 4096 and "\0" not in v}
 
 
-def _uuid_tail(value: str) -> str:
-    """The UUID a harness id ends with (Kimi's `session_<uuid>`): Probe keys
-    every session by the bare UUID."""
-    tail = value[-36:]
-    if len(tail) == 36 and tail.count("-") == 4 and all(c in "0123456789abcdefABCDEF-" for c in tail):
-        return tail.lower()
-    return value
-
-
-def resolve_session_id(payload: dict) -> str:
-    """The session this status line belongs to.
-
-    `session_id` off the payload first — it is the only value that is correct
-    when several sessions run at once. The environment fallback exists solely
-    for a drained-stdin chain (see the module docstring); it is right in the
-    common case of one session per terminal and is the best available guess
-    otherwise, which beats rendering nothing.
-    """
-    session_id = payload.get("session_id")
-    if isinstance(session_id, str) and session_id:
-        return session_id
-    if "sessionId" in payload:
-        # Kimi Code's snapshot. Empty until the first message (Kimi creates the
-        # session then): no session yet, so the line shows what a new one starts
-        # as. Never the environment fallback: the footer's copy of this renderer
-        # carries only RENDERER_FILES, and `_hook_harness` is not one of them.
-        kimi_session = payload.get("sessionId")
-        return _uuid_tail(kimi_session) if isinstance(kimi_session, str) and kimi_session else ""
-    transcript = payload.get("transcript_path")
-    if isinstance(transcript, str) and transcript:
-        # `~/.claude/projects/<slug>/<session-id>.jsonl` — the basename IS the id.
-        stem = os.path.splitext(os.path.basename(transcript))[0]
-        if stem:
-            return stem
+def ask_service(paths, raw: str, deadline: float) -> "str | None":
+    """`statusline.render`'s line, or None: no service answered."""
+    path = paths.socket_path()
+    paths.require_private(path.parent)
+    lines = [
+        {"jsonrpc": "2.0", "id": 1, "method": "service.hello",
+         "params": {"client": "cli", "client_version": "statusline", "api": 1}},
+        {"jsonrpc": "2.0", "id": 2, "method": "statusline.render",
+         "params": {"payload": raw[:MAX_PAYLOAD], "env": render_env(os.environ)}},
+    ]
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        return _load("_hook_harness").session_id()
-    except Exception:  # noqa: BLE001 - a copy without the module renders the default
-        return ""
+        sock.settimeout(max(deadline - time.monotonic(), 0.01))
+        sock.connect(str(path))
+        sock.sendall(b"".join(json.dumps(line).encode("utf-8") + b"\n" for line in lines))
+        buffer = b""
+        while True:
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                message = json.loads(line.decode("utf-8"))
+                if isinstance(message, dict) and message.get("id") == 2:
+                    result = message.get("result")
+                    text = result.get("text") if isinstance(result, dict) else None
+                    return text if isinstance(text, str) else None
+            sock.settimeout(max(deadline - time.monotonic(), 0.01))
+            chunk = sock.recv(65536)
+            if not chunk or len(buffer) > 1 << 20:
+                return None
+            buffer += chunk
+    finally:
+        sock.close()
 
 
-#: The status line is Claude Code's (`statusLine` in its settings.json): who
-#: records for THIS coding agent decides a session not yet marked.
-AGENT = "claude_code"  # harness-literal-ok: the status line is a Claude Code feature
-#: ...or Kimi Code's (`[status_line] command` in its tui.toml).
-KIMI_AGENT = "kimi_code"  # harness-literal-ok: Kimi Code's footer runs this renderer
+def start_service(paths) -> None:
+    """Ask for a service (`probe.service.client ensure`, the CLI's own way), detached and never
+    waited on, at most every ENSURE_EVERY_S. Nothing when no CLI is installed here."""
+    import subprocess  # noqa: PLC0415
 
-
-def segment(payload: dict) -> str:
-    agent = KIMI_AGENT if _kimi() else AGENT
-    marker = _load("_session_marker")
-
-    # ONE parse of the config file, two answers off it: whether Probe is set up
-    # at all, and this machine's tracking default. Both are needed on every
-    # render and the file is the only I/O here worth counting.
-    config = marker._read_config()
-    if not marker.configured(config):
-        return ""
-
-    session_id = resolve_session_id(payload)
-    cwd = payload.get("cwd")
-    cwd = cwd if isinstance(cwd, str) and cwd else None
-    if not session_id:
-        switch, _source = marker.resolve_state_default(cwd, config)
-        switch = marker.seed_state("", switch, agent)
-        return marker.render(
-            None,
-            configured=True,
-            tracking=marker.state_allows_writes(switch),
-            color=_color(),
-            session_state=switch,
-            # Kimi's footer before its first message (no session yet): the worker
-            # has not started, so it is STARTING when it can start at all, as
-            # below; never `daemon degraded` (issue 3619).
-            daemon_live=marker.companion_key_held(config),
-            daemon=marker.daemon_session("", agent),
+    stamp = os.path.join(str(paths.service_dir()), ENSURE_STAMP)
+    try:
+        if time.time() - os.stat(stamp).st_mtime < ENSURE_EVERY_S:
+            return
+    except OSError:
+        pass
+    python = None
+    try:
+        with open(paths.runtime_path(), encoding="utf-8") as handle:
+            python = json.load(handle).get("python")
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not (isinstance(python, str) and os.path.isabs(python) and os.access(python, os.X_OK)):
+        fallback = str(paths.fallback_python())
+        python = fallback if os.access(fallback, os.X_OK) else None
+    if python is None:
+        return
+    try:
+        with open(stamp, "a"):
+            pass
+        os.utime(stamp, None)
+        subprocess.Popen(  # noqa: S603 -- the CLI's own interpreter and client
+            [python, "-I", "-m", "probe.service.client", "ensure"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd="/", close_fds=True, start_new_session=True,
         )
-
-    state = marker.read(session_id)
-    switch = marker.session_state(session_id)
-    if switch is None:
-        # No decision on disk YET, most often: Claude Code draws this line once
-        # while SessionStart is still running, and does not draw it again until
-        # the conversation moves. So resolve exactly as that hook is about to
-        # seed it (`seed_state`: `on` by who records), or a new daemon session
-        # shows the agent's words until its first prompt (Richard 2026-09-29).
-        switch, _source = marker.resolve_state_default(cwd, config)
-        switch = marker.seed_state(session_id, switch, agent)
-    tracking = marker.state_allows_writes(switch)
-    daemon = marker.daemon_status(session_id, switch)
-    rendered = marker.render(
-        state,
-        configured=True,
-        tracking=tracking,
-        live=tracking and marker.is_live(state),
-        color=_color(),
-        session_state=switch,
-        # A worker that has not taken its first lease yet is STARTING, not down,
-        # when it can start at all (the daemon holds its key) -- the grace the
-        # prompt hook gives (`tracking_guard._daemon_notice`). This line is drawn
-        # right at session start and not again until the conversation moves.
-        daemon_live=daemon is not None and (
-            daemon[0] == marker.DAEMON_LIVE
-            or (daemon[1] == marker.DAEMON_NOT_STARTED and marker.companion_key_held(config))
-        ),
-        # `read only (daemon)` in a session the daemon reads for; a session the
-        # lean plugin has not marked yet goes by who records for Claude Code.
-        daemon=marker.daemon_session(session_id, agent),
-        # `on (inline)`: the researcher set Probe inline (`/probe inline`).
-        inline=marker.is_inline(session_id, switch),
-    )
-    return rendered
-
-
-def kimi_line(payload: dict, ours: str) -> str:
-    """Kimi Code's footer line 1, which this command replaces: the researcher's
-    own first line when the chain hands one over, else Kimi's `model  ~/cwd
-    branch`, then our segment."""
-    prefix = (os.environ.get("PROBE_SL_PREFIX") or "").strip()
-    if not prefix:
-        parts = []
-        model = payload.get("model")
-        if isinstance(model, str) and model:
-            parts.append(model)
-        cwd = payload.get("cwd")
-        if isinstance(cwd, str) and cwd:
-            home = os.path.expanduser("~")
-            parts.append("~" + cwd[len(home):] if home and (cwd == home or cwd.startswith(home + os.sep)) else cwd)
-        branch = payload.get("gitBranch")
-        if isinstance(branch, str) and branch:
-            parts.append(branch)
-        prefix = "  ".join(parts)
-    return "  ".join(part for part in (prefix, ours) if part)
-
-
-def _color() -> bool:
-    """Honour NO_COLOR; Claude Code dims the status line itself either way."""
-    return not os.environ.get("NO_COLOR")
+    except OSError:
+        pass
 
 
 def main() -> int:
+    deadline = time.monotonic() + TIMEOUT_S
     try:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
     except (OSError, ValueError):
         raw = ""
+    out = None
+    paths = None
     try:
-        payload = json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict):
-            payload = {}
-    except ValueError:
-        payload = {}
-
-    try:
-        out = segment(payload)
-    except BaseException:  # noqa: BLE001 - a render path may never traceback
-        out = ""
-    if _kimi():
+        paths = _paths()
+        out = ask_service(paths, raw, deadline)
+    except Exception:  # noqa: BLE001 -- a render path may never traceback
+        out = None
+    if out is None:
+        out = SERVICE_DOWN
         try:
-            out = kimi_line(payload, out)
-        except BaseException:  # noqa: BLE001 - a render path may never traceback
+            if paths is not None:
+                start_service(paths)
+        except Exception:  # noqa: BLE001
             pass
     if out:
         # No newline: the caller joins segments, and a newline would become a row.

@@ -17,7 +17,6 @@ writes the marker), and a stand-in service: a process named `probe.service`.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import shutil
@@ -134,28 +133,6 @@ def _alive(proc: subprocess.Popen, wait: float = 1.0) -> bool:
 
 # -- session-start.sh: a dead wrapper's pid file -----------------------------------------
 
-
-def test_hosting_a_session_removes_a_dead_wrappers_pid_file(plugin, sid, service):
-    """Audit #2: the wrapper gave up, the session moved to the service, and
-    the dead wrapper's pid file stayed beside the marker: `probe session
-    status` read it and said `not started`, and session-end.sh signalled
-    whatever process had its pid by then."""
-    pid_file = _watcher(sid, ".pid")
-    pid_file.write_text(str(_dead_pid()))
-    _session_start(plugin, sid)
-    assert _watcher(sid, ".hosted").read_text() == str(service)
-    assert not pid_file.exists(), "the dead wrapper's pid file outlived the hosting"
-
-
-@pytest.mark.parametrize("content", ["0", "1", "not-a-pid"])
-def test_a_pid_file_naming_no_wrapper_at_all_is_removed(plugin, sid, content):
-    pid_file = _watcher(sid, ".pid")
-    pid_file.write_text(content)
-    _session_start(plugin, sid)
-    assert _watcher(sid, ".hosted").exists()
-    assert not pid_file.exists()
-
-
 def test_an_empty_pid_file_being_written_is_left(plugin, sid, tmp_path):
     """A wrapper truncates its pid file, then writes its pid: an empty one may
     be a wrapper starting right now."""
@@ -163,26 +140,6 @@ def test_an_empty_pid_file_being_written_is_left(plugin, sid, tmp_path):
     pid_file.write_text("")
     _session_start(plugin, sid)
     assert pid_file.exists()
-
-
-def test_a_live_wrapper_of_this_session_is_still_left_alone(plugin, sid):
-    """Its pid file names a live process of this session (a same-version
-    resume): nothing is removed or hosted."""
-    wrapper = subprocess.Popen(
-        ["bash", "-c", 'sleep 60; : "$PY" -m tap watch --session-id "$1"', "wrapper", sid], start_new_session=True
-    )
-    pid_file = _watcher(sid, ".pid")
-    try:
-        pid_file.write_text(str(wrapper.pid))
-        _watcher(sid, ".version").write_text("0.10.17")
-        _session_start(plugin, sid)
-        assert pid_file.read_text() == str(wrapper.pid)
-        assert not _watcher(sid, ".hosted").exists()
-        assert _alive(wrapper, 0.2)
-    finally:
-        wrapper.kill()
-        wrapper.wait()
-
 
 # -- session-start.sh: the 2-day prune of `.hosted` markers -------------------------------
 
@@ -238,33 +195,6 @@ def test_a_fresh_marker_is_never_looked_at(plugin, sid):
     finally:
         fresh.unlink(missing_ok=True)
 
-
-def test_on_git_bash_a_marker_is_kept_while_the_service_lock_names_its_pid(plugin, sid, tmp_path, service):
-    """Git Bash's `kill` and `ps` know MSYS pids, and the marker holds the
-    service's Windows pid: the service's lock file (`server._name_holder`) is
-    what names it there. (The kept marker names the stand-in service, so the
-    prune a test running beside this one makes on Linux keeps it too.)"""
-    root, env, _ = plugin
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "cygpath").write_text('#!/bin/sh\ncase "$1" in -*) shift ;; esac\nprintf "%s\\n" "$1"\n')
-    (bin_dir / "cygpath").chmod(0o755)
-    local = tmp_path / "LocalAppData"
-    lock = local / "probe" / "service" / "0123456789abcdef" / "service.lock"
-    lock.parent.mkdir(parents=True)
-    lock.write_text(f"{service} 133456789012345678\n")
-    kept = _aged(_watcher(f"pytest-hosted-win-{uuid.uuid4()}", ".hosted"), str(service))
-    gone = _aged(_watcher(f"pytest-hosted-win-{uuid.uuid4()}", ".hosted"), str(service + 1))
-    windows = {**env, "OSTYPE": "msys", "LOCALAPPDATA": str(local), "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}"}
-    try:
-        _session_start((root, windows, tmp_path), sid)
-        assert kept.exists()
-        assert not gone.exists()
-    finally:
-        kept.unlink(missing_ok=True)
-        gone.unlink(missing_ok=True)
-
-
 # -- session-end.sh: only this session's wrapper is signalled ---------------------------
 
 
@@ -299,25 +229,6 @@ def test_session_end_never_signals_another_sessions_wrapper(plugin, sid):
     finally:
         wrapper.kill()
         wrapper.wait()
-
-
-def test_session_end_still_stops_this_sessions_wrapper(plugin, sid):
-    wrapper = subprocess.Popen(
-        ["bash", "-c", 'trap "exit 0" TERM; while :; do sleep 0.1; done; : "$PY" -m tap watch --session-id "$1"',
-         "wrapper", sid],
-        start_new_session=True,
-    )
-    try:
-        time.sleep(0.2)
-        _watcher(sid, ".pid").write_text(str(wrapper.pid))
-        _session_end(plugin, sid)
-        assert not _alive(wrapper, 5.0), "SessionEnd left this session's wrapper running"
-        assert not _watcher(sid, ".pid").exists()
-    finally:
-        with contextlib.suppress(OSError):
-            wrapper.kill()
-        wrapper.wait()
-
 
 # -- ensure-daemon.sh: the `.hosted` fast path --------------------------------------------
 
@@ -448,23 +359,6 @@ def test_session_start_clears_the_last_hand_over(plugin, sid):
     assert not _watcher(sid, ".stopping").exists()
     assert not _watcher(sid, ".shutdown").exists()
 
-
-def test_a_live_pid_running_something_else_is_a_stale_pid_file(plugin, sid):
-    """Pids are reused: a pid file whose (readable) command line is not this
-    session's `tap watch` names no wrapper of it, and goes; the process is
-    never signalled."""
-    stranger = subprocess.Popen(["sleep", "60"])
-    try:
-        _watcher(sid, ".pid").write_text(str(stranger.pid))
-        _session_start(plugin, sid)
-        assert _watcher(sid, ".hosted").exists(), "the session was left to a process that is not its tap"
-        assert not _watcher(sid, ".pid").exists()
-        assert _alive(stranger, 0.2)
-    finally:
-        stranger.kill()
-        stranger.wait()
-
-
 # -- the delta review ------------------------------------------------------------------
 
 
@@ -484,43 +378,6 @@ def _path_without(tmp_path: Path, name: str) -> str:
                 link.symlink_to(Path(directory) / entry)
     assert shutil.which(name, path=str(bare)) is None
     return str(bare)
-
-
-@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="the fallback reads Linux's /proc")
-def test_without_ps_the_waiting_entry_still_finds_the_handed_over_group(plugin, sid, tmp_path):
-    """After a hand-over the wrapper is gone and only its group's `tap watch`
-    is left. With no `ps` (a slim image, or a busybox one without `pgid`) the
-    group's members come from /proc: else `--wait` stopped waiting at once
-    (29 ms) while the daemon still made its last pass (2.6 s)."""
-    root, env, _ = plugin
-    finished = tmp_path / "finished"
-    daemon = (
-        'trap "T=1" TERM; T=; while [ -z "$T" ]; do sleep 0.05; done; trap "" TERM; sleep 1.5; : >"$1"'
-        ' # -m tap watch --session-id "$2"'
-    )
-    wrapper = subprocess.Popen(
-        ["bash", "-c", 'trap \'kill -TERM "$C" 2>/dev/null; exit 0\' TERM; bash -c "$1" daemon "$2" "$3" & C=$!; '
-         'wait "$C" # "$PY" -m tap watch --session-id "$3"', "wrapper", daemon, str(finished), sid],
-        start_new_session=True,
-    )
-    try:
-        time.sleep(0.3)
-        _watcher(sid, ".pid").write_text(str(wrapper.pid))
-        _session_end(plugin, sid)  # the first entry: signals, and hands the pid over
-        assert _watcher(sid, ".stopping").read_text() == str(wrapper.pid)
-        wrapper.wait(5)  # the wrapper exits once it forwarded TERM; its group lives on
-        started = time.monotonic()
-        subprocess.run(
-            ["bash", str(root / "hooks" / "session-end.sh"), "--wait"],
-            input=json.dumps({"session_id": sid, "reason": "other"}), capture_output=True, text=True,
-            env={**env, "PATH": _path_without(tmp_path, "ps"), "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS": "6000"},
-            timeout=30, check=True,
-        )
-        assert finished.exists(), f"returned after {time.monotonic() - started:.2f}s, before the last pass ended"
-    finally:
-        with contextlib.suppress(OSError):
-            os.killpg(wrapper.pid, 9)
-
 
 def test_the_prompt_check_starts_no_process_for_a_live_service(plugin, sid, service):
     """The common path of every prompt: the payload read is its one process
@@ -547,24 +404,3 @@ def test_a_version_record_that_is_a_link_is_never_read_or_written_through(plugin
     root, env, _ = plugin
     _session_start((root, {**env, "PROBE_TAP_HOSTED": "0"}, tmp_path), sid)
     assert target.read_text() == "untouched"
-
-
-def test_a_hand_over_link_is_never_written_through(plugin, sid, tmp_path):
-    target = tmp_path / "planted-target"
-    target.write_text("untouched")
-    wrapper = subprocess.Popen(
-        ["bash", "-c", 'trap "exit 0" TERM; while :; do sleep 0.1; done; : "$PY" -m tap watch --session-id "$1"',
-         "wrapper", sid],
-        start_new_session=True,
-    )
-    try:
-        time.sleep(0.2)
-        _watcher(sid, ".pid").write_text(str(wrapper.pid))
-        _watcher(sid, ".stopping").symlink_to(target)
-        _session_end(plugin, sid)
-        assert target.read_text() == "untouched"
-        assert not _alive(wrapper, 5.0), "this session's wrapper is still stopped"
-    finally:
-        with contextlib.suppress(OSError):
-            wrapper.kill()
-        wrapper.wait()

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import itertools
 import json
-import os
 import subprocess
 import threading
 import time
@@ -26,7 +25,6 @@ import pytest
 from tap import companion_supervisor, handback
 from tap import config as cfg
 from tap import main as tapmain
-from tap import start as tap_start
 from tap.service import client
 from tap.transcripts.journal import Journal
 from tap.storage import Storage
@@ -815,46 +813,10 @@ def test_the_service_status_names_the_claim_only_while_its_recorder_holds_it(mon
     assert seen == {"held": 77, "waiting": None, "older tap": None, "older service": None, "other session": None}
 
 
-# -- the wrappers end on a hand-over ----------------------------------------------------------
-
-
-def _fake_python(tmp_path: Path, code: int) -> tuple[Path, Path]:
-    ran = tmp_path / "ran"
-    fake = tmp_path / "fake-python"
-    fake.write_text(f'#!/bin/sh\necho "$*" >>"{ran}"\nexit {code}\n')
-    fake.chmod(0o755)
-    return fake, ran
-
-
-def _session_start_wrapper() -> str:
-    """The wrapper script `hooks/session-start.sh` spawns, as its own bash reads it."""
-    done = subprocess.run(
-        ["bash", "-c", 'eval "$(sed -n "/^WRAPPER_SCRIPT=/,/^\'\\$/p" "$1")"; printf %s "$WRAPPER_SCRIPT"', "x",
-         str(HOOKS / "session-start.sh")],
-        capture_output=True, text=True, check=True, timeout=10,
-    )
-    assert "-m tap watch" in done.stdout, done.stdout
-    return done.stdout
-
-
-@pytest.mark.skipif(os.name != "posix", reason="the wrappers are POSIX shell")
-@pytest.mark.parametrize("wrapper", ["session-start.sh", "tap start"])
-def test_the_wrapper_ends_when_tap_watch_handed_the_session_over(tmp_path, wrapper):
-    fake, ran = _fake_python(tmp_path, handback.EXIT_HANDED_OVER)
-    sid = f"pytest-handback-{os.getpid()}-{uuid4().hex[:8]}"
-    pid_file = tmp_path / f"{sid}.pid"
-    log = tmp_path / "log"
-    if wrapper == "tap start":
-        argv = ["/bin/sh", "-c", tap_start.WRAPPER, "sh", sid, str(tmp_path), str(fake), str(log), str(pid_file),
-                "probe-research-tap", "--transcript", str(tmp_path / "t.jsonl")]
-    else:
-        argv = ["/bin/bash", "-c", _session_start_wrapper(), "wrapper", sid, str(tmp_path), str(fake), str(tmp_path),
-                str(log), str(pid_file), "probe-research-tap", "--transcript", str(tmp_path / "t.jsonl")]
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=4, check=False)
-    finally:
-        Path(f"/tmp/probe-research-tap-watcher-{sid}.shutdown").unlink(missing_ok=True)
-    assert done.returncode == 0, done.stderr
-    assert len(ran.read_text().splitlines()) == 1, "no respawn after a hand-over"
-    assert "tap watch" in ran.read_text()
-    assert not pid_file.exists(), "its pid file goes with it"
+# -- the wrappers end on a hand-over: retired with the wrappers (tap 0.10.45, service-only task 15) -----
+#
+# `test_the_wrapper_ends_when_tap_watch_handed_the_session_over` held the two wrappers that ran `tap watch`
+# (session-start.sh's and `tap start`'s) to ending on EXIT_HANDED_OVER. Neither exists any more: both
+# hooks ask the Probe service to record the session (`tap record`), and nothing starts a `tap watch`. A
+# `tap watch` an older tap left running still hands over (`tap/main.py`, held above), and its own
+# wrapper ends as that older tap's hooks wrote it.

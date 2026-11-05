@@ -1,12 +1,12 @@
 /**
- * The per-turn switch between pi's own code and the Probe service (PR 7, D47/D50), for `extension.ts`.
+ * pi's events to the Probe service (PR 7, D50; service-only task 16), for `extension.ts`.
  *
- * At a turn boundary (`session_start`, `before_agent_start`) `beginTurn` reads this machine's ledger
- * once; for the rest of the turn every handler asks `send`, which is null when this turn is not
- * forwarded (the machine has not moved pi: today's code runs) and the service's answer otherwise.
- * A forwarded turn never runs Probe's logic here (`serviceForward.ts`): a waiting event the service
- * did not answer goes on unchanged, a record-keeping one is queued, and the service is started. The decision and the session's context live in `ForwardState`,
- * the shim's shared state, so a newer implementation taking over carries them on.
+ * Every turn of a session is forwarded (on every machine, Probe off included: the service's
+ * routes read the switch): `send` gives the service's answer, and null only with no session.
+ * Nothing runs Probe's logic here (`serviceForward.ts`): a waiting event the service did not
+ * answer goes on unchanged, a record-keeping one is queued, and the service is started. The
+ * turn and the session's context live in `ForwardState`, the shim's shared state, so a newer
+ * implementation taking over carries them on.
  */
 
 import { dirname } from "node:path";
@@ -20,7 +20,6 @@ import {
   ForwardedEvent,
   ForwardOutcome,
   forwardEvent,
-  isForwarding,
   queueEvent,
   type ForwardAnswer,
   type ForwardDeps,
@@ -32,8 +31,9 @@ export const ForwardBudget: Readonly<Record<ForwardedEventName, { timeoutMs: num
   session_start: { timeoutMs: 10000, waitMs: 10500 },
   session_shutdown: { timeoutMs: 3000, waitMs: 2000 },
   before_agent_start: { timeoutMs: 3000, waitMs: 3500 },
-  // A tool call waits as it did on the guard's own `hooks.run` (D28).
-  tool_call: { timeoutMs: 250, waitMs: 300 },
+  // A tool call waits its lane's budget, as every harness's pre-tool event does (`hooks.LANE_BUDGET_S`):
+  // the service waits for a slot within it (D12), and a gate passes unchecked only with no service.
+  tool_call: { timeoutMs: 5000, waitMs: 5500 },
   agent_before_settle: { timeoutMs: 3000, waitMs: 3500 },
   // Record-keeping: nobody waits on its answer (the service goes on past the wait).
   agent_settled: { timeoutMs: 15000, waitMs: 1000 },
@@ -91,7 +91,7 @@ export interface ForwarderDeps extends ForwardDeps {
   forward?: typeof forwardEvent;
   ack?: typeof ackReceipt;
   queue?: typeof queueEvent;
-  /** Start this machine's Probe service (the one thing pi's own code does when none answers). */
+  /** Start this machine's Probe service (the one thing pi does when none answers: the CLI's `ensure`). */
   startService?: () => void;
   now?: () => number;
 }
@@ -102,16 +102,11 @@ export class Forwarder {
 
   constructor(private readonly deps: ForwarderDeps) {}
 
-  /** Does this machine's ledger send pi's events to the service (D47)? A file read. */
-  isMarked(): boolean {
-    return isForwarding((this.deps.serviceDir ?? (() => findServiceDir(this.deps.env)))(), this.deps.env);
-  }
-
-  /** A turn boundary: is this session's turn forwarded (D47)? Read once, kept for the turn. */
-  beginTurn(sessionId: string | undefined | null, isProbeOff: boolean): boolean {
-    const isOn = !isProbeOff && !!sessionId && this.deps.socket() !== null && this.isMarked();
-    if (isOn !== this.deps.state.turn.isOn || (sessionId ?? null) !== this.deps.state.turn.sessionId) {
-      this.deps.log?.(`probe service: ${sessionId}'s turns ${isOn ? "go to the Probe service" : "run here"}`);
+  /** A turn boundary: this session's turn goes to the service (every turn with a session). */
+  beginTurn(sessionId: string | undefined | null): boolean {
+    const isOn = !!sessionId;
+    if ((sessionId ?? null) !== this.deps.state.turn.sessionId) {
+      this.deps.log?.(`probe service: ${sessionId}'s turns go to the Probe service`);
     }
     this.deps.state.turn.sessionId = sessionId ?? null;
     this.deps.state.turn.isOn = isOn;
@@ -123,7 +118,7 @@ export class Forwarder {
     return !!sessionId && this.deps.state.turn.sessionId === sessionId && this.deps.state.turn.isOn;
   }
 
-  /** The event's answer, or null: this turn runs pi's own code. Never rejects. */
+  /** The event's answer, or null: no session to send it for. Never rejects. */
   async send(event: ForwardedEventName, ctx: any, fields: Record<string, unknown> = {}, isQueueable = true): Promise<ForwardAnswer | null> {
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     if (!this.isOn(sessionId)) return null;
@@ -203,7 +198,7 @@ export function ranToEnd(answer: ForwardAnswer | null): boolean {
   return answer !== null && answer.outcome === ForwardOutcome.Answered && answer.exitCode !== null && !answer.timedOut;
 }
 
-/** Did the service take the event (answered, or asked and lost: it may have run it)? */
+/** Did the service take the event (answered, refused, or asked and lost: it may have run it)? */
 export function wasAccepted(answer: ForwardAnswer | null): boolean {
   return answer !== null && answer.outcome !== ForwardOutcome.NotAccepted;
 }

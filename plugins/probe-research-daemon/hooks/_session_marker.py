@@ -3950,7 +3950,7 @@ def write_pasted_images(on: bool) -> Path:
     return path
 
 
-def configured(config: dict | None = None) -> bool:
+def configured(config: dict | None = None, environ=None) -> bool:
     """Whether this machine has a credential for Probe. Cheap, and fail-soft.
 
     `_telemetry_core` answers the same question and is vendored alongside this
@@ -3963,8 +3963,12 @@ def configured(config: dict | None = None) -> bool:
 
     Both config shapes, for the reason the core documents: reading only the flat
     v1 shape silently missed every install the wizard had produced.
+
+    `environ`: whose environment holds a token (this process's when None; the Probe service passes
+    its caller's, which travels with the request, never its own).
     """
-    if os.environ.get("PROBE_TOKEN") or os.environ.get("PROBE_MCP_TOKEN"):
+    environ = os.environ if environ is None else environ
+    if environ.get("PROBE_TOKEN") or environ.get("PROBE_MCP_TOKEN"):
         return True
     data = _read_config() if config is None else config
     if not data:

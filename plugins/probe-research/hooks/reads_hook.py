@@ -1809,6 +1809,36 @@ def hand_over_stop(raw: str) -> None:
         return
 
 
+#: The Stop wake's own budget from claude-reads.json (its `timeout`, 604860 s), less a margin.
+STOP_ENTRY_S = 604800.0
+
+
+def _run_by_service() -> bool:
+    """The service's run of the wake (its slice, `dispatch.run_by_service`): it waits here."""
+    if os.environ.get(VIA_ENV):
+        return True
+    try:
+        import dispatch
+
+        return dispatch.run_by_service()
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session
+        return False
+
+
+def _forward_stop(raw: str) -> int:
+    """The wake from claude-reads.json, which Claude Code runs itself: held by the Probe service
+    (`_hook_forward.forward_wait`), never here (service-only task 13). Its exit status."""
+    try:
+        import dispatch
+
+        client = dispatch._load_by_path("_hook_forward")
+        return client.forward_wait(os.path.dirname(dispatch.HERE), raw.encode("utf-8", "surrogateescape"),
+                                   until=time.monotonic() + STOP_ENTRY_S, harness=dispatch.agent_id(os.environ),
+                                   root_env=dispatch.root_variable(os.environ))
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session
+        return 0
+
+
 def _yields_to_shim() -> bool:
     """The Stop wake from claude-reads.json, outside dispatch.py: it steps aside
     as dispatch.py's events do (`dispatch.yields_to_shim`, codex-capture-fixes
@@ -1823,7 +1853,17 @@ def _yields_to_shim() -> bool:
 
 def main() -> int:
     if sys.argv[1:2] == ["--receipt"] and len(sys.argv) == 4 and sys.argv[3] in ("shown", "unshown"):
+        # The service settles an answer's receipt (`hooks.ack`): only its run of this hook does.
+        if not _run_by_service():
+            return 0
         return settle_receipt(sys.argv[2], sys.argv[3] == "shown")
+    if sys.argv[1:2] == ["--report"] and len(sys.argv) >= 4:
+        # pi's idle poller showed these inbox messages (`mailbox.delivered`): Probe hears it from the
+        # service's run of this hook, never from the extension's own network call.
+        if not _run_by_service():
+            return 0
+        report_delivered(sys.argv[2], sys.argv[3:])
+        return 0
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw)
@@ -1833,17 +1873,21 @@ def main() -> int:
         return 0
     event = payload.get("hook_event_name") or ""
     try:
+        if event in ("UserPromptSubmit", "PostToolUse") and not _run_by_service():
+            return 0  # a route of the dispatcher's lanes: only the Probe service runs it
         if event == "UserPromptSubmit":
             return on_prompt(payload)
         if event == "PostToolUse":
             return on_tool(payload)
         if event == "Stop":
-            if os.environ.get(VIA_ENV):
+            if _run_by_service():
                 return on_stop(payload, **_slice_options())
             if _yields_to_shim():
                 return 0  # the frozen hook shim's wake runs for this process
             hand_over_stop(raw)
-            return on_stop(payload)
+            if no_wake():
+                return 0  # a harness that cannot start a turn (Codex): the message waits for a prompt
+            return _forward_stop(raw)
     except Exception:  # noqa: BLE001 -- a hook never breaks the session
         return 0
     return 0

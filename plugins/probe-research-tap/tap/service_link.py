@@ -24,9 +24,9 @@ service's discovery window lapse. It never raises into capture and never
 waits on the service.
 
 The owner is the session's agent process, as `tap/owner.py` recorded it at
-SessionStart ({pid, start}); pi's extension names its own process instead,
-through `PROBE_SERVICE_OWNER_PID` in the env it starts the tap with (pi runs no
-`tap owner`). Neither: a heartbeat-only owner, alive while this thread beats.
+SessionStart ({pid, start}); for a pi session the Probe service names the pi
+process it verified instead, through `PROBE_SERVICE_OWNER_PID` in the env it
+starts the tap with (pi runs no `tap owner`). Neither: a heartbeat-only owner, alive while this thread beats.
 """
 
 from __future__ import annotations

@@ -1158,14 +1158,9 @@ def _capture_switched(session_id: str) -> None:
     at it now (`_service_call.capture_switched`). Probe off means the session
     is NOT captured: turned off, it is held before its agent writes another
     line; turned on again, it is recorded from this moment, and what was
-    written while off is never sent.
-
-    With no service answering and the switch on again, one is started, as the
-    dispatcher's own miss does (`dispatch.ensure_service`: the CLI's client,
-    detached, never waited on): a session held while off let the service go
-    idle, and nothing else may start it soon (the dispatcher waits after an
-    idle exit). Never for a session turned off: Probe off starts nothing.
-    Never raises, prints nothing."""
+    written while off is never sent. This route runs in the service, so it is
+    there to ask (service-only plan: nothing here starts one). Never raises,
+    prints nothing."""
     try:
         import importlib.util  # noqa: PLC0415
 
@@ -1173,26 +1168,7 @@ def _capture_switched(session_id: str) -> None:
         spec = importlib.util.spec_from_file_location("_probe_hooks._service_call", path)
         _service_call = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_service_call)
-        if _service_call.capture_switched(session_id):
-            return
-        if _session_marker.session_state(session_id) == _session_marker.STATE_OFF or os.name != "posix":
-            return
-        if any((os.environ.get(name) or "").strip().lower() == "off"
-               for name in ("PROBE_HOOK_SERVICE", "PROBE_READS_SERVICE")):
-            return
-        # The interpreter runtime.json names (the CLI writes it): no CLI ran
-        # here, nothing to start.
-        with open(_service_call._paths().runtime_path(), encoding="utf-8") as handle:
-            python = json.load(handle).get("python")
-        if not (isinstance(python, str) and os.path.isabs(python) and os.access(python, os.X_OK)):
-            return
-        import subprocess  # noqa: PLC0415
-
-        subprocess.Popen(  # noqa: S603 - the CLI's own interpreter and client
-            [python, "-I", "-m", "probe.service.client", "ensure"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            cwd="/", close_fds=True, start_new_session=True,
-        )
+        _service_call.capture_switched(session_id)
     except Exception:  # noqa: BLE001 - the service's own look comes within a moment while it runs
         pass
 

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .credential_scan.events import redact_event
+from .pinned import open_transcript
 
 
 @dataclass
@@ -85,7 +86,7 @@ def read_new(path: Path, byte_offset: int, limit: int | None = None) -> TailResu
     if cur_size <= start:
         return TailResult(lines=[], new_byte_offset=start, file_size=cur_size, inode=inode)
 
-    with path.open("rb") as f:
+    with open_transcript(path) as f:
         f.seek(start)
         buf = f.read() if limit is None else f.read(limit)
 
@@ -251,7 +252,7 @@ def byte_offset_after(path: Path, start: int, line_count: int) -> int:
     """
     seen = 0
     pos = start
-    with path.open("rb") as f:
+    with open_transcript(path) as f:
         f.seek(start)
         while seen < line_count:
             chunk = f.readline()

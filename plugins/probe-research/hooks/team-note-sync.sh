@@ -26,21 +26,11 @@
 # The "races the next session's pull" worry is handled: the render takes a lock
 # keyed on the instruction FILE, and reconcile is idempotent.
 #
-# FAIL-OPEN AND SILENT, like every hook in this plugin. A missing CLI, a dead
-# network, or a conflict all leave the file exactly as the agent left it, and the
-# next session start reconciles it. Losing the edit would be the only bad outcome
-# and nothing here can cause it.
+# FAIL-OPEN AND SILENT, like every hook in this plugin. A service that does not
+# take the sync, a dead network, or a conflict all leave the file exactly as the
+# agent left it, and the next session start reconciles it. Losing the edit would
+# be the only bad outcome and nothing here can cause it.
 set -u
-
-PROBE_BIN="$(command -v probe 2>/dev/null || true)"
-for _c in \
-  "$HOME/.local/bin/probe" \
-  "$HOME/.local/share/uv/tools/probe-research/bin/probe"
-do
-  [ -n "$PROBE_BIN" ] && break
-  [ -x "$_c" ] && PROBE_BIN="$_c"
-done
-[ -n "$PROBE_BIN" ] || exit 0
 
 # PROBE OFF MEANS NO NETWORK, and this is the loudest thing the plugin does
 # without being asked: a detached push, every turn. A researcher who set `off`
@@ -85,21 +75,9 @@ except Exception:
   fi
 fi
 
-# DETACHED, because the two harnesses give this hook wildly different budgets.
-# Claude Code fires it on Stop with room to spare; Codex caps SessionEnd at 3
-# seconds, which is not a round trip. Spawning and returning means the cap bounds
-# the SPAWN and the sync finishes on its own. `setsid` so it survives the
-# session's process group going away, which is the whole point of running at
-# session end.
-#
-# CORRECTION. An earlier version of this comment said Codex has no Stop event.
-# It does: a live Codex session prints `hook: Stop`, its hooks.json carries a
-# Stop group, and config.toml records trust per Stop hook. The observation that
-# prompted the claim was real but had a different cause -- Codex skips a hook
-# whose hash it has not been asked to trust, and this file's Stop entry is new,
-# so it is silently absent until the researcher approves it. Registering on
-# SessionEnd as well is still right (it is a second chance on a different
-# trust key), but not for the reason first given.
+# THE PROBE SERVICE SYNCS, once per machine (`notes.sync`, service-only plan
+# task 14): debounced, so every session's Stop in a burst is one push, never a
+# `probe` per session per turn. This route runs in the service; it only asks.
 # SessionEnd reconciles (and therefore renders); every other event pushes only.
 #
 # BOTH registrations state their mode explicitly, because this variable is
@@ -110,27 +88,13 @@ fi
 # --push-only makes the cheap path the fallback as well, so the failure mode of
 # a missing or unrecognised value is "did less", never "did more".
 if [ "${PROBE_HOOK_EVENT:-}" = "sessionend" ]; then
-  set -- notes sync
   _MODE=reconcile
 else
-  set -- notes sync --push-only
   _MODE=push
 fi
 
-# THE PROBE SERVICE RUNS IT ONCE PER MACHINE where one answers (`notes.sync`):
-# debounced, so every session's Stop in a burst is one push, never a `probe`
-# per session per turn. `_service_call.py` exits 0 when the service took it;
-# anything else (no service, an older one, a credential in this environment
-# the service cannot be given) spawns the sync below, as before.
 _HOOKDIR="${_HOOKDIR:-$(cd "$(dirname "$0")" && pwd)}"
-if [ -f "$_HOOKDIR/_service_call.py" ] && command -v python3 >/dev/null 2>&1 \
-  && python3 -I "$_HOOKDIR/_service_call.py" notes-sync "$_MODE" </dev/null >/dev/null 2>&1; then
-  exit 0
-fi
-
-if command -v setsid >/dev/null 2>&1; then
-  setsid "$PROBE_BIN" "$@" >/dev/null 2>&1 &
-else
-  "$PROBE_BIN" "$@" >/dev/null 2>&1 &
+if [ -f "$_HOOKDIR/_service_call.py" ] && command -v python3 >/dev/null 2>&1; then
+  python3 -I "$_HOOKDIR/_service_call.py" notes-sync "$_MODE" </dev/null >/dev/null 2>&1
 fi
 exit 0

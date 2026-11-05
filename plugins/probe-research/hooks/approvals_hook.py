@@ -20,9 +20,8 @@ the prompt, silent when nothing waits:
     PostToolUse on the question tool  the researcher's pick is read from the tool's
                                       result and written as the answer: the exact yes
                                       label is a yes, anything else is a no. Through
-                                      the Probe service when it answers
-                                      (`mailbox.answer`, plan Q2, with the question's
-                                      answer key), else written here
+                                      the Probe service (`mailbox.answer`, plan Q2,
+                                      with the question's answer key); never written here
 
 Every lookup is scoped to the payload's session: one session's hook never
 nudges, checks or answers another session's question.
@@ -334,29 +333,13 @@ def on_post_question(payload: dict) -> None:
             continue
         choice = answers.get(q.get("question"))
         verdict = "yes" if choice == req["question"]["yes_label"] else "no"
-        recorded = _answer_via_service(req["id"], choice)
-        if recorded is False:
-            continue  # the question no longer waits (answered elsewhere, or expired)
-        if recorded:
-            if verdict == "yes" and req.get("policy") == FEEDBACK_POLICY:
-                _spawn_feedback_flush()
-            continue
-        path = _state() / "approvals" / "answers" / f"{req['id']}.json"
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"id": req["id"], "answer": verdict, "choice": choice,
-                                       "channel": "question-tool", "at": time.time()}), encoding="utf-8")
-            os.replace(tmp, path)
-        except OSError:
-            continue
-        if verdict == "yes" and req.get("policy") == FEEDBACK_POLICY:
-            _spawn_feedback_flush()
+        # The service records it (service-only plan, task 14): a pick it did not take leaves
+        # the question waiting, for `probe approvals` or the next ask.
+        if _answer_via_service(req["id"], choice) and verdict == "yes" and req.get("policy") == FEEDBACK_POLICY:
+            _flush_feedback()
 
 
-#: `mailbox.answer`'s deadline, and how long past it this hook waits for the
-#: answer before it writes the answer file itself (the service never writes
-#: past the deadline, so the two never both write it).
+#: `mailbox.answer`'s deadline, and how long past it this hook waits for the answer.
 ANSWER_WAIT_S = 0.8
 ANSWER_GRACE_S = 0.4
 
@@ -381,10 +364,9 @@ def _answer_key(rid: str) -> "str | None":
 
 def _answer_via_service(rid: str, choice: object) -> "bool | None":
     """Record the pick through the Probe service (`mailbox.answer`, plan Q2),
-    which writes the same answer file and tells the session's watchers: True
-    when it did, False when the question no longer waits, None when no service
-    answered in time (or none runs, or it refused: a question with no answer
-    key is always refused): this hook writes it."""
+    which writes the answer file and tells the session's watchers: True when it
+    did, False when the question no longer waits, None when no service answered
+    in time (or it refused: a question with no answer key is always refused)."""
     if not isinstance(choice, str):
         return None
     try:
@@ -402,9 +384,7 @@ def _answer_via_service(rid: str, choice: object) -> "bool | None":
         params["key"] = key
     try:
         answer = rpc.call("mailbox.answer", params, timeout=ANSWER_WAIT_S + ANSWER_GRACE_S)
-    except Exception as exc:  # noqa: BLE001 -- no answer: written here, past the deadline
-        if not getattr(exc, "answered", False):
-            time.sleep(max(0.0, deadline + ANSWER_GRACE_S - time.time()))
+    except Exception:  # noqa: BLE001 -- no answer: the question still waits
         return None
     finally:
         rpc.close()
@@ -413,31 +393,12 @@ def _answer_via_service(rid: str, choice: object) -> "bool | None":
     return bool(answer.get("answered"))
 
 
-def _probe_bin() -> str:
-    """The `probe` the agent's shell would run: `version_check._probe_bin`, the
-    one lookup the hooks share, loaded beside this file only on a yes."""
-    import importlib.util  # noqa: PLC0415
-
-    key = "_probe_hooks.version_check"
-    module = sys.modules.get(key)
-    if module is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version_check.py")
-        spec = importlib.util.spec_from_file_location(key, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[key] = module
-        spec.loader.exec_module(module)
-    return module._probe_bin()
-
-
-def _spawn_feedback_flush() -> None:
-    """Send the feedback the researcher just said yes to. Fire and forget: a
-    failure leaves it for the next session start's flush."""
-    import subprocess  # noqa: PLC0415 -- only on a yes
-
+def _flush_feedback() -> None:
+    """Send the feedback the researcher just said yes to: the Probe service's `feedback flush`
+    (`notes.sync` with `feedback`). One it does not take is sent at the next session start."""
     try:
-        subprocess.Popen([_probe_bin(), "feedback", "flush"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
-    except Exception:  # noqa: BLE001 -- no probe found, a fork that fails: sent later
+        _hook_harness().load_sibling("_service_call").notes_sync("push", feedback=True)
+    except Exception:  # noqa: BLE001 -- sent later
         pass
 
 

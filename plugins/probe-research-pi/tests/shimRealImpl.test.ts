@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let cliAnswer: Record<string, unknown> = {};
+/** The Probe service's socket the extension finds (`tap service socket`), when a test runs one. */
+let serviceSocket: string | null = null;
 
 vi.mock("node:child_process", () => ({
   spawn: () => ({
@@ -33,6 +35,10 @@ vi.mock("node:child_process", () => ({
   }),
   execFileSync: () => "",
   execFile: (_command: string, args: string[], _options: unknown, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+    if (args.join(" ") === "-m tap service socket") {
+      callback(null, serviceSocket ? JSON.stringify({ socket: serviceSocket }) + "\n" : "", "");
+      return;
+    }
     callback(
       null,
       JSON.stringify({ session_id: args[args.indexOf("--session") + 1], tracking: true, signal: "on", seeded: true, source: "machine", ...cliAnswer }),
@@ -40,6 +46,18 @@ vi.mock("node:child_process", () => ({
     );
   },
 }));
+
+// The Probe service answers `session.initialize` (it runs `probe session initialize`): the same answer.
+vi.mock("../src/serviceForward.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/serviceForward.js")>();
+  return {
+    ...actual,
+    callService: async (_socket: string | null, method: string, params: Record<string, unknown>) =>
+      method === "session.initialize"
+        ? { state: { session_id: params.sid, tracking: true, signal: "on", seeded: true, source: "machine", ...cliAnswer } }
+        : null,
+  };
+});
 
 const impl = await import("../src/impl.js");
 const shim = await import("../src/shim.js");
@@ -267,6 +285,24 @@ describe("a real pin, loaded through the shim's dynamic import", () => {
   }
 
   it("starts on it at load, and its own files answer", async () => {
+    // The pin's own code asks the Probe service for the session's state (`session.initialize`), on a socket.
+    const { fakeService, socketFolder } = await import("./fakeService.js");
+    serviceSocket = join(socketFolder(), "service.sock");
+    const service = await fakeService(serviceSocket, (request) => ({
+      result: request.method === "session.initialize"
+        ? { state: { session_id: (request.params as Record<string, unknown>).sid, tracking: true, signal: "on", seeded: true,
+          source: "machine", ...cliAnswer } }
+        : {},
+    }));
+    try {
+      await startsOnThePin();
+    } finally {
+      await service.close();
+      serviceSocket = null;
+    }
+  });
+
+  async function startsOnThePin(): Promise<void> {
     const packageDir = makeRealPin();
     setCurrent();
     const host = new shim.ShimHost({ installRoot: cloneRoot(), cloneImpl: impl, pid: 777 });
@@ -285,7 +321,7 @@ describe("a real pin, loaded through the shim's dynamic import", () => {
     const record = JSON.parse(readFileSync(shim.liveRecordFile(777, process.env), "utf-8"));
     expect(record).toMatchObject({ pin: PIN, bad_pins: [], state_schema: 1 });
     await pi.handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-  });
+  }
 
   it("takes over a running clone at the next prompt, carrying its Probe MCP connection: same client, no reconnect, the pin's code", async () => {
     const SESSION = "pin-mcp";

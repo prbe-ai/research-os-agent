@@ -9,6 +9,7 @@ from pathlib import Path
 from .. import capture_gate
 from ..sanitizers.claude_code import call_models
 from ..transcripts import nesting_exceeds
+from ..pinned import open_transcript
 MEDIA_SPOOL_CAP_BYTES = 512 * 1024 * 1024
 
 
@@ -243,7 +244,7 @@ class StageMixin:
     ):
         """Read the transcript from the cursor into this batch: its events, until the batch is full.
         Returns (end, event_no, lines, records) where the read stopped."""
-        with call_models(models) if models is not None else nullcontext(), path.open("rb") as handle:
+        with call_models(models) if models is not None else nullcontext(), open_transcript(path) as handle:
             handle.seek(end)
             while True:
                 # Written while Probe was off: read past, sent as nothing.
