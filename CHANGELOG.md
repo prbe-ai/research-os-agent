@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Recommended means on, and two sign-in gaps (agent-prompt install PR22, D88).** Picking Recommended in an agent's install now sets the daemon (when the team offers it) and new chats on even on a computer where Probe was set up before: an old stored `off` had kept new chats off. The install's own chat takes the new-chat default it saves (Recommended's `on`, or what Let me pick chose), so it records. `sign-in --wait` and the other agent commands wait for a Probe service that is still starting, within their time limit, instead of answering `no_service` (a first start on a Mac outlasted 10 s). And `status --json` on a computer with a saved sign-in but no Probe CLI downloads the CLI and answers its real state, instead of `none`, which sent the agent into a second sign-in.
+- **An agent can update Probe for you: `npx -y probe-research update --json` (agent-prompt install PR26).** `npx probe-research update` now runs the wizard's Update (the retired `probe update` it used to reach is gone from the launcher), and with `--json` its last line says what moved, each part from → to (`updated`: the CLI, and each agent's plugin and tap), what it could not move and why (`not_current`), or `current: true` when everything is current. A run that cannot finish names a `reason`: `setup_busy` while another setup or a live training run holds updates off, else `incomplete` (a part left behind included). `status --repaste-choice update` counts the re-paste menu's new "Update Probe".
 
 ## 0.430.0
 
