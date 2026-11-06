@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.422.0
 - **A retry wrapper no longer files the previous attempt's error on the next run.** A run opened inside an `except` (created, resumed or opened offline, init's `PROBE_INIT_FALLBACK=offline` included) and then closed `failed` in that same handler does not carry that handler's exception as its crash report; an error raised after the run opened still does, the same type included. A killed run's crash report now names the attempt it died in, and a report too large to send whole keeps the mark that says the SDK recovered from that error, so neither is taken for a later crash's cause.
 
 ## 0.421.0
