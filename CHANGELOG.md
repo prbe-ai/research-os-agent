@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Two install fixes from the final eval pass (agent-prompt install PR20).** Claude Code reads a Probe plugin that no settings file names in `enabledPlugins` as off, and Probe read it as on: `status` said the plugin was fine and `probe repair` put back the missing entry as missing. Now status reads a missing entry as off, and install, reinstall and `probe repair` write `true` for it; only an explicit `false` stays your choice. And `probe import review --folder` now has the agent of the chat it runs in read the folder (a Codex chat no longer spends your Claude allowance), the other agent only when that one is not installed; `--agent` still wins.
+
 ## 0.425.0
 
 - **Install fixes from the agent-prompt install evals (PR19).** Switching Runs only → Full records the open chat again: an off Probe adopted from Runs only's teardown no longer keeps transcripts off. A terminal `probe uninstall` on a computer without systemd is no longer hung up halfway (`service_lost`, its barrier left at `finishing`): the Probe service no longer stops the moment the uninstall removes its socket file, only once the uninstall has ended. `probe project create` accepts `--json` (its output is the created project's JSON either way).
