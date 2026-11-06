@@ -9,6 +9,43 @@
 # network yet the nudge still renders every session from the cached manifest.
 set -u
 
+# Keep only the absolute entries of PATH and PYTHONPATH: an empty or relative one names the folder
+# this runs in, the session's, which the agent can write (a planted `python3`, or a `json.py` Python
+# imports at start-up). Builtins only on Linux and macOS (hooks/session-folder.sh's rule, the tap's).
+windows=""
+is_windows() {  # real Windows: OSTYPE (which can be inherited) only says when to ask `uname`
+    if [ -z "$windows" ]; then
+        windows=no
+        case "${OSTYPE:-}" in
+            msys* | cygwin*) case "$(/usr/bin/uname -s 2>/dev/null)" in MINGW* | MSYS* | CYGWIN*) windows=yes ;; esac ;;
+        esac
+    fi
+    [ "$windows" = yes ]
+}
+drop_relative_entries() {
+    local separator=":" rest entry kept=""
+    rest="${!1-}"
+    if [ "$1" = PYTHONPATH ] && [ -n "$rest" ] && is_windows; then separator=";"; fi
+    [ -z "$rest" ] || rest="$rest$separator"
+    while [ -n "$rest" ]; do
+        entry="${rest%%"$separator"*}"
+        rest="${rest#*"$separator"}"
+        case "$entry" in
+            /*) kept="${kept:+$kept$separator}$entry" ;;
+            [A-Za-z]:[\\/]* | \\\\*) ! is_windows || kept="${kept:+$kept$separator}$entry" ;;
+        esac
+    done
+    if [ -n "$kept" ]; then
+        export "$1=$kept"
+    elif [ "$1" = PATH ]; then
+        export PATH=/usr/bin:/bin  # never empty or unset: bash then searches the current folder
+    else
+        unset "$1"
+    fi
+}
+drop_relative_entries PATH
+drop_relative_entries PYTHONPATH
+
 # Claude Code sends {session_id, transcript_path, cwd, source} on stdin. The
 # telemetry observer wants session_id and source; capture it (draining the pipe
 # either way so nothing blocks on a full one).
@@ -40,7 +77,12 @@ PROBE_SESSION_SOURCE=""
 PROBE_SESSION_ID=""
 PROBE_SESSION_CWD=""
 if [ "${PROBE_HOOK_EVENT:-}" != "precompact" ]; then
-  exec 3< <(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import json,sys
+  # This runs in the session's folder, outside the agent's sandbox, and its child scripts keep that
+  # folder. `-c` puts it first on Python's path (as an empty entry), where the agent can plant a
+  # `json.py`: dropped before any import but the builtin sys (dispatch.sh's rule).
+  exec 3< <(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import sys
+sys.path[:] = [p for p in sys.path if p]
+import json
 try:
     d = json.load(sys.stdin)
 except Exception:

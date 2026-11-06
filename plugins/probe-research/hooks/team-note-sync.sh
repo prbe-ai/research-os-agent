@@ -32,6 +32,43 @@
 # be the only bad outcome and nothing here can cause it.
 set -u
 
+# Keep only the absolute entries of PATH and PYTHONPATH: an empty or relative one names the folder
+# this runs in, the session's, which the agent can write (a planted `python3`, or a `json.py` Python
+# imports at start-up). Builtins only on Linux and macOS (hooks/session-folder.sh's rule, the tap's).
+windows=""
+is_windows() {  # real Windows: OSTYPE (which can be inherited) only says when to ask `uname`
+    if [ -z "$windows" ]; then
+        windows=no
+        case "${OSTYPE:-}" in
+            msys* | cygwin*) case "$(/usr/bin/uname -s 2>/dev/null)" in MINGW* | MSYS* | CYGWIN*) windows=yes ;; esac ;;
+        esac
+    fi
+    [ "$windows" = yes ]
+}
+drop_relative_entries() {
+    local separator=":" rest entry kept=""
+    rest="${!1-}"
+    if [ "$1" = PYTHONPATH ] && [ -n "$rest" ] && is_windows; then separator=";"; fi
+    [ -z "$rest" ] || rest="$rest$separator"
+    while [ -n "$rest" ]; do
+        entry="${rest%%"$separator"*}"
+        rest="${rest#*"$separator"}"
+        case "$entry" in
+            /*) kept="${kept:+$kept$separator}$entry" ;;
+            [A-Za-z]:[\\/]* | \\\\*) ! is_windows || kept="${kept:+$kept$separator}$entry" ;;
+        esac
+    done
+    if [ -n "$kept" ]; then
+        export "$1=$kept"
+    elif [ "$1" = PATH ]; then
+        export PATH=/usr/bin:/bin  # never empty or unset: bash then searches the current folder
+    else
+        unset "$1"
+    fi
+}
+drop_relative_entries PATH
+drop_relative_entries PYTHONPATH
+
 # PROBE OFF MEANS NO NETWORK, and this is the loudest thing the plugin does
 # without being asked: a detached push, every turn. A researcher who set `off`
 # and then watched packets leave would be right to say it was not off.
@@ -48,9 +85,14 @@ set -u
 # below consumes it, and a payload that is missing, empty or unparseable just
 # leaves the environment fallback in place.
 _SID=""
+# This runs in the session's folder, outside the agent's sandbox. `python3 -c` puts that folder first
+# on Python's path (as an empty entry), where the agent can plant a `json.py`: each program below
+# drops it before any import but the builtin sys (dispatch.sh's rule).
 if command -v python3 >/dev/null 2>&1; then
   _SID="$(python3 -c '
-import json, sys
+import sys
+sys.path[:] = [p for p in sys.path if p]
+import json
 try:
     payload = json.load(sys.stdin)
     value = payload.get("session_id") if isinstance(payload, dict) else None
@@ -66,7 +108,7 @@ if [ -n "$_SID" ] && command -v python3 >/dev/null 2>&1; then
   # payload data, and a quote in it must stay data.
   if python3 -c '
 import sys
-sys.path.insert(0, sys.argv[1])
+sys.path[:] = [sys.argv[1]] + [p for p in sys.path if p]
 try:
     import _session_marker as m
     sys.exit(0 if m.session_state(sys.argv[2]) == m.STATE_OFF else 1)

@@ -98,15 +98,30 @@ tap_version_newer() {
 }
 
 # A whole tap at "$1" for script "$2" and manifest folder "$3": the script it
-# runs, every file in TAP_WHOLE_FILES, the harness's manifest. A copy still
-# being written (or half deleted) never takes an event.
+# runs, every file in TAP_WHOLE_FILES, the harness's manifest, and
+# hooks/session-folder.sh where its scripts source it (from 0.10.60: required
+# by what the copy's own script reads, not by TAP_WHOLE_FILES, so an open
+# session still follows a rollback to a tap that has none). A copy still being
+# written (or half deleted) never takes an event.
 tap_whole() {
     local file
-    [ -x "$1/hooks/$2" ] && [ -x "$1/hooks/session-start.sh" ] && [ -f "$1/$3/plugin.json" ] || return 1
+    [ -x "$1/hooks/$2" ] && [ -f "$1/hooks/$2" ] && [ -x "$1/hooks/session-start.sh" ] \
+        && [ -f "$1/$3/plugin.json" ] || return 1
     for file in $TAP_WHOLE_FILES; do
         [ -f "$1/$file" ] || return 1
     done
-    return 0
+    ! tap_sources "$1/hooks/$2" session-folder.sh || [ -f "$1/hooks/session-folder.sh" ]
+}
+
+# 0 when the script "$1" sources the hooks file "$2" near its top (its first
+# 60 lines, read by bash itself: no process).
+tap_sources() {
+    local line count=0
+    while [ "$count" -lt 60 ] && IFS= read -r line; do
+        case "$line" in *"/$2"*) return 0 ;; esac
+        count=$((count + 1))
+    done <"$1"
+    return 1
 }
 
 # 0 when the folder "$1" and its hooks/ and tap/ were last written at least

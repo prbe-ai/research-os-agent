@@ -167,6 +167,7 @@ def test_the_turn_end_hook_starts_a_gone_service_in_the_background(hook_env, tmp
     turn_end = tmp_path / "plugin" / "hooks" / "turn-end.sh"
     turn_end.write_text((HOOK.parent / "turn-end.sh").read_text(encoding="utf-8"), encoding="utf-8")
     turn_end.chmod(0o755)
+    (turn_end.parent / "session-folder.sh").write_bytes((HOOK.parent / "session-folder.sh").read_bytes())
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "python3-calls.txt"

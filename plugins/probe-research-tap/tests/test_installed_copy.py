@@ -341,6 +341,18 @@ def test_a_copy_that_cannot_be_run_after_all_runs_the_event_here(box):
     assert [(r["version"], r["claude_root"], r["followed"]) for r in box.ran()] == [(OLD, str(old), "unset")]
 
 
+def test_a_copy_missing_the_helper_its_scripts_source_is_not_whole(box):
+    """From 0.10.60 every tap hook sources hooks/session-folder.sh first: a copy without it (half
+    written) would do nothing with the event, so the session's own copy runs it. Older copies do
+    not source it and need none (a rollback is still followed)."""
+    old, new = box.claude_copy(OLD), box.claude_copy(NEW)
+    box.ledger(new)
+    (new / "hooks" / "session-folder.sh").unlink()
+    done = box.run("Stop", box.env(CLAUDE_PLUGIN_ROOT=str(old)))
+    assert done.returncode == 0, done.stderr
+    assert [(r["version"], r["followed"]) for r in box.ran()] == [(OLD, "unset")], done.stderr
+
+
 def test_an_event_moves_at_most_once(box):
     """The installed copy is told it was handed the event: it runs it, and
     hands it no further, even when a third copy is listed by then."""

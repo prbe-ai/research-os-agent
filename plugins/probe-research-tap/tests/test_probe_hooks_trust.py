@@ -38,7 +38,7 @@ def codex(tmp_path):
     cache = home / "plugins" / "cache" / MARKETPLACE
     tap = cache / "probe-research-tap" / "0.9.7"
     (tap / "hooks").mkdir(parents=True)
-    for name in ("probe-hooks-trust.sh", "ensure-daemon.sh", "session-start.sh"):
+    for name in ("probe-hooks-trust.sh", "ensure-daemon.sh", "session-start.sh", "session-folder.sh"):
         (tap / "hooks" / name).write_bytes((HOOKS / name).read_bytes())
         (tap / "hooks" / name).chmod(0o755)
     state = tmp_path / "xdg"

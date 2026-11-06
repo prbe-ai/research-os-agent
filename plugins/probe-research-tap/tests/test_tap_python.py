@@ -253,23 +253,31 @@ def test_a_remembered_interpreter_that_hangs_still_ends_inside_the_exit_budget(m
         pytest.fail("the hook left `tap finish` running")
 
 
-def test_a_relative_path_entry_is_remembered_absolute(machine, tmp_path) -> None:
-    """`command -v python3` answers `rel/bin/python3` for a relative PATH entry.
-    Remembered as is, a SessionEnd in another folder would run another python,
-    or none: the choice is remembered absolute (symlinks kept)."""
+def test_a_relative_path_entry_is_never_used(machine, tmp_path) -> None:
+    """`command -v python3` answers `rel/bin/python3` for a relative PATH entry: the
+    folder the hook started in, the session's, whose `python3` the agent could have
+    planted (or, from the tap's folder, a different one at SessionEnd). Every hook
+    drops such entries first (hooks/session-folder.sh): the choice is an absolute
+    entry's, remembered as is, and SessionEnd in another folder runs it."""
     project, elsewhere = tmp_path / "project", tmp_path / "elsewhere"
-    (project / "rel" / "bin").mkdir(parents=True)
+    planted = tmp_path / "planted-ran"
     elsewhere.mkdir()
+    for folder in (project, machine["root"]):
+        (folder / "rel" / "bin").mkdir(parents=True)
+        (folder / "rel" / "bin" / "python3").write_text(f"#!/bin/sh\necho ran >>'{planted}'\nexit 1\n")
+        (folder / "rel" / "bin" / "python3").chmod(0o755)
     calls = tmp_path / "finish.args"
-    shim = _recording_python(tmp_path, calls)
-    (project / "rel" / "bin" / "python3").symlink_to(shim)
-    env = {**machine["env"], "PATH": f"rel/bin{os.pathsep}{machine['env']['PATH']}"}
+    shim = tmp_path / "bin" / "python3"
+    shim.parent.mkdir()
+    shim.symlink_to(_recording_python(tmp_path, calls))
+    env = {**machine["env"], "PATH": f"rel/bin{os.pathsep}{shim.parent}{os.pathsep}{machine['env']['PATH']}"}
     payload = {"session_id": machine["sid"], "transcript_path": str(machine["transcript"]), "cwd": str(project)}
     subprocess.run(
         [shutil.which("bash"), str(machine["root"] / "hooks" / "session-start.sh")],
         input=json.dumps(payload), text=True, capture_output=True, env=env, cwd=project, timeout=60, check=True,
     )
-    assert (machine["state"] / ".python").read_text().strip() == str(project / "rel" / "bin" / "python3")
+    assert not planted.exists(), "a relative PATH entry's `python3` ran"
+    assert (machine["state"] / ".python").read_text().strip() == str(shim)
 
     Path(f"/tmp/probe-research-tap-watcher-{machine['sid']}.hosted").write_text(str(os.getpid()))
     subprocess.run(
@@ -278,6 +286,7 @@ def test_a_relative_path_entry_is_remembered_absolute(machine, tmp_path) -> None
         env={**env, "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS": "4000"}, cwd=elsewhere, timeout=30, check=True,
     )
     assert calls.is_file(), "SessionEnd in another folder did not run the interpreter SessionStart chose"
+    assert not planted.exists()
 
 
 def test_a_relative_remembered_path_is_never_run(tmp_path) -> None:

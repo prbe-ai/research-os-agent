@@ -23,11 +23,18 @@
 # cancelled. A container or CI job that needs the daemon's last pass (often
 # 1.3-5s) sets the variable to 16000 for the full 15s wait.
 
+# First of all, before any program starts: leave the session's folder, which the agent can write
+# (hooks/session-folder.sh). Sets SESSION_DIR and TAP_HOOKS_DIR; this runs in the tap's own folder.
+[ -f "${BASH_SOURCE[0]%/*}/session-folder.sh" ] && . "${BASH_SOURCE[0]%/*}/session-folder.sh" \
+    && tap_leave_session_folder "${BASH_SOURCE[0]}" || exit 0
+
 # An open session runs the INSTALLED tap's copy of this script when that is
 # another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
-# First of all, before stdin is read.
-if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
+# Then, before stdin is read. That copy starts here too, so it is told the session's folder.
+if [ -f "$TAP_HOOKS_DIR/installed-tap.sh" ] && . "$TAP_HOOKS_DIR/installed-tap.sh"; then
+    export TAP_SESSION_DIR="$SESSION_DIR"
     tap_run_installed "${BASH_SOURCE[0]}" "$@"
+    unset TAP_SESSION_DIR
     tap_yields_to_shim "${BASH_SOURCE[0]}" && exit 0
 fi
 
@@ -100,7 +107,7 @@ REGISTRY_ENV=""
 case "$SOURCE" in
     claude_code | codex) ;;
     *)
-        TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+        TAP_ROOT="$(cd "$TAP_HOOKS_DIR/.." && pwd)"
         REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" \
             python3 -m tap hook-env --source "$SOURCE" --payload 2>/dev/null || true)
         ;;
@@ -203,13 +210,13 @@ wait_while() {
 HOSTED_FILE="${WATCHER_DIR}/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
 if [ -s "$HOSTED_FILE" ]; then
     if [ "$WAITS" = 1 ]; then
-        TAP_ROOT="${TAP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+        TAP_ROOT="${TAP_ROOT:-$(cd "$TAP_HOOKS_DIR/.." && pwd)}"
         # On the interpreter session-start.sh ran the tap on (hooks/tap-python.sh):
         # the one it remembered in the tap's state folder, a file read and no
         # python start inside the exit budget. None remembered (an older tap
         # started this session): `python3`, as before.
         PY=""
-        TAP_HOOKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        TAP_HOOKS="$(cd "$TAP_HOOKS_DIR" && pwd)"
         if [ -f "$TAP_HOOKS/tap-python.sh" ]; then
             # shellcheck source=tap-python.sh
             . "$TAP_HOOKS/tap-python.sh"

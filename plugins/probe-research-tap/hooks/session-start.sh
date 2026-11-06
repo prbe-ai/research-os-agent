@@ -9,17 +9,24 @@
 # harness (Kimi Code) gets its values, and its payload in Claude Code's shape,
 # from its registry row through `python3 -m tap hook-env` (tap/hook_env.py).
 
+# First of all, before any program starts: leave the session's folder, which the agent can write
+# (hooks/session-folder.sh). Sets SESSION_DIR and TAP_HOOKS_DIR; this runs in the tap's own folder.
+[ -f "${BASH_SOURCE[0]%/*}/session-folder.sh" ] && . "${BASH_SOURCE[0]%/*}/session-folder.sh" \
+    && tap_leave_session_folder "${BASH_SOURCE[0]}" || exit 0
+
 # An open session runs the INSTALLED tap's copy of this script when that is
 # another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
-# First of all, before stdin is read.
-if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
+# Then, before stdin is read. That copy starts here too, so it is told the session's folder.
+if [ -f "$TAP_HOOKS_DIR/installed-tap.sh" ] && . "$TAP_HOOKS_DIR/installed-tap.sh"; then
+    export TAP_SESSION_DIR="$SESSION_DIR"
     tap_run_installed "${BASH_SOURCE[0]}" "$@"
+    unset TAP_SESSION_DIR
     tap_yields_to_shim "${BASH_SOURCE[0]}" && exit 0
 fi
 
 set -euo pipefail
 
-PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
+PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$TAP_HOOKS_DIR/.." && pwd)}}"
 SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
 # The watcher folder (`tap/config.py` `_watcher_dir`): PROBE_TAP_WATCHER_DIR when
 # it names an absolute folder, else /tmp.
@@ -30,7 +37,7 @@ REGISTRY_ENV=""
 case "$SOURCE" in
     claude_code | codex) ;;
     *)
-        TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+        TAP_ROOT="$(cd "$TAP_HOOKS_DIR/.." && pwd)"
         REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" \
             python3 -m tap hook-env --source "$SOURCE" --payload --transcript 2>/dev/null || true)
         ;;
@@ -123,8 +130,10 @@ find "$WATCHER_DIR/" -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.version" -mt
     done || true
 
 SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
-TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("transcript_path"); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
-CWD=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys,os; print(json.load(sys.stdin).get("cwd") or os.getcwd())' 2>/dev/null || echo "")
+# The payload's transcript and folder, a relative one read against the session's folder (an argument:
+# this hook runs in the tap's folder); a payload naming no folder: the session's.
+TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,os,sys; v=json.load(sys.stdin).get("transcript_path"); print(os.path.normpath(os.path.join(sys.argv[1],v)) if isinstance(v,str) and v else "")' "$SESSION_DIR" 2>/dev/null || echo "")
+CWD=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,os,sys; v=json.load(sys.stdin).get("cwd"); print(os.path.normpath(os.path.join(sys.argv[1],v)) if isinstance(v,str) and v else sys.argv[1])' "$SESSION_DIR" 2>/dev/null || echo "")
 
 if [ -z "$SESSION_ID" ] || { [ "$SOURCE" != "codex" ] && [ -z "$TRANSCRIPT_PATH" ]; }; then
     printf '{"continue": true}\n'
@@ -242,7 +251,7 @@ fi
 
 # The interpreter the tap runs on: 3.11 or newer, which the first `python3` on
 # PATH need not be (Apple's is 3.9). hooks/tap-python.sh says where it looks.
-TAP_HOOKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TAP_HOOKS="$(cd "$TAP_HOOKS_DIR" && pwd)"
 PY=""
 if [ -f "$TAP_HOOKS/tap-python.sh" ]; then
     # shellcheck source=tap-python.sh

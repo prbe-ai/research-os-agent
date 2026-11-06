@@ -17,6 +17,42 @@
 HOOKS="${BASH_SOURCE[0]%/*}"
 [ "$HOOKS" != "${BASH_SOURCE[0]}" ] || HOOKS="$PWD"
 [ -f "$HOOKS/dispatch.py" ] || exit 0
+# Keep only the absolute entries of PATH and PYTHONPATH: an empty or relative one names the folder
+# this runs in, the session's, which the agent can write (a planted `python3`, or a `json.py` Python
+# imports at start-up). Builtins only on Linux and macOS (hooks/session-folder.sh's rule, the tap's).
+windows=""
+is_windows() {  # real Windows: OSTYPE (which can be inherited) only says when to ask `uname`
+    if [ -z "$windows" ]; then
+        windows=no
+        case "${OSTYPE:-}" in
+            msys* | cygwin*) case "$(/usr/bin/uname -s 2>/dev/null)" in MINGW* | MSYS* | CYGWIN*) windows=yes ;; esac ;;
+        esac
+    fi
+    [ "$windows" = yes ]
+}
+drop_relative_entries() {
+    local separator=":" rest entry kept=""
+    rest="${!1-}"
+    if [ "$1" = PYTHONPATH ] && [ -n "$rest" ] && is_windows; then separator=";"; fi
+    [ -z "$rest" ] || rest="$rest$separator"
+    while [ -n "$rest" ]; do
+        entry="${rest%%"$separator"*}"
+        rest="${rest#*"$separator"}"
+        case "$entry" in
+            /*) kept="${kept:+$kept$separator}$entry" ;;
+            [A-Za-z]:[\\/]* | \\\\*) ! is_windows || kept="${kept:+$kept$separator}$entry" ;;
+        esac
+    done
+    if [ -n "$kept" ]; then
+        export "$1=$kept"
+    elif [ "$1" = PATH ]; then
+        export PATH=/usr/bin:/bin  # never empty or unset: bash then searches the current folder
+    else
+        unset "$1"
+    fi
+}
+drop_relative_entries PATH
+drop_relative_entries PYTHONPATH
 command -v python3 >/dev/null 2>&1 || exit 0
 # Imported, not run as a script, so python caches its bytecode. The hooks
 # folder replaces the empty first sys.path entry (the session's working

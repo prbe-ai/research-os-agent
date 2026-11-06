@@ -10,11 +10,18 @@
 # THE COMMON PATH MUST BE FREE. This runs on every prompt, alongside two other
 # hooks. A recorded session costs one file read and one `kill -0`: no python, no
 # subprocess, no network. Only the rare unrecorded case pays for an ask.
+# First of all, before any program starts: leave the session's folder, which the agent can write
+# (hooks/session-folder.sh). Sets SESSION_DIR and TAP_HOOKS_DIR; this runs in the tap's own folder.
+[ -f "${BASH_SOURCE[0]%/*}/session-folder.sh" ] && . "${BASH_SOURCE[0]%/*}/session-folder.sh" \
+    && tap_leave_session_folder "${BASH_SOURCE[0]}" || exit 0
+
 # An open session runs the INSTALLED tap's copy of this script when that is
 # another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
-# First of all, before stdin is read.
-if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
+# Then, before stdin is read. That copy starts here too, so it is told the session's folder.
+if [ -f "$TAP_HOOKS_DIR/installed-tap.sh" ] && . "$TAP_HOOKS_DIR/installed-tap.sh"; then
+    export TAP_SESSION_DIR="$SESSION_DIR"
     tap_run_installed "${BASH_SOURCE[0]}" "$@"
+    unset TAP_SESSION_DIR
     tap_yields_to_shim "${BASH_SOURCE[0]}" && exit 0
 fi
 
@@ -26,7 +33,7 @@ case "$SOURCE" in
     claude_code | codex | pi) ;;
     # Any other hook-plugin harness (Kimi Code) runs this from its own copy of
     # the plugin, and sets neither variable.
-    *) [ -n "$ROOT" ] || ROOT="$(cd "$(dirname "$0")/.." && pwd)" ;;
+    *) [ -n "$ROOT" ] || ROOT="$(cd "$TAP_HOOKS_DIR/.." && pwd)" ;;
 esac
 ROOT="${ROOT%/}"
 [ -x "$ROOT/hooks/session-start.sh" ] || exit 0
@@ -195,11 +202,12 @@ mkdir -p "$STATE/heal" 2>/dev/null || true
 # fail-open by contract, and on UserPromptSubmit an exit code of 2 BLOCKS the
 # user's prompt — so an ask that went wrong must not be able to cost the
 # researcher their turn. session-start.sh already logs its own failures.
+# It starts in the tap's folder, as this hook runs, and is told the session's (TAP_SESSION_DIR).
 if [ -n "$REGISTRY_ENV" ]; then
     # Kimi Code injects a UserPromptSubmit hook's stdout into the model's
     # context as text, so session-start.sh's Claude Code JSON stays out of it.
-    printf '%s' "$HOOK_INPUT" | TAP_HEAL=1 TAP_RECORD_WITHIN_S=3 "$ROOT/hooks/session-start.sh" >/dev/null || true
+    printf '%s' "$HOOK_INPUT" | TAP_HEAL=1 TAP_RECORD_WITHIN_S=3 TAP_SESSION_DIR="$SESSION_DIR" "$ROOT/hooks/session-start.sh" >/dev/null || true
 else
-    printf '%s' "$HOOK_INPUT" | TAP_HEAL=1 TAP_RECORD_WITHIN_S=3 "$ROOT/hooks/session-start.sh" || true
+    printf '%s' "$HOOK_INPUT" | TAP_HEAL=1 TAP_RECORD_WITHIN_S=3 TAP_SESSION_DIR="$SESSION_DIR" "$ROOT/hooks/session-start.sh" || true
 fi
 exit 0

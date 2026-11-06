@@ -13,11 +13,18 @@
 # the session is not in `daemon` or the harness gives no transcript path (Codex's
 # payload may not carry one: the worker falls back to its quiet timer).
 
+# First of all, before any program starts: leave the session's folder, which the agent can write
+# (hooks/session-folder.sh). Sets SESSION_DIR and TAP_HOOKS_DIR; this runs in the tap's own folder.
+[ -f "${BASH_SOURCE[0]%/*}/session-folder.sh" ] && . "${BASH_SOURCE[0]%/*}/session-folder.sh" \
+    && tap_leave_session_folder "${BASH_SOURCE[0]}" || exit 0
+
 # An open session runs the INSTALLED tap's copy of this script when that is
 # another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
-# First of all, before stdin is read.
-if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
+# Then, before stdin is read. That copy starts here too, so it is told the session's folder.
+if [ -f "$TAP_HOOKS_DIR/installed-tap.sh" ] && . "$TAP_HOOKS_DIR/installed-tap.sh"; then
+    export TAP_SESSION_DIR="$SESSION_DIR"
     tap_run_installed "${BASH_SOURCE[0]}" "$@"
+    unset TAP_SESSION_DIR
     tap_yields_to_shim "${BASH_SOURCE[0]}" && exit 0
 fi
 
@@ -31,7 +38,7 @@ SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
 case "$SOURCE" in
     claude_code | codex) ;;
     *)
-        TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+        TAP_ROOT="$(cd "$TAP_HOOKS_DIR/.." && pwd)"
         REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" \
             python3 -m tap hook-env --source "$SOURCE" --payload --transcript 2>/dev/null || true)
         if [ -n "$REGISTRY_ENV" ]; then
@@ -59,6 +66,7 @@ if [ "${#HOOK_INPUT}" -le 262144 ] && [[ "$HOOK_INPUT" =~ \"session_id\"[[:space
             ;;
     esac
 fi
+# A relative transcript path is read against the session's folder (an argument: this runs in the tap's).
 [ -z "$WRITE_TURN" ] || printf '%s' "$HOOK_INPUT" | python3 -c '
 import json, os, re, sys, tempfile, time
 from pathlib import Path
@@ -75,14 +83,14 @@ base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
 try:
     if (base / (sid + ".state")).read_text(encoding="utf-8").strip().lower() != "daemon":
         sys.exit(0)
-    size = os.path.getsize(os.path.expanduser(path))
+    size = os.path.getsize(os.path.join(sys.argv[1], os.path.expanduser(path)))
     fd, tmp = tempfile.mkstemp(dir=base, prefix="." + sid + ".", suffix=".turn.tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({"offset": size, "at": time.time()}, fh)
     os.replace(tmp, base / (sid + ".turn"))
 except OSError:
     sys.exit(0)
-' >/dev/null 2>&1 || true
+' "$SESSION_DIR" >/dev/null 2>&1 || true
 
 # The Probe service records this session (plan A2, its `.hosted` marker) and
 # is gone (a crash, a kill): start it again now, in the background, rather
@@ -108,7 +116,7 @@ if [[ "$HOOK_INPUT" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]{
             # Only the service, which resumes every session it recorded: never
             # SessionStart in the background (its owner lookup walks up from
             # itself, and a detached copy would find no agent and drop the record).
-            TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+            TAP_ROOT="$(cd "$TAP_HOOKS_DIR/.." && pwd)"
             PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" nohup python3 -m tap service ensure \
                 </dev/null >/dev/null 2>&1 &
         fi
