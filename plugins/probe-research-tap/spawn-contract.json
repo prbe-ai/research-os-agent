@@ -19,7 +19,11 @@
     "NOT a runtime input. Nothing imports this at runtime -- `tap start`",
     "parses argv with argparse as usual. This is a test fixture, and making",
     "it load-bearing at runtime would give the extension a file dependency on",
-    "a sibling package it is not distributed with."
+    "a sibling package it is not distributed with.",
+    "",
+    "`optional_flags` follow `flag_order` when a caller passes them: the service (pi) and the CLI's",
+    "start of an open Claude Code or Codex chat (`ensure_capture`, agent-prompt install D66) name the",
+    "agent's tap folder. `PROBE_TAP_SOURCE` is the agent's registry id; `env` pins pi's."
   ],
   "subcommand": ["-m", "tap", "start"],
   "flags": {
@@ -30,5 +34,8 @@
   "flag_order": ["session_id", "cwd", "transcript"],
   "env": {
     "PROBE_TAP_SOURCE": "pi"
+  },
+  "optional_flags": {
+    "plugin_root": "--plugin-root"
   }
 }

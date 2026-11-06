@@ -675,6 +675,17 @@ class ShimExit(IntEnum):
     UPDATING = 75
 
 
+class ShimReason:
+    """What the shim's own exits say under `--json` (`{"ok": false, "reason"}`, plan D71): the
+    words `probe.core.events.AgentInstallReason` has for them."""
+
+    UPDATING = "updating"
+    NO_SERVICE = "no_service"
+    SERVICE_LOST = "service_lost"
+
+    BY_EXIT = {ShimExit.UPDATING: UPDATING, ShimExit.UNAVAILABLE: NO_SERVICE, ShimExit.SERVICE_LOST: SERVICE_LOST}
+
+
 class CommandStdio:
     """`cli.run`'s `stdio`: the caller's own fds (a terminal, pipes), or output captured into the answer."""
 

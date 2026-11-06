@@ -291,6 +291,9 @@ def _wait_for_codex_transcript(
 
 #: The pinned transcript became a link or another file (`transcripts.pinned`): recording stopped for good.
 EXIT_TRANSCRIPT_SWAPPED = 13
+#: A new sign-in replaced the capture key this recorder started with: it ends, and its host
+#: (the Probe service's guard) records the session again under the new key (plan D39).
+EXIT_CREDENTIAL_CHANGED = 14
 
 
 def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
@@ -629,6 +632,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
             _beat(c)
             if _paused(c):
                 return 0
+            if _is_credential_replaced(c):
+                log.info("the capture key changed (a new sign-in); this recorder ends to record under it")
+                return EXIT_CREDENTIAL_CHANGED
             # A pinned transcript (a fenced caller's) is still the file the service accepted.
             pinned.check_pinned(c.transcript_path)
             stopping = _shutdown_observed(c)
@@ -1017,6 +1023,17 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
         _publish_claim(c, None)
         if journal is not None:
             journal.close()
+
+
+def _is_credential_replaced(c: cfg.WatchConfig) -> bool:
+    """The capture key on disk is another one now (a sign-in, perhaps as another account): the
+    uploads must not go on under the one this recorder holds in memory. A key that cannot be
+    read right now (mid-write) is no change."""
+    try:
+        current = cfg.load_token()
+    except Exception:  # noqa: BLE001 -- unreadable now is not replaced
+        return False
+    return bool(current) and current != c.token
 
 
 def _publish_claim(c: cfg.WatchConfig, folder: str | None) -> None:
