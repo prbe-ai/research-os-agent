@@ -1417,9 +1417,12 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: set|status` store or check a local credential: none of them talks to Probe.
 #: `example keep` ends the live example's hold on this chat (its pins) and marks it
 #: kept: cleanup, like its delete, so it stays possible in every state.
+#: `import folders|review|status` read this computer's chats, folders and import jobs and save a
+#: local review; nothing reaches the team's records until `import start|resume`, writes the
+#: person asks for (`--directed` in a daemon chat; refused in a `read` or `off` one, D51).
 UNGATED_COMMANDS = frozenset(
     {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status",
-     "example keep"}
+     "example keep", "import folders", "import review", "import status"}
 )
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
@@ -1660,7 +1663,8 @@ def daemon_allows_agent(matched: str) -> bool:
 #: prints where this session's runs go, as `session status` does. `cli search`
 #: searches this CLI's own commands, on this computer. `example status|keep|delete`
 #: read, keep and remove the live example the agent started (`example start|conclude`
-#: are in `DAEMON_AGENT_WRITES`; agent-prompt install D18).
+#: are in `DAEMON_AGENT_WRITES`; agent-prompt install D18). `import folders|review|status`
+#: review past work on this computer (D51, D74): `import start|resume` need `--directed`.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session send", "run expect", "doctor", "paper find",
      "docs", "cli search", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
@@ -1670,7 +1674,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
      "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
-     "example status", "example keep", "example delete"}
+     "example status", "example keep", "example delete", "import folders", "import review", "import status"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
