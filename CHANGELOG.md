@@ -2,9 +2,12 @@
 
 ## Unreleased
 
+- **`probe ask --wait` ends by itself after 280 s on every agent (was 2 hours).** Kimi Code kills a shell command at 300 s and Claude Code at 600 s; a wait the agent cut off lost the ask's id, and a waiter left running could take the answer to a closed pipe. It now prints `still looking (<id>)` and the answer comes as a `[Probe]` message. Kimi Code's `probe ask` line now comes from its daemon reader's capabilities (no message mid-turn) and its registry label, not a harness name in code; the text is unchanged.
+
+## 0.429.0
+
 - **Kimi Code agents wait for a `probe ask` answer their turn needs.** Kimi Code shows a `[Probe]` message only at the next prompt, after the turn ends (it drops hook output after a tool call, MoonshotAI/kimi-code #4255), so an answer the agent did not wait for reached it only once the work it asked about was done. The daemon block in Kimi Code's AGENTS.md now says to use `--wait`, and give the shell command a 300-second timeout (Kimi's most), unless nothing in the turn depends on the answer. A wait in Kimi Code ends by itself at 280 s, before Kimi kills the command: it prints the ask's id, and the answer comes at the next prompt. Other agents' blocks are unchanged; every installed block is rewritten once (block version 53).
 - `probe example status --help` no longer mentions a browser guide: a `person` stage is the person's own step (agent-prompt install PR21 removed the dashboard's example guide).
-- **`probe ask --wait` ends by itself after 280 s on every agent (was 2 hours).** Kimi Code kills a shell command at 300 s and Claude Code at 600 s; a wait the agent cut off lost the ask's id, and a waiter left running could take the answer to a closed pipe. It now prints `still looking (<id>)` and the answer comes as a `[Probe]` message. Kimi Code's `probe ask` line now comes from its daemon reader's capabilities (no message mid-turn) and its registry label, not a harness name in code; the text is unchanged.
 
 ## 0.428.0
 
