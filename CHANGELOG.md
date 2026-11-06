@@ -3,6 +3,9 @@
 ## Unreleased
 
 - **Deleting a project, experiment or run no longer leaves its summary or note owed.** `probe project|experiment|run delete` moves it to the trash, where every write is refused, yet the end-of-turn check kept asking for its summary (or, for a run tagged `invalid`, its note) and an inline agent could never satisfy it. A delete now settles what the session owed on that entity, whichever spelling (slug or `id:`) the delete used.
+
+## 0.427.0
+
 - **Imports bring in sub-agent chats, without the text they copied from their parent (agent-prompt install PR17d).** A Claude Code sub-agent's own chat (`<session>/subagents/agent-<id>.jsonl`, left out until now) is offered as a chat of its own, linked to the session that started it: its id is made from the parent's and its own (a UUID v5, the same on every computer), and its upload names the parent. A Codex sub-agent no longer sends the parent's history it was given (the lines before its header's `subagent_history_start_ordinal`; 1.13 of 3.13 GB of sub-agent rollouts on one devbox), and a sub-agent sent whole before is not sent again. A sub-agent's chat is left out when Probe is off for the chat that started it, as that chat is. Tap 0.10.62 carries the shared reader; live capture still records no sub-agent chat.
 
 ## 0.426.0
