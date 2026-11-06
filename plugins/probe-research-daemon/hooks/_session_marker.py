@@ -70,6 +70,9 @@ SCOPE_SUFFIX = ".scope"
 #: `<session>.home` beside it: where this session's runs go (`write_run_home`), set by
 #: the daemon. Not a key in `.scope`, which every landed write rewrites. `prune` sweeps it.
 HOME_SUFFIX = ".home"
+#: `<session>.workspace` beside it: where a project this session creates is filed
+#: (`write_session_workspace`), set by `probe example start` (agent-prompt install D68). `prune` sweeps it.
+WORKSPACE_SUFFIX = ".workspace"
 #: A bound on a project name this file stores or shows. Server slugs are
 #: free-form TEXT; the segment elides a long one anyway, so this only keeps a
 #: pathological value off the render path.
@@ -471,6 +474,47 @@ def clear_run_home(session_id: str) -> bool:
         return False
     try:
         os.unlink(home_path(session_id))
+        return True
+    except OSError:
+        return False
+
+
+def get_session_workspace_path(session_id: str) -> Path:
+    return sessions_dir() / (session_id + WORKSPACE_SUFFIX)
+
+
+def write_session_workspace(session_id: str, *, workspace_id: str, base_url: str,
+                            customer_id: "str | None") -> bool:
+    """Record the workspace a project this session creates is filed in, with the server and team
+    it belongs to. True when it landed. It outranks this computer's own pin (D68)."""
+    if not valid_session_id(session_id) or not _printable(workspace_id) or not isinstance(base_url, str):
+        return False
+    record = {"workspace_id": workspace_id, "base_url": base_url, "customer_id": customer_id,
+              "decided_at": time.time()}
+    return _publish_atomically(get_session_workspace_path(session_id), json.dumps(record) + "\n")
+
+
+def read_session_workspace(session_id: str) -> "dict | None":
+    """This session's workspace as `write_session_workspace` stored it, or None: absent,
+    unreadable and malformed alike."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        with open(get_session_workspace_path(session_id), encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not _printable(record.get("workspace_id")):
+        return None
+    return record if isinstance(record.get("base_url"), str) else None
+
+
+def clear_session_workspace(session_id: str) -> bool:
+    """Forget this session's workspace. True when there was one to forget."""
+    if not valid_session_id(session_id):
+        return False
+    try:
+        os.unlink(get_session_workspace_path(session_id))
         return True
     except OSError:
         return False
@@ -1277,6 +1321,9 @@ WRITE_GROUPS = frozenset(
         # `visuals set` record; `summary checkout` and `visuals options` read.
         "summary",
         "visuals",
+        # The live example (agent-prompt install D18): `example start|conclude` record,
+        # `status` reads, `delete` removes. The agent runs them in every recorder mode.
+        "example",
     }
 )
 
@@ -1438,6 +1485,10 @@ DAEMON_AGENT_WRITES = frozenset(
         "trial watch",
         "trial reconcile",
         "trial expand",
+        # The live example's own writes (agent-prompt install D18): the example works under
+        # the daemon, which files nothing of it; `example status` and `delete` are below.
+        "example start",
+        "example conclude",
     }
 )
 
@@ -1604,7 +1655,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `session owed` reads the session's own owed ledger (notes parity N3); the
 #: plugin's end-of-turn hook runs it, and the agent may too. `session home show`
 #: prints where this session's runs go, as `session status` does. `cli search`
-#: searches this CLI's own commands, on this computer.
+#: searches this CLI's own commands, on this computer. `example status|delete` read
+#: and remove the live example the agent started (`example start|conclude` are in
+#: `DAEMON_AGENT_WRITES`; agent-prompt install D18).
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session send", "run expect", "doctor", "paper find",
      "docs", "cli search", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
@@ -1613,7 +1666,8 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
-     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show"}
+     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
+     "example status", "example delete"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
