@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe example keep`: keep the live example, and the chat's next work goes to your own workspace (agent-prompt install PR4b).** It records the keep on the server and releases this chat's run home and workspace pin (and the example's own chat's), so a kept example no longer takes later work from the chat; it runs in every recorder mode, like `delete`. `start` sends this chat's id and pins it only when the server names it the example's chat (the first chat keeps it) and the example is not kept. example.md's "No" step runs it. The npm launcher's agent floor is 0.423.0, the first CLI with `keep`.
+
 ## 0.422.0
 - **A retry wrapper no longer files the previous attempt's error on the next run.** A run opened inside an `except` (created, resumed or opened offline, init's `PROBE_INIT_FALLBACK=offline` included) and then closed `failed` in that same handler does not carry that handler's exception as its crash report; an error raised after the run opened still does, the same type included. A killed run's crash report now names the attempt it died in, and a report too large to send whole keeps the mark that says the SDK recovered from that error, so neither is taken for a later crash's cause.
 

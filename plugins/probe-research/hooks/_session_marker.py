@@ -1322,7 +1322,7 @@ WRITE_GROUPS = frozenset(
         "summary",
         "visuals",
         # The live example (agent-prompt install D18): `example start|conclude` record,
-        # `status` reads, `delete` removes. The agent runs them in every recorder mode.
+        # `status` reads, `keep` and `delete` end it. The agent runs them in every recorder mode.
         "example",
     }
 )
@@ -1415,8 +1415,11 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: governed (see `version_check._spawn_session_maintenance`); `project use` only sets the
 #: local default project. `wandb discover` scans a local folder and `wandb key
 #: set|status` store or check a local credential: none of them talks to Probe.
+#: `example keep` ends the live example's hold on this chat (its pins) and marks it
+#: kept: cleanup, like its delete, so it stays possible in every state.
 UNGATED_COMMANDS = frozenset(
-    {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status"}
+    {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status",
+     "example keep"}
 )
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
@@ -1655,9 +1658,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `session owed` reads the session's own owed ledger (notes parity N3); the
 #: plugin's end-of-turn hook runs it, and the agent may too. `session home show`
 #: prints where this session's runs go, as `session status` does. `cli search`
-#: searches this CLI's own commands, on this computer. `example status|delete` read
-#: and remove the live example the agent started (`example start|conclude` are in
-#: `DAEMON_AGENT_WRITES`; agent-prompt install D18).
+#: searches this CLI's own commands, on this computer. `example status|keep|delete`
+#: read, keep and remove the live example the agent started (`example start|conclude`
+#: are in `DAEMON_AGENT_WRITES`; agent-prompt install D18).
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session send", "run expect", "doctor", "paper find",
      "docs", "cli search", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
@@ -1667,7 +1670,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
      "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
-     "example status", "example delete"}
+     "example status", "example keep", "example delete"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
