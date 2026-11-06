@@ -728,12 +728,14 @@ def _replace_older(min_version: str | None, wait: float, *, refusing: dict | Non
 
 def _is_same_service(hello: dict, refusing: dict) -> bool:
     """Do two `service.hello` answers come from one service process (its `pid` and `started_at`)? Never
-    without a start time on both: a pid alone may be another service's after a reuse."""
-    pid = refusing.get("pid") if isinstance(refusing, dict) else None
-    started = refusing.get("started_at") if isinstance(refusing, dict) else None
-    if not isinstance(pid, int) or isinstance(started, bool) or not isinstance(started, (int, float, str)) or started == "":
+    without a valid start time on both: a pid alone may be another service's after a reuse, and
+    `true == 1.0` (a malformed hello) is no match (#4312 post-merge review)."""
+    sides = [(side.get("pid"), side.get("started_at")) if isinstance(side, dict) else (None, None)
+             for side in (hello, refusing)]
+    if not all(type(pid) is int and type(started) in (int, float, str) and started != "" for pid, started in sides):
         return False
-    return hello.get("pid") == pid and hello.get("started_at") == started
+    (pid, started), (refusing_pid, refusing_started) = sides
+    return pid == refusing_pid and type(started) is type(refusing_started) and started == refusing_started
 
 
 def _wait_for_answer(wait: float) -> str:
