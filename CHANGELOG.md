@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+- **Kimi Code agents wait for a `probe ask` answer their turn needs.** Kimi Code shows a `[Probe]` message only at the next prompt, after the turn ends (it drops hook output after a tool call, MoonshotAI/kimi-code #4255), so an answer the agent did not wait for reached it only once the work it asked about was done. The daemon block in Kimi Code's AGENTS.md now says to use `--wait`, and give the shell command a 300-second timeout (Kimi's most), unless nothing in the turn depends on the answer. A wait in Kimi Code ends by itself at 280 s, before Kimi kills the command: it prints the ask's id, and the answer comes at the next prompt. Other agents' blocks are unchanged; every installed block is rewritten once (block version 53).
+
+## 0.428.0
+
 - **Deleting a project, experiment or run no longer leaves its summary or note owed.** `probe project|experiment|run delete` moves it to the trash, where every write is refused, yet the end-of-turn check kept asking for its summary (or, for a run tagged `invalid`, its note) and an inline agent could never satisfy it. A delete now settles what the session owed on that entity, whichever spelling (slug or `id:`) the delete used.
 - **Fix: a sandbox entry that wasn't written is never reported as done (final review of #4308).** `probe wizard` now writes a missing entry for the agent's sandbox even when the run had other work (rules, skills), and a failed write leaves the install unfinished, also in what Probe's server is told; `probe update` keeps a failed write as a problem instead of a line its summary hides.
 - **Fix: a temporary copy under a custom pipx home (`PIPX_HOME`) is never named in the OS launch settings (final review of #4326).** `pipx run` keeps temporary copies in `<pipx home>/.cache/<hash>`; any pipx home is recognised now (it holds `venvs` and `shared`), not only the default places.
-- **Kimi Code agents wait for a `probe ask` answer their turn needs.** Kimi Code shows a `[Probe]` message only at the next prompt, after the turn ends (it drops hook output after a tool call, MoonshotAI/kimi-code #4255), so an answer the agent did not wait for reached it only once the work it asked about was done. The daemon block in Kimi Code's AGENTS.md now says to use `--wait`, and give the shell command a 300-second timeout (Kimi's most), unless nothing in the turn depends on the answer. A wait in Kimi Code ends by itself at 280 s, before Kimi kills the command: it prints the ask's id, and the answer comes at the next prompt. Other agents' blocks are unchanged; every installed block is rewritten once (block version 53).
 
 ## 0.427.0
 
