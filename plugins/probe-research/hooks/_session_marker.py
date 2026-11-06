@@ -1352,6 +1352,8 @@ READ_VERBS = frozenset(
         "find",
         # `visuals options`: what a summary's tables and charts may name.
         "options",
+        # `project pick`: the projects a run may be filed in (agent-prompt install D22).
+        "pick",
     }
 )
 

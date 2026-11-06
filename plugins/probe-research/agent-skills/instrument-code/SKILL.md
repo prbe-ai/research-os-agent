@@ -13,11 +13,14 @@ Example:
 import probe
 probe.init(project="folding", description="DockQ sweep over sampling temperature", tags=["dockq"],
            config=args, intent="does a lower sampling temperature improve DockQ?")
-# Every run needs a project. In the `daemon` state a run on this machine naming none
-# goes to this session's project, which the daemon sets (`probe session home show`
-# prints it); before it is set, probe.init() waits for it (up to 90 s, said on stderr).
-# Pass project= to choose another, and on another machine pass one. None fits?
-# `probe project create <slug> --kind <kind>` first; the daemon may rename it or move the run.
+# Every run needs a project, named by its slug or id (a name never finds one); a new slug,
+# lowercase words joined by "-", creates it. A run naming none raises. In the `daemon` state,
+# on this machine pass project=probe.FROM_ENV (`probe exec --project-from-env`): the run goes
+# to this session's project, which the daemon sets (`probe session home show` prints it); before it
+# is set, probe.init() waits for it (up to 90 s, said on stderr). FROM_ENV also reads
+# PROBE_PROJECT and this computer's default project (an AttributeError there means that
+# environment's probe-research is older: upgrade it). On another machine pass a slug; the
+# daemon may move the run.
 # `on` state: name the experiment you created too, e.g.
 # probe.init(project="folding", experiment="dockq-sweep", question="does a lower sampling temperature improve DockQ?")
 probe.log({"loss": 0.42}, step=42)   # ambient: no handle to thread through call frames
@@ -132,11 +135,12 @@ attaches, but that export dies at the machine boundary:
 | Slurm | `sbatch --export=ALL,PROBE_TOKEN,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` | the venv the job activates |
 | Docker / k8s | `-e PROBE_TOKEN -e PROBE_RUN_ID=...` / `env:` on the pod | the image |
 
-When they are set (the token alone is enough), call `probe.init(config=args)` with nothing
-that names the run (`project`, `experiment`, `name`, `slug`, `question`,
-`hypothesis`): that contradicts the run the launcher opened, and it raises. The
-config still lands on that run. If the launcher only submitted the job, `probe
-exec` opened the run AWAITING ATTACH and this same call takes ownership.
+When they are set (the token alone is enough), `probe.init(config=args)` joins the run
+the launcher opened. A `project` / `experiment` that names that run's own home (or
+`project=probe.FROM_ENV`) is accepted, so a script that carries its slugs runs either way;
+a different one raises, and `name` / `question` are ignored with a warning. The config
+still lands on that run. If the launcher only submitted the job, `probe exec` opened the
+run AWAITING ATTACH and this same call takes ownership.
 
 The credential is `PROBE_TOKEN`, plus `PROBE_BASE_URL` if you are not on the
 default server; there is NO `PROBE_API_KEY`. Give the job the run's own token,
