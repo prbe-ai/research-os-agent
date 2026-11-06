@@ -174,17 +174,8 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
             payload = _header_fields(headers[0], nested)
             native = payload.get("id")
             source_cwd = payload.get("cwd")
-            for key in ("forked_from_id", "parentSession", "parent_session_id", "parent_thread_id"):
-                if payload.get(key):
-                    lineage.append(str(payload[key]))
-            parent = _spawn_parent(payload)
-            if parent and parent not in lineage:
-                lineage.append(parent)
-            if any(
-                _header_fields(r, nested).get("id") != native
-                for r in headers
-            ):
-                raise IdentityMismatch("conflicting native session headers")
+            lineage = _get_lineage(payload)
+            _check_headers(headers, nested)
     try:
         matches = str(UUID(native)) == expected
     except (ValueError, TypeError, AttributeError):
@@ -209,6 +200,29 @@ def _header_fields(record: dict, nested: bool) -> dict:
     """A header's fields; one that is not an object proves nothing."""
     fields = record.get("payload") if nested else record
     return fields if isinstance(fields, dict) else {}
+
+
+#: Header fields naming the session this one came from (a fork's source, a sub-agent's parent).
+_LINEAGE_KEYS = ("forked_from_id", "parentSession", "parent_session_id", "parent_thread_id")
+
+
+def _get_lineage(payload: dict) -> list[str]:
+    """The sessions a header says this one came from, each once."""
+    lineage: list[str] = []
+    for value in (*(payload.get(key) for key in _LINEAGE_KEYS), _spawn_parent(payload)):
+        if value and str(value) not in lineage:
+            lineage.append(str(value))
+    return lineage
+
+
+def _check_headers(headers: list[dict], is_nested: bool) -> None:
+    """Every header names the first one's session, or one the first says it came from: Codex
+    (seen 0.147-0.166) writes a sub-agent spawned with its parent's context as its own header, then
+    a copy of the parent's rollout, the parent's header first. Any other id is another chat's."""
+    first = _header_fields(headers[0], is_nested)
+    known = (first.get("id"), *_get_lineage(first))
+    if any(_header_fields(r, is_nested).get("id") not in known for r in headers):
+        raise IdentityMismatch("conflicting native session headers")
 
 
 def _same_uuid(value: object, expected: str) -> bool:

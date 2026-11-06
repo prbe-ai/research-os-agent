@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Fix: `probe wizard` writes a missing sandbox entry even when nothing else needs changing.** A sandboxed agent that cannot reach the Probe service is told to run `probe wizard`, but on an agent set up before 0.406.0 the wizard found nothing to change and stopped before the step that writes the sandbox's entry for Probe's drop folder, so sandboxed Codex kept failing with exit 69. The no-change run now makes sure the entry is there (once; an entry the person took out stays out) and says `Sandbox access: installed` when it added one.
+- **Imports bring in Codex sub-agents started with their parent's context (tap 0.10.61).** Codex writes such a sub-agent's chat as its own header, then a copy of the parent's chat so far, which starts with the parent's header. The import read that second header as another chat's and left the file out: on one devbox 676 of 3,828 Codex chats, most of them compressed archives. A later header may now name the chat's own session or the one its header says it came from; any other session's header still keeps the file out. On that devbox the import's Codex sessions go from 2,289 to 2,962. Each archive's kept facts are read once more (cache schema 2), so archives refused before are checked again. Agent-prompt install PR17c.
 
 ## 0.419.0
 
