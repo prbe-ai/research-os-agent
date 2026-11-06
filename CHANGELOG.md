@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The import's session list is fast again with Codex archives.** Reading Codex's compressed chats (0.418.0) made every listing of past sessions (the Mac app's, the wizard's, an agent's review) decompress each archive's head: on one devbox discovery took 15-19 s instead of 0.9 s and a full review ~25 s. Each archive's facts (identity, working folder, size, and once reviewed its hash) are now kept in `~/.local/state/probe/codex-archive-facts.json` by path, size, times and inode, so every listing after the first takes ~1 s and a second review ~1.2 s. A changed or deleted archive drops its row; an unreadable one is never kept; two processes saving at once lose nothing. Agent-prompt install PR17b.
+
 ## 0.418.0
 
 - **Security fix: pi's lookup of the Probe service never imports a file from pi's working folder (pi 0.7.3).** pi's extension asked `python -m tap service socket` in the folder pi runs in, and `-m` puts that folder first on Python's path, so a `tap/` package an agent planted there would have run with pi's rights. The lookup now starts in the tap's own folder.
