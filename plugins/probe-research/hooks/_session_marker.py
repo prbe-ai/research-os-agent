@@ -2547,6 +2547,24 @@ def session_profile(session_id: str) -> "str | None":
         return None
 
 
+def forget_session_switch(session_id: str) -> bool:
+    """Drop this conversation's switch (every spelling of it) and its daemon-profile mark: it reads as
+    undecided again, which no gate refuses. A switch to Runs only does it for every chat (agent-prompt
+    install D31): no chat stays on a daemon or read-only profile no plugin will ever move again.
+    True when none of them is left."""
+    if not valid_session_id(session_id):
+        return False
+    with _StateLock(session_id):
+        is_gone = True
+        for path in (state_path(session_id), tracking_signal_path(session_id), _legacy_off_path(session_id),
+                     state_source_path(session_id), profile_path(session_id)):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                is_gone = False
+        return is_gone
+
+
 def mark_session_profile(session_id: str, profile: str) -> None:
     """Best effort: the lean plugin marks its sessions at SessionStart."""
     if not valid_session_id(session_id):

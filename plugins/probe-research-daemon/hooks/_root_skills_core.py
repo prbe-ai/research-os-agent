@@ -229,16 +229,30 @@ def apply(
     and refreshed v2 then wrote v1's text back over v2's (reproduced). False:
     nothing is written.
     """
-    out: dict[str, list[str]] = {
-        "installed": [], "refreshed": [], "removed": [], "renamed": [], "notes": [],
-    }
     src_root = Path(plugin_root) / PLUGIN_SKILLS_DIR
     if not src_root.is_dir():
+        out = _make_report()
         out["notes"].append(f"{Path(plugin_root).name} has no {PLUGIN_SKILLS_DIR}/; left the skills folder alone")
         return out
+    return apply_from(skills_root, src_root, plugin_name(Path(plugin_root)), wanted, still_installed)
 
+
+def _make_report() -> dict:
+    return {"installed": [], "refreshed": [], "removed": [], "renamed": [], "notes": []}
+
+
+def apply_from(
+    skills_root: Path,
+    src_root: Path,
+    plugin: str,
+    wanted: "tuple[str, ...] | list[str]",
+    still_installed: "Callable[[], bool] | None" = None,
+) -> dict:
+    """`apply`, from a folder of skills (`<src_root>/<slug>/SKILL.md`) named `plugin` in each marker: a
+    plugin's `agent-skills/`, or the CLI wheel's own skills for Runs only (no plugin there to copy from)."""
+    out = _make_report()
     root = Path(skills_root)
-    plugin = plugin_name(Path(plugin_root))
+    src_root = Path(src_root)
     with _one_writer(root) as mine:
         if not mine:
             out["notes"].append("another session is installing Probe's skills; left them to it")
