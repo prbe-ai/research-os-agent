@@ -412,8 +412,8 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
         )
 
     code = None
-    if identity is not None:
-        pinned.set_pin(transcript_path, identity)
+    # Its own pin: a recorder of the same file beside it (a resumed session) never releases this one.
+    pin = pinned.hold_pin(transcript_path, identity) if identity is not None else None
     try:
         try:
             code = _run_durable_loop(config, storage, **({"offer": offer} if offer is not None else {}))
@@ -423,8 +423,8 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
             code = EXIT_TRANSCRIPT_SWAPPED
         return code
     finally:
-        if identity is not None:
-            pinned.clear_pin(transcript_path)
+        if pin is not None:
+            pinned.release_pin(transcript_path, pin)
         if offer is not None:
             link = offer.link  # a newer one, after a take-back
         if link is not None:

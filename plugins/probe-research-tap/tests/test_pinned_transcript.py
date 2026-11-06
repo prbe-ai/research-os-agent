@@ -2,8 +2,10 @@
 
 The service accepts a sandboxed caller's transcript only as a regular file of the machine's session
 folder and names its identity (`dev:ino`). The recorder pins the path to it: every read opens it with
-`O_NOFOLLOW` and checks the opened file's identity. A file swapped for a link (or another file) after
-the check is never read: the recorder stops for good (`EXIT_TRANSCRIPT_SWAPPED`, hosted: `REFUSED`).
+`O_NOFOLLOW | O_NONBLOCK` and checks the opened file is a regular file of that identity. A file
+swapped for a link, a FIFO or another file after the check is never read (and a FIFO never blocks the
+reader): the recorder stops for good (`EXIT_TRANSCRIPT_SWAPPED`, hosted: `REFUSED`). Each holder's pin
+is its own: one recorder ending never unpins another's file.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ def transcript(tmp_path):
     path = tmp_path / "s.jsonl"
     path.write_text('{"n": 1}\n')
     yield path
-    pinned.clear_pin(path)
+    pinned._pins.pop(str(path), None)  # every holder's pin a test left
 
 
 def test_an_unpinned_transcript_reads_as_before_even_through_a_link(tmp_path, transcript):
@@ -44,13 +46,13 @@ def test_an_unpinned_transcript_reads_as_before_even_through_a_link(tmp_path, tr
 
 
 def test_a_pinned_transcript_reads_while_it_is_the_accepted_file(transcript):
-    pinned.set_pin(transcript, _identity(transcript))
+    pinned.hold_pin(transcript, _identity(transcript))
     pinned.check_pinned(transcript)
     assert read_new(transcript, 0).lines == [b'{"n": 1}']
 
 
 def test_a_pinned_transcript_swapped_for_a_link_after_the_check_is_never_read(tmp_path, transcript):
-    pinned.set_pin(transcript, _identity(transcript))
+    pinned.hold_pin(transcript, _identity(transcript))
     secret = tmp_path / "secret"
     secret.write_text('{"key": "secret"}\n')
     transcript.unlink()
@@ -62,7 +64,7 @@ def test_a_pinned_transcript_swapped_for_a_link_after_the_check_is_never_read(tm
 
 
 def test_a_pinned_transcript_replaced_by_another_file_is_never_read(tmp_path, transcript):
-    pinned.set_pin(transcript, _identity(transcript))
+    pinned.hold_pin(transcript, _identity(transcript))
     other = tmp_path / "other.jsonl"
     other.write_text('{"key": "secret"}\n')
     os.replace(other, transcript)
@@ -70,8 +72,63 @@ def test_a_pinned_transcript_replaced_by_another_file_is_never_read(tmp_path, tr
         read_new(transcript, 0)
 
 
+def test_one_recorder_ending_never_unpins_another_recorders_file(tmp_path, transcript):
+    """#4278 review (P1): a resumed session's recorder overlaps its finishing one; both pin the same
+    path. The finishing one exiting once removed the shared pin, and the survivor then opened by path
+    and followed a link swapped in. Each holder releases its own pin only."""
+    accepted = _identity(transcript)
+    finishing = pinned.hold_pin(transcript, accepted)
+    resumed = pinned.hold_pin(transcript, accepted)
+    pinned.release_pin(transcript, finishing)
+    secret = tmp_path / "secret"
+    secret.write_text('{"key": "secret"}\n')
+    transcript.unlink()
+    transcript.symlink_to(secret)
+    with pytest.raises(pinned.TranscriptSwapped, match="symbolic link"):
+        read_new(transcript, 0)
+    pinned.release_pin(transcript, finishing)  # twice: still only its own
+    assert pinned.get_pin(transcript) == accepted, "the resumed recorder's pin stands"
+    pinned.release_pin(transcript, resumed)
+    assert pinned.get_pin(transcript) is None, "the last holder's release unpins it"
+
+
+def test_a_pinned_transcript_swapped_for_a_fifo_never_blocks_its_reader(tmp_path, transcript):
+    """#4278 review (P2): a FIFO in the accepted file's place, with no writer, blocked an open
+    without O_NONBLOCK (the service's event loop, at the capture gate). A pinned open never waits:
+    it refuses anything that is not a regular file."""
+    pinned.hold_pin(transcript, _identity(transcript))
+    transcript.unlink()
+    os.mkfifo(transcript)
+    outcome: list = []
+
+    def read() -> None:
+        try:
+            pinned.check_pinned(transcript)
+        except pinned.TranscriptSwapped as exc:
+            outcome.append(exc)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    reader.join(5)
+    if reader.is_alive():
+        with open(os.open(transcript, os.O_WRONLY | os.O_NONBLOCK), "wb"):  # let the stuck open go
+            pass
+        pytest.fail("a pinned open waited on a FIFO")
+    assert outcome and "regular file" in str(outcome[0])
+
+
+def test_a_pinned_transcript_reads_with_blocking_cleared(transcript):
+    """O_NONBLOCK is for the open only: the regular file's descriptor reads as any open file's."""
+    import fcntl
+
+    pinned.hold_pin(transcript, _identity(transcript))
+    with pinned.open_transcript(transcript) as handle:
+        assert not fcntl.fcntl(handle.fileno(), fcntl.F_GETFL) & os.O_NONBLOCK
+        assert handle.read() == b'{"n": 1}\n'
+
+
 def test_a_missing_pinned_transcript_is_waited_for_not_called_swapped(transcript):
-    pinned.set_pin(transcript, _identity(transcript))
+    pinned.hold_pin(transcript, _identity(transcript))
     transcript.unlink()
     pinned.check_pinned(transcript)  # the recorder's own missing-file handling decides
 
@@ -90,7 +147,7 @@ def test_the_recorder_stops_when_its_pinned_transcript_is_swapped_mid_session(se
     secret = config.transcript_path.with_name("secret.jsonl")
     secret.write_text(json.dumps(dict(type="user", sessionId=config.session_id,
                                       message=dict(role="user", content="SECRET-TEXT"))) + "\n")
-    pinned.set_pin(config.transcript_path, _identity(config.transcript_path))
+    pinned.hold_pin(config.transcript_path, _identity(config.transcript_path))
 
     def swap(_seconds):
         config.transcript_path.unlink()
@@ -101,7 +158,7 @@ def test_the_recorder_stops_when_its_pinned_transcript_is_swapped_mid_session(se
         with pytest.raises(pinned.TranscriptSwapped):
             tapmain._run_durable_loop(config, storage)
     finally:
-        pinned.clear_pin(config.transcript_path)
+        pinned._pins.pop(str(config.transcript_path), None)
     sent = b"".join(v if isinstance(v, bytes) else v.encode() for v in wire.accepted.values()).decode()
     assert "turn 0" in sent, "the accepted file was recorded"
     assert "SECRET-TEXT" not in sent
@@ -117,7 +174,7 @@ def test_main_stops_for_good_on_a_swap(tmp_path, monkeypatch):
     seen = {}
 
     def run(config, storage, **_kw):
-        seen["pinned"] = pinned._pins.get(str(config.transcript_path))
+        seen["pinned"] = pinned.get_pin(config.transcript_path)
         raise pinned.TranscriptSwapped("swapped")
 
     argv = ["--session-id", "synthetic", "--transcript", str(transcript), "--cwd", str(tmp_path),
@@ -125,7 +182,7 @@ def test_main_stops_for_good_on_a_swap(tmp_path, monkeypatch):
     with mock.patch.object(tapmain, "_run_durable_loop", side_effect=run):
         assert tapmain.main(argv) == tapmain.EXIT_TRANSCRIPT_SWAPPED
     assert seen["pinned"] == (found.st_dev, found.st_ino)
-    assert str(transcript) not in pinned._pins, "unpinned on the way out"
+    assert pinned.get_pin(transcript) is None, "its own pin released on the way out"
     with pytest.raises(SystemExit):
         tapmain.main(["--session-id", "s", "--transcript", str(transcript), "--cwd", str(tmp_path),
                       "--transcript-identity", "not-an-identity"])

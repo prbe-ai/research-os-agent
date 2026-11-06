@@ -62,15 +62,17 @@ fi
 [ -n "$_SID" ] || _SID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-}}"
 if [ -n "$_SID" ] && command -v python3 >/dev/null 2>&1; then
   _HOOKDIR="$(cd "$(dirname "$0")" && pwd)"
-  if python3 -c "
+  # The hooks folder and the session id go in as arguments, never into the program's text: the id is
+  # payload data, and a quote in it must stay data.
+  if python3 -c '
 import sys
-sys.path.insert(0, '$_HOOKDIR')
+sys.path.insert(0, sys.argv[1])
 try:
     import _session_marker as m
-    sys.exit(0 if m.session_state('$_SID') == m.STATE_OFF else 1)
+    sys.exit(0 if m.session_state(sys.argv[2]) == m.STATE_OFF else 1)
 except Exception:
     sys.exit(1)
-" 2>/dev/null; then
+' "$_HOOKDIR" "$_SID" 2>/dev/null; then
     exit 0
   fi
 fi
