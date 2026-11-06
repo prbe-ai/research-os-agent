@@ -3,6 +3,8 @@
 ## Unreleased
 
 - **Deleting a project, experiment or run no longer leaves its summary or note owed.** `probe project|experiment|run delete` moves it to the trash, where every write is refused, yet the end-of-turn check kept asking for its summary (or, for a run tagged `invalid`, its note) and an inline agent could never satisfy it. A delete now settles what the session owed on that entity, whichever spelling (slug or `id:`) the delete used.
+- **Fix: a sandbox entry that wasn't written is never reported as done (final review of #4308).** `probe wizard` now writes a missing entry for the agent's sandbox even when the run had other work (rules, skills), and a failed write leaves the install unfinished, also in what Probe's server is told; `probe update` keeps a failed write as a problem instead of a line its summary hides.
+- **Fix: a temporary copy under a custom pipx home (`PIPX_HOME`) is never named in the OS launch settings (final review of #4326).** `pipx run` keeps temporary copies in `<pipx home>/.cache/<hash>`; any pipx home is recognised now (it holds `venvs` and `shared`), not only the default places.
 
 ## 0.427.0
 
