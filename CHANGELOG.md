@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.426.0
+
 - **Two install fixes from the final eval pass (agent-prompt install PR20).** Claude Code reads a Probe plugin that no settings file names in `enabledPlugins` as off, and Probe read it as on: `status` said the plugin was fine and `probe repair` put back the missing entry as missing. Now status reads a missing entry as off, and install, reinstall and `probe repair` write `true` for it; only an explicit `false` stays your choice. And `probe import review --folder` now has the agent of the chat it runs in read the folder (a Codex chat no longer spends your Claude allowance), the other agent only when that one is not installed; `--agent` still wins.
 
 ## 0.425.0
