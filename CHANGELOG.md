@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **`probe ask --wait` ends by itself after 280 s on every agent (was 2 hours).** Kimi Code kills a shell command at 300 s and Claude Code at 600 s; a wait the agent cut off lost the ask's id, and a waiter left running could take the answer to a closed pipe. It now prints `still looking (<id>)` and the answer comes as a `[Probe]` message. Kimi Code's `probe ask` line now comes from its daemon reader's capabilities (no message mid-turn) and its registry label, not a harness name in code; the text is unchanged.
+- **Recommended means on, and two sign-in gaps (agent-prompt install PR22, D88).** Picking Recommended in an agent's install now sets the daemon (when the team offers it) and new chats on even on a computer where Probe was set up before: an old stored `off` had kept new chats off. The install's own chat takes the new-chat default it saves (Recommended's `on`, or what Let me pick chose), so it records. `sign-in --wait` and the other agent commands wait for a Probe service that is still starting, within their time limit, instead of answering `no_service` (a first start on a Mac outlasted 10 s). And `status --json` on a computer with a saved sign-in but no Probe CLI downloads the CLI and answers its real state, instead of `none`, which sent the agent into a second sign-in.
 
 ## 0.429.0
 
