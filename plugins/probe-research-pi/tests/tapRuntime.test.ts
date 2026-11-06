@@ -1,6 +1,6 @@
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -32,6 +32,48 @@ describe("resolveTapRuntime", () => {
     const runtime = resolveTapRuntime({
       ...fakeFs(existing, executable),
       env: { PROBE_PI_TAP_ROOT: root },
+      extensionDir,
+    });
+
+    expect(runtime).toEqual({ python: join(root, ".venv", "bin", "python3"), tapRoot: root });
+  });
+
+  it("never takes a python3 from a relative or empty PATH entry (pi's working folder)", () => {
+    const root = "/opt/tap-checkout";
+    const existing = new Set([join(root, "tap", "__init__.py"), join(".", "python3"), "python3", "/usr/bin/python3"]);
+    const executable = new Set([join(".", "python3"), "python3", "/usr/bin/python3"]);
+
+    const runtime = resolveTapRuntime({
+      ...fakeFs(existing, executable),
+      env: { PROBE_PI_TAP_ROOT: root, PATH: [".", "", "bin", "/usr/bin"].join(":") },
+      extensionDir,
+    });
+
+    expect(runtime).toEqual({ python: "/usr/bin/python3", tapRoot: root });
+  });
+
+  it("makes the sibling tap root absolute when the extension folder is relative", () => {
+    const siblingRoot = resolve("extensions", "probe-research-tap");
+    const existing = new Set([join(siblingRoot, "tap", "__init__.py"), join(siblingRoot, ".venv", "bin", "python3")]);
+    const executable = new Set([join(siblingRoot, ".venv", "bin", "python3")]);
+
+    const runtime = resolveTapRuntime({
+      ...fakeFs(existing, executable),
+      env: {},
+      extensionDir: join("extensions", "probe-research-pi"),
+    });
+
+    expect(runtime).toEqual({ python: join(siblingRoot, ".venv", "bin", "python3"), tapRoot: siblingRoot });
+  });
+
+  it("makes a relative PROBE_PI_TAP_ROOT absolute: the socket lookup starts inside it", () => {
+    const root = resolve("relative-tap");
+    const existing = new Set([join(root, "tap", "__init__.py"), join(root, ".venv", "bin", "python3")]);
+    const executable = new Set([join(root, ".venv", "bin", "python3")]);
+
+    const runtime = resolveTapRuntime({
+      ...fakeFs(existing, executable),
+      env: { PROBE_PI_TAP_ROOT: "relative-tap" },
       extensionDir,
     });
 

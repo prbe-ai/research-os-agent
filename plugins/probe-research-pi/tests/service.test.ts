@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { ENSURE_ARGS, ensureService, serviceSupported, ServicelessPlatform } from "../src/core/service.js";
+import { ENSURE_ARGS, ensureService, lookupServiceSocket, serviceSupported, ServicelessPlatform } from "../src/core/service.js";
+import type { TrackingExecOptions } from "../src/core/trackingState.js";
 import type { SpawnFn } from "../src/core/daemon.js";
 
 describe("ensureService: the CLI's own `ensure`, the one every client runs (service-only T37)", () => {
@@ -43,5 +44,21 @@ describe("ensureService: the CLI's own `ensure`, the one every client runs (serv
     for (const platform of ["darwin", "linux"] as const) {
       expect(serviceSupported(platform)).toBe(true);
     }
+  });
+});
+
+
+describe("lookupServiceSocket: `python -m tap` starts in the tap's folder, never pi's", () => {
+  it("names the tap's own folder (or /) as the child's folder, so a planted tap/ package is never imported", async () => {
+    const seen: TrackingExecOptions[] = [];
+    const execFile = (_command: string, _args: string[], options: TrackingExecOptions,
+      callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+      seen.push(options);
+      callback(null, JSON.stringify({ socket: "/tmp/probe/service.sock" }), "");
+    };
+    const deps = { execFile, env: { PATH: "/usr/bin", HOME: "/home/u" }, log: () => {}, platform: "linux" as const };
+    expect(await lookupServiceSocket({ python: "/usr/bin/python3", tapRoot: "/opt/tap" }, deps)).toBe("/tmp/probe/service.sock");
+    expect(await lookupServiceSocket({ python: "/usr/bin/python3" }, deps)).toBe("/tmp/probe/service.sock");
+    expect(seen.map((options) => options.cwd)).toEqual(["/opt/tap", "/"]);
   });
 });

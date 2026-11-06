@@ -44,7 +44,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 
 import { serviceRuntimeFile, uvToolPython, type PathEnv } from "./paths.js";
 
@@ -109,9 +109,10 @@ function looksLikeTapCheckout(root: string, deps: TapRuntimeDeps): boolean {
   return deps.existsSync(join(root, "tap", "__init__.py"));
 }
 
-/** The first `name` on PATH that is an executable file, as `command -v` finds it. */
+/** The first `name` on PATH that is an executable file, as `command -v` finds it, from an absolute
+ * folder only: a relative or empty entry names pi's working folder, where an agent can plant one. */
 function firstOnPath(name: string, deps: Pick<TapRuntimeDeps, "existsSync" | "isExecutable" | "env">): string | null {
-  for (const dir of (deps.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+  for (const dir of (deps.env.PATH ?? "").split(delimiter).filter((entry) => entry && isAbsolute(entry))) {
     const candidate = join(dir, name);
     if (deps.existsSync(candidate) && deps.isExecutable(candidate)) return candidate;
   }
@@ -166,8 +167,9 @@ function pickPython(root: string | null, deps: TapRuntimeDeps): string | null {
 export function resolveTapRuntime(deps: TapRuntimeDeps): TapRuntime | null {
   const candidateRoots: string[] = [];
   const override = deps.env[ENV_TAP_ROOT];
-  if (override && override.trim()) candidateRoots.push(override.trim());
-  candidateRoots.push(join(deps.extensionDir, "..", "probe-research-tap"));
+  // Absolute: the socket lookup starts IN the tap's folder, where a relative path would point elsewhere.
+  if (override && override.trim()) candidateRoots.push(resolve(override.trim()));
+  candidateRoots.push(resolve(deps.extensionDir, "..", "probe-research-tap"));
 
   for (const root of candidateRoots) {
     if (!looksLikeTapCheckout(root, deps)) continue;

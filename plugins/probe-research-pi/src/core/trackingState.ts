@@ -88,6 +88,8 @@ export interface TrackingExecOptions {
   maxBuffer: number;
   /** No console window for the child on Windows. */
   windowsHide?: boolean;
+  /** Where the child starts: a Python one never in the session's folder, whose files it would import. */
+  cwd?: string;
 }
 
 export interface TrackingChild {

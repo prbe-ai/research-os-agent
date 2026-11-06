@@ -109,7 +109,15 @@ export function lookupServiceSocket(runtime: TapRuntime, deps: SocketLookupDeps)
       deps.execFile(
         runtime.python,
         ["-m", "tap", "service", "socket"],
-        { env: tapEnv(runtime, deps.env), encoding: "utf8", timeout: SOCKET_LOOKUP_TIMEOUT_MS, maxBuffer: 64 * 1024 },
+        // `-m` puts the folder it starts in first on Python's path: the tap's own folder, never pi's
+        // working folder, where an agent could have planted a `tap/` package (#4357 review).
+        {
+          env: tapEnv(runtime, deps.env),
+          encoding: "utf8",
+          timeout: SOCKET_LOOKUP_TIMEOUT_MS,
+          maxBuffer: 64 * 1024,
+          cwd: runtime.tapRoot ?? "/",
+        },
         (error, stdout) => {
           if (error) {
             deps.log(`probe service: no socket path: ${error.message}`);
