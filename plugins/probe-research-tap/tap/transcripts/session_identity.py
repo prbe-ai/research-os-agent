@@ -2,6 +2,9 @@
 
 Claude resumed/forked logs can contain ancestor sessionIds. The final primary
 conversation record identifies the current leg; sidechain/progress IDs do not.
+A Claude sub-agent's own file holds sidechain records only: its id is made from
+its parent's session and its agentId (`get_subagent_session_id`, a UUID v5,
+which Claude Code never writes), and its last turn proves that id.
 Codex and pi have an explicit session header. Kimi Code's wire has a header
 (`metadata`) that names no session: Kimi keeps the session's identity in the
 session folder's `state.json`, which it writes itself. Uploader identity is
@@ -12,7 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from .journal.errors import ReconciliationRequired
 from .pinned import open_transcript
@@ -69,6 +72,39 @@ def _is_primary(record: dict) -> bool:
     )
 
 
+def _is_subagent_turn(record: dict) -> bool:
+    """A Claude sub-agent's turn: a sidechain record naming its parent session and its agent."""
+    return bool(
+        record.get("type") in ("user", "assistant")
+        and record.get("isSidechain") is True
+        and isinstance(record.get("sessionId"), str)
+        and isinstance(record.get("agentId"), str)
+        and record.get("agentId")
+    )
+
+
+def _is_claude_turn(record: dict) -> bool:
+    """What a sub-agent's id is proved by: its own turn, or a session's turn after it."""
+    return _is_primary(record) or _is_subagent_turn(record)
+
+
+def get_subagent_session_id(parent_session_id: str, agent_id: str) -> str | None:
+    """The session id of a Claude sub-agent's chat (`<parent>/subagents/agent-<agentId>.jsonl`):
+    a UUID v5 made from its parent's and its own id, the same on every machine; None when the
+    parent id is not a UUID. Claude Code gives a sub-agent no session id of its own."""
+    try:
+        return str(uuid5(UUID(parent_session_id), agent_id))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _get_turn_session(record: dict) -> object:
+    """The session a Claude turn names: a session's own, or the one made for its sub-agent."""
+    if _is_primary(record):
+        return record["sessionId"]
+    return get_subagent_session_id(record["sessionId"], record["agentId"])
+
+
 #: What `json.loads` raises on a line it cannot use. RecursionError: a line
 #: nested past the interpreter's limit (about 1,000 levels before Python 3.12).
 _UNPARSABLE = (ValueError, UnicodeDecodeError, RecursionError)
@@ -101,13 +137,13 @@ def _window(handle, size: int, span: int, *, tail: bool) -> list[bytes]:
     return lines[1:] if start > 0 else lines
 
 
-def _last_primary(handle, size: int) -> dict | None:
-    """The last primary record in the last SAMPLE_BYTES, reading as little as it
-    can: a record whole inside a shorter span is whole inside the full one, and
-    nothing after it is primary."""
+def _find_last_record(handle, size: int, is_wanted=_is_primary) -> dict | None:
+    """The last `is_wanted` record in the last SAMPLE_BYTES, reading as little as
+    it can: a record whole inside a shorter span is whole inside the full one, and
+    nothing after it is wanted."""
     for span in (VERDICT_FIRST_BYTES, SAMPLE_BYTES):
         lines = _window(handle, size, span, tail=True)
-        found = next((r for r in _records(reversed(lines)) if _is_primary(r)), None)
+        found = next((r for r in _records(reversed(lines)) if is_wanted(r)), None)
         if found is not None or span >= size:
             return found
     return None
@@ -142,9 +178,11 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
             return _kimi_identity(path, head_lines, _harness(source), expected) | {"automated": automated}
         if fmt != FORMAT_CLAUDE and fmt not in _HEADER_TYPE:
             raise ReconciliationRequired(f"no identity check for transcript format {fmt!r}")
-        # Claude's current leg is its LAST primary record; header formats open with theirs.
+        # Claude's current leg is its LAST primary record, a sub-agent's (a made id: UUID v5,
+        # never Claude Code's) its last turn; header formats open with theirs.
+        is_made = UUID(expected).version == 5
         if fmt == FORMAT_CLAUDE and verdict_only:
-            last = _last_primary(handle, size)
+            last = _find_last_record(handle, size, _is_claude_turn if is_made else _is_primary)
             records = [last] if last is not None else []
         elif fmt == FORMAT_CLAUDE:
             records = list(_records(_window(handle, size, SAMPLE_BYTES, tail=True)))
@@ -154,7 +192,14 @@ def _identify(path: Path, source: str, session_id: str, *, verdict_only: bool) -
     native = None
     lineage = []
     source_cwd = None
-    if fmt == FORMAT_CLAUDE:
+    if fmt == FORMAT_CLAUDE and is_made:
+        turns = [r for r in records if _is_claude_turn(r)]
+        if turns:
+            native = _get_turn_session(turns[-1])
+            # The parent session: the link to the chat that started it.
+            lineage = sorted({r["sessionId"] for r in turns if _is_subagent_turn(r)})
+            source_cwd = next((r["cwd"] for r in reversed(turns) if r.get("cwd")), None)
+    elif fmt == FORMAT_CLAUDE:
         primary = [r for r in records if _is_primary(r)]
         if primary:
             native = primary[-1]["sessionId"]

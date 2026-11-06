@@ -113,6 +113,7 @@ class StageMixin:
             marks: list[_Mark] = []  # after each packed line, to give lines back
             sanitize = _sanitizer(self.source)  # an unknown source refuses, never guesses
             read_title = _title_reader(self.source)
+            inherited_end = _get_inherited_end(state, path, _get_inherited_end_reader(self.source))
             markers = _call_model_markers(self.source)
             # A call's usage line names no model; an earlier line does. Kept
             # per session, saved with the cursor, and one copy per packed
@@ -122,10 +123,11 @@ class StageMixin:
             kept_models: list[dict | None] = []
             end, event_no, lines, records = self._read_batch_lines(
                 end=end, event_no=event_no, events=events, extract=extract, historic=historic,
-                kept_models=kept_models, lines=lines, marks=marks, max_body_bytes=max_body_bytes,
-                models=models, module=module, path=path, read_title=read_title, records=records,
-                room=room, sanitize=sanitize, send_events=send_events, size=size, skip=skip,
-                solo_limit=solo_limit, spool=spool, state=state, version=version,
+                inherited_end=inherited_end, kept_models=kept_models, lines=lines, marks=marks,
+                max_body_bytes=max_body_bytes, models=models, module=module, path=path,
+                read_title=read_title, records=records, room=room, sanitize=sanitize,
+                send_events=send_events, size=size, skip=skip, solo_limit=solo_limit, spool=spool,
+                state=state, version=version,
             )
             at_end = end == path.stat().st_size
             final = (
@@ -238,17 +240,18 @@ class StageMixin:
 
 
     def _read_batch_lines(
-        self, *, end, event_no, events, extract, historic, kept_models, lines, marks,
-        max_body_bytes, models, module, path, read_title, records, room, sanitize, send_events,
-        size, skip, solo_limit, spool, state, version,
+        self, *, end, event_no, events, extract, historic, inherited_end, kept_models, lines,
+        marks, max_body_bytes, models, module, path, read_title, records, room, sanitize,
+        send_events, size, skip, solo_limit, spool, state, version,
     ):
         """Read the transcript from the cursor into this batch: its events, until the batch is full.
         Returns (end, event_no, lines, records) where the read stopped."""
         with call_models(models) if models is not None else nullcontext(), open_transcript(path) as handle:
             handle.seek(end)
             while True:
-                # Written while Probe was off: read past, sent as nothing.
-                skipped = bool(skip) and capture_gate.in_gap(skip, end)
+                # Written while Probe was off, or history a sub-agent was given from its
+                # parent (`inherited_end`): read past, sent as nothing.
+                skipped = (bool(skip) and capture_gate.in_gap(skip, end)) or 0 < lines < inherited_end
                 raw = handle.readline(MAX_SOURCE_LINE + 1)
                 length = len(raw)
                 if length > MAX_SOURCE_LINE:
@@ -353,6 +356,37 @@ class StageMixin:
                 if end - state["source_byte_end"] >= 4 * 1024 * 1024:
                     break
         return end, event_no, lines, records
+#: Where a session's state keeps the line its own records start at (`_get_inherited_end`).
+INHERITED_END_STATE = "inherited_end"
+#: The longest first line read for it: a Codex header is ~50 KB (`session_kind.LINE_CAP_BYTES`).
+INHERITED_HEADER_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _get_inherited_end(state: dict, path: Path, read_inherited_end) -> int:
+    """The line the session's own records start at, past the history its producer copied in from
+    another chat (`_get_inherited_end_reader`; 0 when none): read off the transcript's first line
+    once, then kept in its state. A first line not yet whole is read again next pass; one longer
+    than INHERITED_HEADER_MAX_BYTES names none."""
+    if read_inherited_end is None:
+        return 0
+    known = state.get(INHERITED_END_STATE)
+    if type(known) is int:
+        return known
+    with open_transcript(path) as handle:
+        raw = handle.readline(INHERITED_HEADER_MAX_BYTES + 1)
+    if len(raw) > INHERITED_HEADER_MAX_BYTES:
+        first = None
+    elif not raw.endswith(b"\n"):
+        return 0
+    else:
+        try:
+            first = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            first = None
+    state[INHERITED_END_STATE] = read_inherited_end(first)
+    return state[INHERITED_END_STATE]
+
+
 from .errors import (  # noqa: E402 -- pieces need each other; the front door loads this one first
     DeliveryPending,
     ReconciliationRequired,
@@ -362,6 +396,7 @@ from .errors import (  # noqa: E402 -- pieces need each other; the front door lo
 from .harness import (  # noqa: E402 -- pieces need each other; the front door loads this one first
     CALL_MODELS_STATE,
     _call_model_markers,
+    _get_inherited_end_reader,
     _pasted_extractor,
     _resume_call_models,
     _sanitizer,

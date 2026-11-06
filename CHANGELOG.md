@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Imports bring in sub-agent chats, without the text they copied from their parent (agent-prompt install PR17d).** A Claude Code sub-agent's own chat (`<session>/subagents/agent-<id>.jsonl`, left out until now) is offered as a chat of its own, linked to the session that started it: its id is made from the parent's and its own (a UUID v5, the same on every computer), and its upload names the parent. A Codex sub-agent no longer sends the parent's history it was given (the lines before its header's `subagent_history_start_ordinal`; 1.13 of 3.13 GB of sub-agent rollouts on one devbox), and a sub-agent sent whole before is not sent again. A sub-agent's chat is left out when Probe is off for the chat that started it, as that chat is. Tap 0.10.62 carries the shared reader; live capture still records no sub-agent chat.
+
 ## 0.426.0
 
 - **Two install fixes from the final eval pass (agent-prompt install PR20).** Claude Code reads a Probe plugin that no settings file names in `enabledPlugins` as off, and Probe read it as on: `status` said the plugin was fine and `probe repair` put back the missing entry as missing. Now status reads a missing entry as off, and install, reinstall and `probe repair` write `true` for it; only an explicit `false` stays your choice. And `probe import review --folder` now has the agent of the chat it runs in read the folder (a Codex chat no longer spends your Claude allowance), the other agent only when that one is not installed; `--agent` still wins.

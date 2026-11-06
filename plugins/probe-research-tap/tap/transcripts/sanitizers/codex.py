@@ -221,6 +221,24 @@ def _translate_session_meta(payload: dict, timestamp: Any) -> dict:
     return _system_event(subtype="session_start", timestamp=timestamp, extras=extras)
 
 
+#: A sub-agent's header field naming the `ordinal` of its first own record (codex-rs
+#: `create_with_inherited_model_context`). Every record's `ordinal` is its line: 828 of 828
+#: sub-agent rollouts on a devbox, codex-cli 0.147-0.166.
+_OWN_HISTORY_START = "subagent_history_start_ordinal"
+
+
+def get_inherited_end(line: Any) -> int:
+    """The line a Codex sub-agent's own records start at, read off its header (the rollout's first
+    line): lines 1 up to it are the history it was given from its parent (a copy of the parent's
+    rollout, or its compaction), which the journal reads past and sends as nothing (PR17d). 0 for
+    any other rollout."""
+    if not isinstance(line, dict) or line.get("type") != "session_meta":
+        return 0
+    payload = line.get("payload")
+    start = payload.get(_OWN_HISTORY_START) if isinstance(payload, dict) else None
+    return start if type(start) is int and start > 1 else 0
+
+
 def _translate_turn_context(payload: dict, timestamp: Any) -> dict:
     turn, model = _id_str(payload.get("turn_id")), _id_str(payload.get("model"))
     models = active_call_models()

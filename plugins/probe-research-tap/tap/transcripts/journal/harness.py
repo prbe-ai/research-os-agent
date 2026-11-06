@@ -41,6 +41,12 @@ def _pasted_extractor(source: str):
     return getattr(_SANITIZER_MODULES[_harness(source).capture.sanitizer], "pasted_images", None)
 
 
+def _get_inherited_end_reader(source: str):
+    """The harness's reader of where a session's own records start, past history copied in from
+    another chat (`get_inherited_end`: a Codex sub-agent's), or None for a harness that copies none."""
+    return getattr(_SANITIZER_MODULES[_harness(source).capture.sanitizer], "get_inherited_end", None)
+
+
 def _call_model_markers(source: str) -> tuple[bytes, ...]:
     """The lines that change a file's call models (`sanitize.CallModels`), for
     a harness whose usage lines do not name their model; () for any other."""
