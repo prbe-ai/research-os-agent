@@ -62,7 +62,8 @@ frozen hooks.json entries, with the after-tool-call fast path copied into
 Python unless a message waits for THIS session, or a service claim made for one
 of its deliverers was never received (`claimed/<sid>/*.*.json`: `deliver_orphans`), and in
 `claude-reads.json` (the Stop waiter; Claude Code only, since `asyncRewake` is a
-Claude Code key). Under Codex: the same prompt and after-tool-call delivery, no wake.
+Claude Code key). Under Codex: the same prompt and after-tool-call delivery; its
+wake is the Probe service's queued line (`probe.service.mail.waker`), never this Stop.
 
 SERVER MESSAGES (kind "server": the Probe server's own refusal, posted by the tap or the
 service). Their own lane on prompt, tool use AND Stop (a waiting one wakes the agent), never a
@@ -1828,11 +1829,14 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
 
 
 def no_wake() -> bool:
-    """A harness that cannot start a turn for a late answer (Codex): messages
-    still arrive at prompts and after tool calls in the same
-    `additionalContext` shape, but a late answer waits for the next one. From
-    the harness registry's `wake` capability, not a name."""
-    return not _hook_harness().current().can("wake")
+    """A harness whose Stop hook cannot hold the turn's end for a late answer:
+    messages still arrive at prompts and after tool calls in the same
+    `additionalContext` shape. Its wake, where it has one, is another's (D-P:
+    the Probe service queues a line into an idle Codex TUI, pi's extension
+    starts its own turn). From the registry row's `wake_by`, read raw: not a
+    name, and no registry loader in every Stop hook."""
+    harness = _hook_harness()
+    return harness.current().wake_by != harness.WAKE_BY_STOP_HOOK
 
 
 #: A Stop payload bigger than this is not handed over (it goes through a pipe).
@@ -1948,7 +1952,7 @@ def main() -> int:
                 return 0  # the frozen hook shim's wake runs for this process
             hand_over_stop(raw)
             if no_wake():
-                return 0  # a harness that cannot start a turn (Codex): the message waits for a prompt
+                return 0  # no Stop wait here: its wake is another's (Codex: the service's queued line)
             return _forward_stop(raw)
     except Exception:  # noqa: BLE001 -- a hook never breaks the session
         return 0

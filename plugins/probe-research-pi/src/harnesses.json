@@ -73,6 +73,7 @@
         "follows_updates": true,
         "scoped_installs": true
       },
+      "wake_by": "stop-hook",
       "statusline": "claude-settings",
       "reasoning_setting": "settings-json",
       "hook_output": "claude-json",
@@ -147,10 +148,11 @@
       "attribution_requires_pairing": true,
       "capabilities": {
         "root_skills": false, "prompt_context": false,
-        "wake": false,
+        "wake": true,
         "follows_updates": false,
         "scoped_installs": false
       },
+      "wake_by": "queue",
       "statusline": null,
       "reasoning_setting": "config-toml",
       "hook_output": "claude-json",
@@ -225,6 +227,7 @@
         "follows_updates": true,
         "scoped_installs": false
       },
+      "wake_by": "extension",
       "statusline": null,
       "reasoning_setting": null,
       "hook_output": "claude-json",
@@ -304,6 +307,7 @@
         "scoped_installs": false,
         "loaded_records": true
       },
+      "wake_by": null,
       "statusline": "kimi-tui-toml",
       "reasoning_setting": null,
       "hook_output": "message-json",
@@ -379,6 +383,7 @@
         "follows_updates": false,
         "scoped_installs": false
       },
+      "wake_by": null,
       "statusline": "cursor-cli-config",
       "reasoning_setting": null,
       "hook_output": "cursor-json",

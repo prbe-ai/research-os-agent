@@ -46,6 +46,12 @@ FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION)
 #: adapters' Capabilities.inject_line / .wake; the conformance test pins them).
 CAPABILITY_PROMPT_CONTEXT = "prompt_context"  # add text to the next prompt from a hook
 CAPABILITY_WAKE = "wake"  # start a turn for a late answer
+#: How a harness that can (`wake`) starts a turn for a late answer (`wake_by`). Only a Stop hook
+#: that holds the turn's end waits in `reads_hook.on_stop` (D-P); the others never start that wait.
+WAKE_BY_STOP_HOOK = "stop-hook"  # its Stop hook waits, then wakes the model (Claude Code's `asyncRewake`)
+WAKE_BY_QUEUE = "queue"  # the Probe service queues one line into the open session with the agent's own CLI
+WAKE_BY_EXTENSION = "extension"  # its extension starts a turn itself
+WAKE_BYS = (WAKE_BY_STOP_HOOK, WAKE_BY_QUEUE, WAKE_BY_EXTENSION)
 #: The capability keys a row may set (`capabilities`): any other key is refused, so a
 #: misspelt one never silently reads as False.
 CAPABILITY_KEYS = (
@@ -227,6 +233,8 @@ class Harness:
     #: event a hook declares for another harness whose payload carries it came from
     #: this one (Cursor runs Claude Code's plugins too), and is not run as that one's.
     hook_payload_marker: str | None = None
+    #: How it starts a turn for a late answer (WAKE_BY_*): set exactly when it can (`wake`).
+    wake_by: str | None = None
     #: Where a desktop app bundles this harness's command, per platform: absolute
     #: (or `~/`) glob patterns, most preferred first (the ChatGPT app's Codex, the
     #: Claude app's Claude Code). Asked only when PATH has no `binary`.
@@ -442,6 +450,11 @@ def _harness(row: Any, index: int) -> Harness:
     statusline = _str_or_none(row.get("statusline"), f"{where}.statusline")
     if statusline is not None and statusline not in STATUSLINE_SLOTS:
         raise RegistryError(f"{where}.statusline must be null or one of {STATUSLINE_SLOTS}")
+    wake_by = _str_or_none(row.get("wake_by"), f"{where}.wake_by")
+    if wake_by is not None and wake_by not in WAKE_BYS:
+        raise RegistryError(f"{where}.wake_by must be null or one of {WAKE_BYS}")
+    if (wake_by is not None) != bool(capabilities.get(CAPABILITY_WAKE)):
+        raise RegistryError(f"{where}.wake_by is set exactly when its capabilities say wake")
     harness = Harness(
         id=hid,
         label=_required_str(row, "label", where),
@@ -482,6 +495,7 @@ def _harness(row: Any, index: int) -> Harness:
         process_title=_str_or_none(row.get("process_title"), f"{where}.process_title"),
         hook_payload_marker=_str_or_none(row.get("hook_payload_marker"), f"{where}.hook_payload_marker"),
         app_paths=_app_paths(row.get("app_paths"), f"{where}.app_paths"),
+        wake_by=wake_by,
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None

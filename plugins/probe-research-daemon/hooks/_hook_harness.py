@@ -36,6 +36,8 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DOCUMENT = None
+#: `harness_registry.WAKE_BY_STOP_HOOK` (a test holds them equal): the harness's Stop hook wakes it.
+WAKE_BY_STOP_HOOK = "stop-hook"
 
 
 def load_sibling(name: str):
@@ -87,6 +89,8 @@ class Row:
         self.question_tool = raw.get("question_tool")
         self.session_env = raw.get("session_env")
         self.plugin = raw.get("plugin")
+        #: How it starts a turn for a late answer (`harness_registry.WAKE_BY_*`), None: it cannot.
+        self.wake_by = raw.get("wake_by")
 
     def can(self, capability: str) -> bool:
         return (self._raw.get("capabilities") or {}).get(capability) is True
