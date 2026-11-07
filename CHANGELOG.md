@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A training script in a container with no home directory records its run again.** Where a job runs as an arbitrary user with no `HOME` and no passwd entry (OpenShift, `docker run --user 12345`), `probe.init()` crashed on its first request since the SDK started sending through the Probe service (0.407.0): the service's folder was looked up under a home that does not exist. The service's paths now use the same private `$TMPDIR/probe-home-<uid>` the SDK already used for its own state, and the service starts with it as its home. The Probe service also no longer loads the CLI to find the import jobs folder.
+
 ## 0.437.0
 
 - **Codex: an answer that lands while the agent is mid-turn now wakes it when the turn ends, on machines still on Probe's own Codex hooks.** The waker (0.434.0) heard a Codex turn end only from the frozen hook shim, so a Codex window not yet moved to it (the move waits for every Codex window to close) kept a mid-turn answer until the researcher's next prompt or an unrelated mailbox change. The service now tells the waker about a turn end that Probe's plugin hooks send too. Found by the live smoke of 0.436.0 (harness-parity H2): an idle window was woken and read the answer; the mid-turn case waited 64 s with no wake.

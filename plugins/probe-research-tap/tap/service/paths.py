@@ -132,8 +132,41 @@ _machine_key: str | None = None
 
 
 def home() -> Path:
-    """`$HOME`, as every client spells it (Path.home() reads HOME on POSIX)."""
-    return Path.home()
+    """`$HOME`, as every client spells it (Path.home() reads HOME on POSIX). A process with no home
+    (an arbitrary uid in a container: no HOME, no passwd entry) gets `ensure_stand_in_home`, so an SDK
+    there still starts and reaches its service, which starts with that folder as its HOME."""
+    try:
+        return Path.home()
+    except (RuntimeError, KeyError, OSError):
+        return ensure_stand_in_home()
+
+
+#: `ensure_stand_in_home`'s folder, once chosen.
+_stand_in_home: list = []
+
+
+def ensure_stand_in_home() -> Path:
+    """A private `$TMPDIR/probe-home-<uid>`, else a fresh `mkdtemp` one; once per process. The
+    SDK's rule for its own state (`probe.foundation.durable.homedir.stand_in`, its twin)."""
+    import tempfile
+
+    if _stand_in_home and _is_own_private_dir(_stand_in_home[0]):
+        return _stand_in_home[0]
+    folder = Path(tempfile.gettempdir()) / f"probe-home-{os.getuid()}"
+    with contextlib.suppress(OSError):
+        os.mkdir(folder, 0o700)
+    if not _is_own_private_dir(folder):
+        folder = Path(tempfile.mkdtemp(prefix=f"probe-home-{os.getuid()}-"))
+    _stand_in_home[:] = [folder]
+    return folder
+
+
+def _is_own_private_dir(path: Path) -> bool:
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077
 
 
 def state_dir() -> Path:
