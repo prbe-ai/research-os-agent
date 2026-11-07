@@ -48,7 +48,9 @@ CAPABILITY_PROMPT_CONTEXT = "prompt_context"  # add text to the next prompt from
 CAPABILITY_WAKE = "wake"  # start a turn for a late answer
 #: How a harness that can (`wake`) starts a turn for a late answer (`wake_by`). Only a Stop hook
 #: that holds the turn's end waits in `reads_hook.on_stop` (D-P); the others never start that wait.
-WAKE_BY_STOP_HOOK = "stop-hook"  # its Stop hook waits, then wakes the model (Claude Code's `asyncRewake`)
+#: Its Stop hook waits, then wakes the model: Claude Code's `asyncRewake`, or Cursor's held stop whose
+#: reply starts the next turn (how long and for what: the hook route's `WaitRoutes.policy`).
+WAKE_BY_STOP_HOOK = "stop-hook"
 WAKE_BY_QUEUE = "queue"  # the Probe service queues one line into the open session with the agent's own CLI
 WAKE_BY_EXTENSION = "extension"  # its extension starts a turn itself
 WAKE_BYS = (WAKE_BY_STOP_HOOK, WAKE_BY_QUEUE, WAKE_BY_EXTENSION)

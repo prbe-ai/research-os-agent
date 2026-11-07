@@ -379,11 +379,11 @@
       "capabilities": {
         "root_skills": false,
         "prompt_context": true,
-        "wake": false,
+        "wake": true,
         "follows_updates": false,
         "scoped_installs": false
       },
-      "wake_by": null,
+      "wake_by": "stop-hook",
       "statusline": "cursor-cli-config",
       "reasoning_setting": null,
       "hook_output": "cursor-json",

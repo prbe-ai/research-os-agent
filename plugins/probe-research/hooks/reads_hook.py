@@ -37,6 +37,11 @@ same files through both.
                        once for the machine) and looks on its own at least every
                        SERVICE_RECHECK_S; with no service answering it polls the
                        files every WAKE_POLL_S / ALERT_POLL_S, as before.
+                       A hold (POLICY_HOLD, the service's run for a harness whose
+                       turn end waits on the hook: Cursor) waits only for the
+                       agent's own asks, up to WAKE_MAX_S, never at the end of a
+                       turn its own reply started, and writes a receipt for the
+                       service to settle once that reply is built (harness-parity H8).
 
 ONE UNASKED MESSAGE PER TURN. Every prompt writes a new token to `turns/<sid>`:
 this hook when a message waits, and otherwise the bash fast path in its
@@ -239,6 +244,12 @@ SLICE_ENV = "PROBE_READS_SLICE_S"
 SLICE_OVER = 75
 #: The Claude Code process a slice waits for (the service's pipes never hang up when it exits).
 OWNER_ENV = "PROBE_READS_OWNER_PID"
+#: What a Stop wait waits for, from the service's route (`WaitRoutes.policy`): POLICY_WAKE, the
+#: harness backgrounds the hook and exit 2 wakes the model later (Claude Code's `asyncRewake`);
+#: POLICY_HOLD, the turn's end waits on the hook and its reply starts the next turn (Cursor).
+POLICY_ENV = "PROBE_READS_POLICY"
+POLICY_WAKE = "wake"
+POLICY_HOLD = "hold"
 #: Set by the Probe service on the routes it runs (`_hook_switches.VIA_ENV`).
 VIA_ENV = "PROBE_HOOK_VIA"
 #: `probe.service.protocol.Topic.MAILBOX_CHANGED`.
@@ -1360,19 +1371,33 @@ def _claimed_inbox(sid: str, message_id: str) -> "tuple[Path, dict] | None":
     return None
 
 
-def return_unshown(sid: str, message_ids: "list[str]") -> None:
-    """`mailbox.unclaim`: the inbox messages among `message_ids` this hook took
-    and never handed over (its output did not go out) go back to waiting, so
-    the next hook shows them. Every other kind keeps its claim. Never raises."""
+def return_unshown(sid: str, message_ids: "list[str]") -> "list[str]":
+    """`mailbox.unclaim`: the messages among `message_ids` this hook took and
+    never handed over (its output did not go out, its receipt settled unshown:
+    a pi prompt's answer no ack came for, a Cursor hold's reply the next turn
+    never showed) go back to waiting, whatever their kind, so the next hook
+    shows them. An answer left claimed would close its ask unseen. The ids
+    found neither claimed nor waiting (another mailbox's?). Never raises."""
+    missing = []
+    claimed, waiting_dir = _claimed_dir(sid), _messages_dir(sid)
     for message_id in message_ids:
-        try:
-            found = _claimed_inbox(sid, message_id)
-            if found is not None:
-                path = found[0]
-                _messages_dir(sid).mkdir(parents=True, exist_ok=True)
-                os.rename(path, _messages_dir(sid) / path.name)
-        except OSError:
-            continue
+        found = False
+        for folder in (claimed, waiting_dir):
+            for path in folder.glob(f"*-{message_id}.json") if folder.is_dir() else ():
+                if path.name.count(".") != 1 or path.name[: -len(".json")].rsplit("-", 1)[-1] != message_id:
+                    continue
+                if folder == waiting_dir:
+                    found = True  # waiting already (an earlier settle gave it back)
+                    continue
+                try:
+                    waiting_dir.mkdir(parents=True, exist_ok=True)
+                    os.rename(path, waiting_dir / path.name)
+                    found = True
+                except OSError:
+                    continue
+        if not found:
+            missing.append(message_id)
+    return missing
 
 
 def _shown_inbox(sid: str, message_id: str, shown: "set[str] | None" = None) -> "tuple[str, str] | None":
@@ -1557,16 +1582,19 @@ def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "st
                 pass
 
 
-def _settle(sid: str, event: str, ids: "list[str]", banners: "list[tuple[Path, str | None]]", shown: bool) -> None:
+def _settle(sid: str, event: str, ids: "list[str]", banners: "list[tuple[Path, str | None]]",
+            shown: bool) -> "list[str]":
     """A receipt's half of `_hand_over`: shown, the messages count as delivered and
-    their banners' claims commit; not shown, the inbox messages wait again and the
-    banners' claims and markers go."""
+    their banners' claims commit; not shown, the messages wait again (every kind:
+    `return_unshown`) and the banners' claims and markers go. The ids that could
+    not be given back."""
+    missing: "list[str]" = []
     ledger = _server_notices()._load("_server_ledger") if any(claim for _m, claim in banners) else None
     if shown:
         mark_shown(sid, ids, event)
         report_delivered(sid, ids)
     else:
-        return_unshown(sid, ids)
+        missing = return_unshown(sid, ids)
     for marker, claim_path in banners:
         if claim_path is not None and ledger is not None:
             claim = ledger.Claim(Path(claim_path))
@@ -1579,6 +1607,7 @@ def _settle(sid: str, event: str, ids: "list[str]", banners: "list[tuple[Path, s
                 marker.unlink()
             except OSError:
                 pass
+    return missing
 
 
 #: Set by the Probe service (pi's extension, `hooks.run` v2): the receipt file this
@@ -1589,7 +1618,7 @@ RECEIPT_ENV = "PROBE_HOOK_RECEIPT_FILE"
 def _save_receipt(path: str, sid: str, event: str, ids: "list[str]", banners: list) -> bool:
     """What `_hand_over` would settle, written whole to `path` (0600). False: not
     written, so it is settled now, as without a receipt."""
-    record = {"v": 1, "sid": sid, "event": event, "ids": ids,
+    record = {"v": 1, "sid": sid, "event": event, "ids": ids, "state": str(_root().parent.parent),
               "banners": [{"marker": str(marker), "claim": None if getattr(claim, "path", None) is None
                            else str(claim.path)} for marker, _banner, claim in banners]}
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -1609,19 +1638,36 @@ def _save_receipt(path: str, sid: str, event: str, ids: "list[str]", banners: li
 
 def settle_receipt(path: str, shown: bool) -> int:
     """`reads_hook.py --receipt <file> shown|unshown`: settle a receipt
-    `_save_receipt` wrote, once, and remove it. Never raises."""
+    `_save_receipt` wrote, once (taken by a rename: of two settles one acts), in
+    the mailbox its record names (`state`, whatever this environment says), and
+    remove it. One whose messages could not be given back is kept for a later
+    settle (a sweep), until ANSWER_TTL_S has closed their asks anyway. Never raises."""
+    taken = f"{path}.settling-{os.getpid()}"
     try:
-        with open(path, encoding="utf-8") as handle:
-            record = json.load(handle)
-        os.unlink(path)
-    except (OSError, ValueError):
+        os.rename(path, taken)
+    except OSError:
         return 0
+    keep = False
     try:
+        with open(taken, encoding="utf-8") as handle:
+            record = json.load(handle)
+        state = record.get("state")
+        if isinstance(state, str) and os.path.isabs(state):
+            os.environ["XDG_STATE_HOME"] = state
         sid, event, ids = record["sid"], record["event"], [str(i) for i in record["ids"]]
         banners = [(Path(b["marker"]), b.get("claim")) for b in record["banners"]]
-        _settle(sid, event, ids, banners, shown)
-    except Exception:  # noqa: BLE001 -- a hook never breaks the session
-        return 0
+        keep = bool(_settle(sid, event, ids, banners, shown))
+    except (OSError, ValueError, KeyError, TypeError):
+        keep = False  # unreadable: nothing in it could ever be settled
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session: kept for a later settle
+        keep = True
+    try:
+        if keep and time.time() - os.stat(taken).st_mtime < ANSWER_TTL_S:
+            os.rename(taken, path)
+        else:
+            os.unlink(taken)
+    except OSError:
+        pass
     return 0
 
 
@@ -1674,35 +1720,49 @@ def _end_wait(sid: str, wait_id: "str | None") -> None:
 
 def _slice_options() -> dict:
     """`on_stop`'s slice options from the service's environment (WAIT_ID_ENV,
-    SLICE_ENV), or none: the whole wait in this process, as Claude Code runs it."""
+    SLICE_ENV, POLICY_ENV), or none: the whole wait in this process, as Claude
+    Code runs it."""
     wait_id = (os.environ.get(WAIT_ID_ENV) or "").strip()
     try:
         seconds = float(os.environ.get(SLICE_ENV) or 0)
     except ValueError:
         seconds = 0.0
-    return {"wait_id": wait_id, "slice_s": seconds} if wait_id and seconds > 0 else {}
+    if not wait_id or seconds <= 0:
+        return {}
+    policy = POLICY_HOLD if os.environ.get(POLICY_ENV) == POLICY_HOLD else POLICY_WAKE
+    return {"wait_id": wait_id, "slice_s": seconds, "policy": policy}
 
 
 def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_POLL_S,
             alert_max_s: float = ALERT_WAKE_MAX_S, alert_poll_s: float = ALERT_POLL_S,
             worker_grace_s: float = WORKER_GONE_GRACE_S, request_max_s: float = REQUEST_WAKE_MAX_S,
             recheck_s: float = SERVICE_RECHECK_S, retry_s: float = SERVICE_RETRY_S,
-            wait_id: "str | None" = None, slice_s: "float | None" = None) -> int:
+            wait_id: "str | None" = None, slice_s: "float | None" = None, policy: str = POLICY_WAKE) -> int:
     """The Stop wake: 2 with the wake's text on stderr, else 0. A slice
     (`wait_id`, `slice_s`: the service's run of a frozen hook shim's wake) may
-    also end SLICE_OVER: nothing yet, its state kept for the next slice."""
+    also end SLICE_OVER: nothing yet, its state kept for the next slice. `policy`
+    POLICY_HOLD: the agent's own asks only (no writer request, run alert, inbox
+    or server message), never past `max_s`, never for a turn its reply started."""
     sid = _session(payload)
-    if not sid or no_wake() or not attended() or from_helper_agent(payload):
+    hold = policy == POLICY_HOLD
+    # A hold's route picks its stops itself (`WaitRoutes.takes`): Cursor's headless `agent -p` fires none.
+    if not sid or no_wake() or not (hold or attended()) or from_helper_agent(payload):
         return 0
+    if hold and payload.get("stop_hook_active"):
+        return 0  # the end of the turn this hold's own reply started: no loops
     state = _load_wait(sid, wait_id) if wait_id else None
-    asks = set(open_asks(sid))
+    asks = {a for a in open_asks(sid) if not (hold and a.startswith(REQUEST_ID_PREFIX))}
     # Run alerts and inbox messages come from the worker of a session the reader
     # serves. A worker restarting right now still counts: the loop gives it
     # WORKER_GONE_GRACE_S.
-    alerts = _served(sid)
-    if not asks and not alerts and not any(m["kind"] == KIND_SERVER and _is_for_agent(m) for _p, m in waiting(sid)):
+    alerts = not hold and _served(sid)
+    if not asks and not alerts and (hold or not any(m["kind"] == KIND_SERVER and _is_for_agent(m)
+                                                    for _p, m in waiting(sid))):
         _end_wait(sid, wait_id)
         return 0  # a server message waiting is told at once, whoever else waits
+    if hold and _owes_reminder(sid):
+        _end_wait(sid, wait_id)
+        return 0  # the owed hook's follow-up goes; the answer comes after the next tool call or prompt
     # The next prompt's shell writes a new token here even when nothing waits
     # (routes.json); the folder must exist for that write to land.
     _turn_path(sid).parent.mkdir(parents=True, exist_ok=True)
@@ -1715,7 +1775,7 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
         code = _wait(sid, state["turn"], state["me"], asks, alerts, holder, max_s=max_s, poll_s=poll_s,
                      alert_max_s=alert_max_s, alert_poll_s=alert_poll_s, worker_grace_s=worker_grace_s,
                      request_max_s=request_max_s, recheck_s=recheck_s, retry_s=retry_s,
-                     carry=state if wait_id else None, slice_s=slice_s)
+                     carry=state if wait_id else None, slice_s=slice_s, hold=hold)
     finally:
         if holder[0] is not None:
             holder[0].close()
@@ -1731,13 +1791,16 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
 
 def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: list, *, max_s: float,
           poll_s: float, alert_max_s: float, alert_poll_s: float, worker_grace_s: float, request_max_s: float,
-          recheck_s: float, retry_s: float, carry: "dict | None" = None, slice_s: "float | None" = None) -> int:
+          recheck_s: float, retry_s: float, carry: "dict | None" = None, slice_s: "float | None" = None,
+          hold: bool = False) -> int:
     """The Stop waiter's loop. Each pass looks at the files; between passes it
     sleeps on the service's watch (`holder[0]`) when it has one: woken by
     `mailbox.changed`, at most `recheck_s`, never past a hold's lapse or a
     ceiling. Without one it sleeps its poll interval, and asks the service
     again every `retry_s`. A slice (`slice_s`) returns SLICE_OVER at its end,
-    the wait's clock and the worker's absence kept in `carry` (wall seconds)."""
+    the wait's clock and the worker's absence kept in `carry` (wall seconds).
+    `hold` (POLICY_HOLD): only answers to `asks`, settled by the service's
+    receipt (RECEIPT_ENV) once the harness's reply carries them."""
     now = time.monotonic()
     started = now - max(0.0, time.time() - carry["started"]) if carry else now
     retry_at = now + retry_s
@@ -1755,7 +1818,7 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
         picks = []
         for path, msg in waiting(sid):
             if msg["kind"] == KIND_SERVER:
-                if not _is_for_agent(msg):
+                if hold or not _is_for_agent(msg):
                     continue  # the person's banner alone: a prompt or a tool call shows it
             elif msg["kind"] == KIND_ALERT or _inbox(msg):
                 if not alerts:
@@ -1766,21 +1829,30 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
         got = claim_all(sid, picks, "Stop")
         delivered = deliver_orphans(
             sid, "Stop", lambda m: ((m["kind"] == KIND_ALERT or _inbox(m)) and alerts)
-            or (m["kind"] == KIND_SERVER and _is_for_agent(m))
+            or (m["kind"] == KIND_SERVER and _is_for_agent(m) and not hold)
             or (m["kind"] != KIND_MESSAGE and m["ask"] in asks))
         delivered += [got[path] for path in picks if path in got]
-        items = [(msg["id"], rendered(msg)) for msg in delivered]
+        # A hold's text is the next turn's user line: every body line quoted, only its label tagged.
+        items = [(msg["id"], inbox_safe(rendered(msg)) if hold else rendered(msg)) for msg in delivered]
         if items:
-            _mark_woke(sid)
+            ids = [mid for mid, _text in items]
+            # A hold's receipt goes first: killed after its text, the service still gives them back.
+            receipt = os.environ.get(RECEIPT_ENV) if hold else None
+            is_receipted = bool(receipt) and _save_receipt(receipt, sid, "Stop", ids, [])
+            if not hold:
+                _mark_woke(sid)  # a hold's next turn fires no prompt hook (Cursor's follow-up): nothing to mark
             try:
                 sys.stderr.write("\n\n".join(text for _id, text in items))
                 sys.stderr.flush()
             except (OSError, ValueError):
-                return_unshown(sid, [mid for mid, _text in items])
+                if not is_receipted:
+                    return_unshown(sid, ids)
                 return 2
+            if is_receipted:
+                return 2  # the service marks them shown once the harness's reply carries them
             mark_banners_shown(sid, delivered)  # only once the wake went out: a failed one keeps them
-            mark_shown(sid, [mid for mid, _text in items], "Stop")
-            report_delivered(sid, [mid for mid, _text in items])
+            mark_shown(sid, ids, "Stop")
+            report_delivered(sid, ids)
             return 2
         waited = time.monotonic() - started
         if asks:
@@ -1826,6 +1898,17 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             watch.close()
             holder[0] = None
             retry_at = time.monotonic() + min(retry_s, SERVICE_LOST_RETRY_S)
+
+
+def _owes_reminder(sid: str) -> bool:
+    """Could the owed hook (`owed_hook.py`, the same stop's other Probe entry) send the agent back
+    now? A hold's `followup_message` would replace its reminder (the harness keeps one): the hold
+    stands down instead, as the reminder's own ledger counts every send."""
+    try:
+        marker = _hook_harness().load_sibling("_session_marker")
+        return bool(marker.is_inline(sid) and marker.agent_owes(sid))
+    except Exception:  # noqa: BLE001 -- unreadable: nothing owed, as the owed hook reads it
+        return False
 
 
 def no_wake() -> bool:
