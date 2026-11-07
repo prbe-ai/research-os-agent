@@ -1367,14 +1367,14 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: own sync, which hooks run in the background and which the switch has never
 #: governed (see `version_check._spawn_session_maintenance`); `project use` only sets the
 #: local default project. `wandb discover` scans a local folder and `wandb key
-#: set|status` store or check a local credential: none of them talks to Probe.
+#: set|status` and `wandb login` store or check a local credential: none of them talks to Probe.
 #: `example keep` ends the live example's hold on this chat (its pins) and marks it
 #: kept: cleanup, like its delete, so it stays possible in every state.
 #: `import folders|review|status` read this computer's chats, folders and import jobs and save a
 #: local review; nothing reaches the team's records until `import start|resume`, writes the
 #: person asks for (`--directed` in a daemon chat; refused in a `read` or `off` one, D51).
 UNGATED_COMMANDS = frozenset(
-    {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status",
+    {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status", "wandb login",
      "example keep", "import folders", "import review", "import status"}
 )
 
@@ -1625,7 +1625,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "update", "status", "flush", "service status", "service start", "service stop", "service check-now",
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
-     "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
+     "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "wandb login", "draft edit",
      "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
      "example status", "example keep", "example delete", "import folders", "import review", "import status",
      # The person's uninstall, run in the chat they asked in (PR33b): Probe's own upkeep, never a write of records.
