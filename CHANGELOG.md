@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.448.0
+
 - **Every decision the install prompt asks reaches PostHog whole, so #probe-usage can post it (agent-prompt install PR41).** `agent_install.configured` now also says whether this chat is recorded (`chat_recording`, `chat_recording_reason`), and `agent_install.approved` whether the live demo will be offered (`demo_offered`). `probe status --demo-choice yes|no` counts the demo question's answer as `agent_install.demo_choice` (the pages ask for it once the launcher's agent floor reaches this release). The re-paste menu's Update (`update --json` from a coding agent's chat) sends `agent_install.updated` at every end, a held-off hand-off included: how it ended, the parts that moved and those left behind, and the CLI's from and to versions. Counts, kinds and versions only, never paths or text.
 
 ## 0.447.0
