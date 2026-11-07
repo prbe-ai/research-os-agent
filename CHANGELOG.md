@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.450.0
+
 - **`outbox.drained` now counts writes the server refused for the values they carried (`dead_lettered_invalid_request`).** A queued write the server answers with its field-by-field 422 (an artifact name with a leading `/`, say) is the caller's mistake, not a lost write, and the delivery-loss alert no longer posts a drain whose every dead letter is one of those or a "run not found". A 422 the client raises itself (its staged bytes are gone) still counts as a loss.
 
 ## 0.449.0
