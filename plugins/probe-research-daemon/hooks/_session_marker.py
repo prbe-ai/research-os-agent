@@ -1674,7 +1674,9 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
      "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
-     "example status", "example keep", "example delete", "import folders", "import review", "import status"}
+     "example status", "example keep", "example delete", "import folders", "import review", "import status",
+     # The person's uninstall, run in the chat they asked in (PR33b): Probe's own upkeep, never a write of records.
+     "uninstall"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
