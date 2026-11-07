@@ -22,13 +22,22 @@ from .wire import Method
 #: process storm (plan "Crash").
 MAX_STARTS = 3
 START_WINDOW_S = 60.0
-#: A spawn younger than this whose pid still runs is starting: no second spawn.
-SPAWN_SETTLE_S = 3.0
+#: A spawn younger than this whose process still runs is starting: no second spawn, and a `probe` waits
+#: for it. A fresh Mac's first start outlasted 10 s; at 3 s a slow start drew 2 more spawns (PR29).
+SPAWN_SETTLE_S = 120.0
+#: How long a spawn stays recorded: its back-off minute, and past SPAWN_SETTLE_S (a stuck one is said so).
+START_RECORD_S = 2 * SPAWN_SETTLE_S
 START_LOCK_WAIT_S = 2.0
 #: `min_version`: how long an older service may take to exit once asked to stop (its recorders pause first),
 #: and how long the current one started in its place gets to answer.
 STOP_EXIT_WAIT_S = 15.0
 START_WAIT_S = 10.0
+#: A waiting caller looks for the answer every FAST_POLL_S for its first FAST_POLL_FOR_S (a warm start answers
+#: in ~0.3 s), then every SLOW_POLL_S: a slow first start is CPU-bound, and a 50 Hz loop beside it took ~1/3
+#: longer (throttled container, PR46).
+FAST_POLL_S = 0.02
+FAST_POLL_FOR_S = 1.0
+SLOW_POLL_S = 0.25
 #: A fenced caller's hello through the drop folder waits at least this long (as `connect`'s 0.5 s).
 FENCED_HELLO_S = 0.5
 #: `systemctl` / `launchctl`, at most.
@@ -313,6 +322,7 @@ def _clean_env() -> dict:
 
 
 def _read_starts(now: float) -> list:
+    """The spawns recorded in the last START_RECORD_S (MAX_STARTS counts only START_WINDOW_S's)."""
     try:
         data = json.loads(paths.starts_path().read_text(encoding="utf-8"))
         starts = data.get("starts") if isinstance(data, dict) else None
@@ -321,9 +331,32 @@ def _read_starts(now: float) -> list:
     kept = []
     for entry in starts or []:
         if isinstance(entry, dict) and isinstance(entry.get("at"), (int, float)):
-            if now - float(entry["at"]) < START_WINDOW_S:
+            if now - float(entry["at"]) < START_RECORD_S:
                 kept.append(entry)
     return kept
+
+
+def get_last_spawn() -> dict | None:
+    """The newest spawn recorded (`{"at", "pid", "start"}`) in the last START_RECORD_S, or None."""
+    starts = _read_starts(time.time())
+    return starts[-1] if starts else None
+
+
+def is_spawn_starting(spawn: dict | None, now: float) -> bool:
+    """Is `spawn` (a `get_last_spawn` record) still starting: younger than SPAWN_SETTLE_S, its process running?"""
+    if not isinstance(spawn, dict) or now - float(spawn.get("at", 0)) >= SPAWN_SETTLE_S:
+        return False
+    return is_spawn_running(spawn)
+
+
+def is_spawn_running(spawn: dict) -> bool:
+    """Does the process `spawn` names still run (that process: its start time, when recorded, rules out a reused pid)?"""
+    pid, started = spawn.get("pid"), spawn.get("start")
+    if isinstance(pid, int) and isinstance(started, str) and started:
+        found = procid.alive(pid, started)
+        if found is not None:
+            return found
+    return _pid_runs(pid)
 
 
 def _write_starts(starts: list) -> None:
@@ -570,14 +603,19 @@ def _start(wait: float, is_finishing: bool = False, spawn_args: dict | None = No
     if outcome == Ensured.UNAVAILABLE and not (is_activated and _has_no_new_privs()) and _is_like_its_ancestors():
         outcome = _spawn_once(is_finishing, **(spawn_args or {}))
     if wait > 0 and outcome in (Ensured.SPAWNED, Ensured.STARTING):
-        deadline = time.monotonic() + wait
-        while time.monotonic() < deadline:
+        asked = time.monotonic()
+        while time.monotonic() < asked + wait:
             probe = connect(0.5)
             if probe is not None:
                 probe.close()
                 return Ensured.RUNNING
-            time.sleep(0.02)
+            time.sleep(get_poll_s(asked))
     return outcome
+
+
+def get_poll_s(asked: float) -> float:
+    """The pause before a waiting caller's next look for an answer, its wait begun at `asked` (monotonic s)."""
+    return FAST_POLL_S if time.monotonic() - asked < FAST_POLL_FOR_S else SLOW_POLL_S
 
 
 def _spawn_once(is_finishing: bool = False, *, sdk_python: str | None = None, package_dir: str | None = None,
@@ -599,10 +637,9 @@ def _spawn_once(is_finishing: bool = False, *, sdk_python: str | None = None, pa
             return Ensured.RUNNING
         now = time.time()
         starts = _read_starts(now)
-        last = starts[-1] if starts else None
-        if last is not None and now - float(last["at"]) < SPAWN_SETTLE_S and _pid_runs(last.get("pid")):
+        if is_spawn_starting(starts[-1] if starts else None, now):
             return Ensured.STARTING
-        if len(starts) >= MAX_STARTS:
+        if sum(1 for entry in starts if now - float(entry["at"]) < START_WINDOW_S) >= MAX_STARTS:
             return Ensured.BACKOFF
         python, module, extra = runtime_python(), MACHINE_MODULE, None
         if sdk_python is not None:
@@ -621,7 +658,8 @@ def _spawn_once(is_finishing: bool = False, *, sdk_python: str | None = None, pa
             pid = _spawn(python, module, package_dir if module == DELIVERY_MODULE else None, extra)
         except OSError:
             return Ensured.UNAVAILABLE
-        starts.append({"at": now, "pid": pid})
+        started = procid.start_time(pid)  # with the pid, the process's identity (`is_spawn_running`)
+        starts.append({"at": now, "pid": pid, **({"start": started} if started else {})})
         _write_starts(starts)
         return Ensured.SPAWNED
     finally:
@@ -742,13 +780,13 @@ def _is_same_service(hello: dict, refusing: dict) -> bool:
 
 def _wait_for_answer(wait: float) -> str:
     """The OS listens on the path (activation): its next service answers within `wait`, or STARTING."""
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
+    asked = time.monotonic()
+    while time.monotonic() < asked + wait:
         with contextlib.suppress(OSError, ServiceError, ValueError):
             with Connection.open(0.5) as connection:
                 connection.hello(Client.CLI, "unknown")
                 return Ensured.RUNNING
-        time.sleep(0.02)
+        time.sleep(get_poll_s(asked))
     return Ensured.STARTING
 
 
