@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.449.0
+
 - **The agent sets what new chats start as when you ask (D102).** In a chat the Probe daemon records, "set default for Probe to off" was refused as if it moved your Probe switch: the guard and `probe session default` itself refused it from the agent, and the refusal pointed at `/probe`, which changes only the current chat, so you had to type `! probe session default off` yourself. `probe session default on|read|off` now runs from the agent in every state (on, read, off, inline), as the install pages' `--session-default` already did. This chat's switch (`probe session state|toggle|track|untrack`) stays yours, and its refusal now adds that `/probe` moves only this chat and `probe session default on|read|off` sets what new chats start as. The `/probe` skill tells the agent to run it when you ask and to say it applies to new chats only. Asking for help runs nothing, so `-h` now passes the guard as `--help` does, except as an option's value, after `--`, or for a command that hands unknown options on (`probe daemon worker`, `probe exec`, `probe docs`). Tap 0.10.66 (a comment only).
 
 ## 0.448.0
