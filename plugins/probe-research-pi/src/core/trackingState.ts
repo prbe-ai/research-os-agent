@@ -272,43 +272,47 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
 }
 
 /**
- * The footer, in pi's idiom. THREE states, matching `probe session status`'s
- * `effective` field exactly — a footer that said "tracking" while the CLI
- * said "tracked, not capturing session transcript" would be the same lie in
- * a smaller font.
+ * The footer, in pi's idiom: only the five states the status line shows (PR32,
+ * Richard 2026-11-06), never the old `tracking` word.
  *
- * Capture is never mentioned when tracking is off: it may still be running,
- * and "not tracking" is the researcher's decision, not a capture report.
+ * Capture is never mentioned when nothing records: it may still be running,
+ * and read only is the researcher's decision, not a capture report.
  */
 /** The footer's word for a recording session; mirrors `session_marker._recording_labels`. */
 export const RecordingLabel = {
-  Tracking: "tracking",
   Daemon: "on (daemon)",
   DaemonDegraded: "on (daemon degraded)",
   Inline: "on (inline)",
 } as const;
 
+/** The footer's word for a read-only session; mirrors `session_marker`'s `read-only` displays. */
+export const ReadLabel = {
+  Daemon: "read only (daemon)",
+  Inline: "read only (inline)",
+} as const;
+
 /**
- * `daemonLive` is undefined outside the `daemon` state. Inside it the footer
- * names the switch's position: `on (daemon)` while the daemon holds a
- * live lease, `on (daemon degraded)` while the agent has recording back. With
- * capture down the suffix already explains a daemon that cannot run (it is
- * capture's child), so that line keeps the shorter label.
+ * `daemonLive` is undefined outside the `daemon` state, where the agent records:
+ * `on (inline)`. Inside it the footer names the switch's position: `on (daemon)`
+ * while the daemon holds a live lease, `on (daemon degraded)` while the agent has
+ * recording back. With capture down the suffix already explains a daemon that
+ * cannot run (it is capture's child), so that line keeps the shorter label.
+ * `daemonReads`: a read-only session whose reader is the daemon's.
  */
 export function trackingStatusText(
   tracking: boolean,
   capture?: CaptureReading,
   daemonLive?: boolean,
   inline = false,
+  daemonReads = false,
 ): string {
   // An inline session records (the agent does) even while a cached reading from
   // before `/probe inline` still says `read`.
-  if (!tracking && !inline) return "○ not tracking";
+  if (!tracking && !inline) return `○ ${daemonReads ? ReadLabel.Daemon : ReadLabel.Inline}`;
   const captureDown = capture !== undefined && !capture.running;
-  const label = inline
-    ? RecordingLabel.Inline
-    : daemonLive === undefined
-      ? RecordingLabel.Tracking
+  const label =
+    inline || daemonLive === undefined
+      ? RecordingLabel.Inline
       : daemonLive || captureDown
         ? RecordingLabel.Daemon
         : RecordingLabel.DaemonDegraded;

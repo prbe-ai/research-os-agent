@@ -71,7 +71,7 @@ def notice(marker, session_id: str) -> str | None:
     key = marker.state_key(state, live=marker.is_live(state))
     if key == marker.read_notified(session_id):
         return None
-    text = marker.message(state, live=key.endswith("|running"))
+    text = marker.message(state, live=key.endswith("|running"), session_state=marker.session_state(session_id))
     marker.write_notified(session_id, key)
     return text
 

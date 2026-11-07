@@ -107,8 +107,6 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: The state is spelled OUT, not encoded in the glyph. `● folding` requires the
 #: reader to already know that a filled dot means tracked; `tracked → folding`
 #: does not, and a status line is read by people who did not install it.
-_LABEL_TRACKED = "tracking " + _ARROW + " "
-_LABEL_TRACKING_BARE = "tracking"
 #: The `daemon` state's words: `on (daemon)`, the switch's `on` with who records
 #: in parentheses (Richard 2026-09-29; `DAEMON_STATE_DISPLAY`).
 _LABEL_DAEMON = "on (daemon) " + _ARROW + " "
@@ -118,15 +116,11 @@ _LABEL_DAEMON_BARE = "on (daemon)"
 #: says the daemon is not the one doing it.
 _LABEL_DAEMON_DEGRADED = "on (daemon degraded) " + _ARROW + " "
 _LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
-#: The researcher set Probe inline (`/probe inline`, `is_inline`, Richard 2026-10-06).
+#: Every other recording state: the agent records (`/probe inline`, the agent
+#: profile, a chat Probe's hooks never started; Richard 2026-11-06). Never the
+#: old `tracking`, which named no mode.
 _LABEL_INLINE = "on (inline) " + _ARROW + " "
 _LABEL_INLINE_BARE = "on (inline)"
-#: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
-#: reaches it when no three-valued state was passed in, which is the shape a
-#: pre-three-state caller has. New callers pass `session_state` and get one of
-#: the two labels below instead.
-_LABEL_NOT_TRACKING = "not tracking"
-
 #: The two non-recording states are spelled by `_STATE_SEGMENT`, down in the
 #: Rendering section beside the colour each one is painted. Both words are
 #: SHORTER than `not tracking` (9 and 3 against 12), so MAX_SEGMENT_CHARS is
@@ -169,8 +163,8 @@ _LONGEST_REASON_CHARS = 19
 #: Below this many columns an elided project name identifies nothing — `a-rea…`
 #: is not a name, it is noise wearing one. When the reason is long enough to
 #: push the name under this floor, the name is dropped ENTIRELY and the segment
-#: falls back to `_LABEL_TRACKING_BARE`, which this file already renders for
-#: "tracking is on, nothing filed yet".
+#: falls back to the bare label (`_LABEL_INLINE_BARE`, `_LABEL_DAEMON_BARE`), which
+#: this file already renders for "recording, nothing filed yet".
 _MIN_SLUG_CHARS_DEGRADED = 8
 
 #: Hard ceiling on the rendered segment, leading indent included, counted in
@@ -180,7 +174,7 @@ _MIN_SLUG_CHARS_DEGRADED = 8
 #:
 #: DERIVED FROM THE WIDEST LINE THAT MUST RENDER WHOLE: the degraded bare form
 #: carrying the longest reason in the closed vocabulary,
-#: `  ◐ tracking · not capturing session transcript: interpreter too old` (68).
+#: `  ◐ on (inline) · not capturing session transcript: interpreter too old` (71).
 #: The reason is the one actionable thing on that line and is on screen nowhere
 #: else, so it is the last thing cut (`_no_capture_clause`); a ceiling it cannot
 #: fit under would elide the diagnosis on every degraded render.
@@ -193,18 +187,17 @@ _MIN_SLUG_CHARS_DEGRADED = 8
 #: `MAX_SLUG_CHARS`), so nothing that fit whole before fits worse now.
 #:
 #: THE LABEL IS PAID FOR BY THE CEILING, NEVER BY THE NAME. Spelling out
-#: "tracking → " costs eleven columns; taking them from the name would elide the
-#: project the segment exists to identify. When a label changes length, this
+#: "on (inline) → " costs fourteen columns; taking them from the name would elide
+#: the project the segment exists to identify. When a label changes length, this
 #: number moves with it by construction.
 #: `test_this_labs_project_names_mostly_fit_whole` pins the name budget.
 #:
-#: The bare label is the WIDER of the two that can carry the capture suffix:
-#: `on (daemon)` does too (see `_recording_labels`), and it is three columns
-#: longer than `tracking`.
+#: The bare label is the WIDER of the two that can carry the capture suffix
+#: (see `_recording_labels`).
 MAX_SEGMENT_CHARS = (
     len(_INDENT)
     + _GLYPH_WIDTH
-    + max(len(_LABEL_TRACKING_BARE), len(_LABEL_DAEMON_BARE))
+    + max(len(_LABEL_INLINE_BARE), len(_LABEL_DAEMON_BARE))
     + len(_LABEL_NO_CAPTURE)
     + _LONGEST_REASON_CHARS
 )
@@ -218,7 +211,7 @@ MAX_SEGMENT_CHARS = (
 #: line reaches the ceiling only in theory; the columns the ceiling grew by are
 #: spent on the reason, and only when there is one.
 MAX_SLUG_CHARS = (
-    MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - len(_LABEL_TRACKED) - len(_ACCENT_TEXT)
+    MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - max(len(_LABEL_INLINE), len(_LABEL_DAEMON)) - len(_ACCENT_TEXT)
 )
 
 # Basic SGR codes, never 256-colour or truecolour: the status line is rendered
@@ -962,49 +955,6 @@ def set_tracking(session_id: str, on: bool) -> bool:
     )
 
 
-def set_tracking_if_absent(session_id: str, on: bool) -> bool:
-    """Record the session's STARTING value, ONLY when nobody has decided yet.
-    True when THIS call decided.
-
-    The seed half of the toggle. A session starts at the effective default for
-    its INITIAL cwd (`resolve_tracking_default(initial_cwd)`) and the file exists
-    from SessionStart onward, so "undecided" is not a state any reader has to
-    resolve for itself: one setting, one file, always present.
-
-    THE VALUE IS A PARAMETER, never a literal `on`. Seeding `on` on a machine
-    whose initial-cwd default is `off` would let automation author a declaration the
-    researcher did not make -- the default IS the researcher saying which value
-    a new session starts at, and it is the same setting the toggle flips, not a
-    weaker kind of preference. A DECISION is never touched either: an existing
-    file in either direction, and the legacy `<sid>.off` spelling, all block
-    the seed.
-
-    Exclusive by construction, not by check-then-write. The content is written
-    to a UNIQUE temp file and PUBLISHED with os.link, which fails with EEXIST
-    rather than replacing. A researcher typing the toggle to `off` while the
-    first write is in flight keeps their `off`, and a crash between create and
-    publish cannot strand a half-written signal: the target either does not
-    exist or carries complete content.
-
-    The temp name carries pid AND a nanosecond stamp, and is created O_EXCL.
-    Naming it by pid alone lets two THREADS of one process share it, and the
-    loser then truncates a file the winner has already published — a reader
-    sees an empty marker. `tempfile.mkstemp` would say this in one call and
-    costs ~17ms of import (it pulls in shutil/lzma); this module is imported on
-    every status-line render, where that is the whole budget. Hence os.open.
-
-    THE LEGACY SPELLING IS RE-CHECKED AFTER PUBLISHING. `os.link` arbitrates
-    `<sid>.tracking` only, so an old client writing `<sid>.off` between the read
-    and the publish would leave both files on disk with `on` winning the read —
-    automation silently overriding an explicit opt-out, which is the one thing
-    this must never do. Losing that race is repaired by removing what we just
-    published, not by keeping it.
-    """
-    return set_session_state_if_absent(
-        session_id, STATE_FULL if on else STATE_READ_ONLY
-    )
-
-
 def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
     """The one boolean the whole surface renders. TWO STATES, never three.
 
@@ -1134,28 +1084,31 @@ DAEMON_SWITCH_REFUSAL = (
     "not by this switch, which is on / read / off. Nothing changed."
 )
 
-#: WHAT A PERSON READS for each state when the daemon is the one recording and
-#: reading (Richard 2026-09-29). Display only: JSON keeps `state_label`'s words
-#: (`daemon` included), because pi's `parseState` and older hooks read them.
+#: WHAT A PERSON READS: five states, no others (Richard 2026-11-06: "on
+#: (inline/daemon), off, read (inline/daemon)"). Who reads and records is part of
+#: the name: the daemon where it does (`is_daemon_mode`), else the agent itself.
+#: Display only: JSON keeps `state_label`'s words (`daemon` included), because
+#: pi's `parseState` and older hooks read them.
 DAEMON_STATE_DISPLAY = {
     STATE_DAEMON: "on (daemon)",
     STATE_READ_ONLY: "read only (daemon)",
     STATE_OFF: "off",
 }
+INLINE_STATE_DISPLAY = {
+    STATE_FULL: "on (inline)",
+    STATE_READ_ONLY: "read only (inline)",
+    STATE_OFF: "off",
+}
 
 
 def state_display(state: "str | None", daemon: bool = False, inline: bool = False) -> str:
-    """The state as a person reads it: `on` / `read` / `off`, and in a session the
-    daemon records for (`daemon`, see `daemon_session`) `on (daemon)` /
-    `read only (daemon)` / `off`. A stored `daemon` always reads `on (daemon)`;
-    an inline session (`is_inline`) reads `on (inline)`."""
-    if inline and state == STATE_FULL:
-        return INLINE_DISPLAY
-    if inline and state == STATE_READ_ONLY:
-        return "read only (inline)"
-    if state == STATE_DAEMON or (daemon and state in DAEMON_STATE_DISPLAY):
+    """The state as a person reads it (one of the five above). `daemon`: the daemon
+    reads for this chat now (`is_daemon_mode`); a stored `daemon` always reads
+    `on (daemon)` and a `full` always `on (inline)`, since no daemon runs for it.
+    `inline` (`is_inline`) wins over `daemon`."""
+    if state == STATE_DAEMON or (daemon and not inline and state in DAEMON_STATE_DISPLAY):
         return DAEMON_STATE_DISPLAY[state]
-    return state_label(state)
+    return INLINE_STATE_DISPLAY.get(state, state_label(state))
 
 
 def state_label(state: "str | None") -> str:
@@ -2510,6 +2463,20 @@ def daemon_session(session_id: str, source: "str | None" = None) -> bool:
     return recorder(source) == RECORDER_DAEMON if source else False
 
 
+def is_daemon_mode(session_id: str, state: "str | None" = None) -> bool:
+    """Does the Probe daemon read or record for this chat NOW? A stored `daemon`, or
+    `read-only` in a chat the lean plugin started (`<sid>.profile`) that is not
+    inline (its reader runs). The service starts a daemon worker for nothing else
+    (`tap/companion_supervisor.wanted`), so every other chat that reads or records
+    is the agent's own: inline, whatever `recorder` says for new chats."""
+    if state is None:
+        state = session_state(session_id)
+    if state == STATE_DAEMON:
+        return True
+    return (state == STATE_READ_ONLY and session_profile(session_id) == RECORDER_DAEMON
+            and not is_inline(session_id, state))
+
+
 def on_state(session_id: str, source: "str | None" = None) -> str:
     """What `on` is STORED as in this session: `daemon` where the daemon records
     (`daemon_session`), else `full`. The one place the switch's `on` meets the
@@ -2530,8 +2497,9 @@ def switch_target(session_id: str, state: str, source: "str | None" = None) -> "
 def seed_state(session_id: str, default: str, source: "str | None" = None) -> str:
     """The state a NEW session starts at from `default`: `on` (and a `daemon`
     default stored before the switch lost that position) is stored by who records
-    (`on_state`); `read-only` and `off` are themselves. Every seeding path uses it
-    -- the session-start hook, and `probe session initialize` for pi."""
+    (`on_state`); `read-only` and `off` are themselves. Every path where Probe's
+    hooks start the chat uses it -- the session-start hook, and `probe session
+    initialize` for pi. A chat they never started seeds by `seed_inline`."""
     if default in (STATE_FULL, STATE_DAEMON):
         return on_state(session_id, source)
     return default
@@ -2736,7 +2704,7 @@ INLINE_LOG_SUFFIX = ".inline-log"
 INLINE_SHOWN_SUFFIX = ".inline-shown"
 #: The states `/probe inline` is typed from (any; `off` also for no state yet).
 INLINE_FROM = (STATE_DAEMON, STATE_READ_ONLY, STATE_OFF)
-INLINE_DISPLAY = "on (inline)"
+INLINE_DISPLAY = INLINE_STATE_DISPLAY[STATE_FULL]
 #: The skills an inline agent records by (the main agent's versions), shipped as
 #: plain files in the lean plugin's `inline/` folder (`make sync-daemon-plugin`;
 #: never under `skills/`, which would list them); pi names its own package's.
@@ -2857,11 +2825,12 @@ def inline_marker(session_id: str) -> "dict | None":
 
 def _open_marker(session_id: str, state: "str | None" = None) -> "dict | None":
     """The marker of the stretch the session is in now, or None: the state is
-    the marker's mode (`full` by default), the session is the daemon's, and the marker is
-    open (no `until`). One read of each file; the guard asks before every call."""
+    the marker's mode (`full` by default), the session is the daemon's or no plugin
+    marked it (`seed_inline`'s chat), and the marker is open (no `until`). One read of
+    each file; the guard asks before every call."""
     if state is None:
         state = session_state(session_id)
-    if state not in (STATE_FULL, STATE_READ_ONLY) or session_profile(session_id) != RECORDER_DAEMON:
+    if state not in (STATE_FULL, STATE_READ_ONLY) or session_profile(session_id) not in (RECORDER_DAEMON, None):
         return None
     marker = inline_marker(session_id)
     return marker if marker is not None and "until" not in marker and marker.get("mode", STATE_FULL) == state else None
@@ -2902,6 +2871,44 @@ def switch_to_inline(session_id: str, now: "float | None" = None) -> bool:
             _remove_inline_marker(session_id)
             return False
     return True
+
+
+def seed_inline(session_id: str, default: "str | None" = None, now: "float | None" = None) -> bool:
+    """Seed the switch of a chat Probe's hooks never started (open before the install,
+    or its hooks never ran) from `default` (the new-chat default when None). True when
+    THIS call decided; a decision on disk is never touched.
+
+    Its `on` is `on (inline)` (Richard 2026-11-06): no session-start hook attached a
+    daemon worker or told its agent the daemon records, and neither Claude Code nor
+    Codex loads a plugin into a chat already open. Stored as the marker, then `full`,
+    and NO profile mark: nothing refuses the agent's own `probe` calls, `probe mcp` is
+    its read path, and the stretch is logged if the chat ever moves to the daemon.
+    `read-only` and `off` are themselves."""
+    if not valid_session_id(session_id):
+        return False
+    if default is None:
+        default, where = resolve_state_default(None)
+        source = seed_source(where)
+    else:
+        source = SOURCE_DEFAULT
+    if default not in (STATE_FULL, STATE_DAEMON):
+        return set_session_state_if_absent(session_id, default, source=source)
+    with _StateLock(session_id):
+        if session_state(session_id) is not None:
+            return False
+        if session_profile(session_id) is not None:
+            # A plugin did start it and its seed is still landing: the value that seed writes.
+            return set_session_state_if_absent(session_id, seed_state(session_id, default), source=source)
+        stale = inline_marker(session_id)
+        if stale is not None and "until" in stale and not _log_inline_interval(session_id, stale, stale["until"]):
+            return False  # overwriting it would hand that stretch back to the daemon
+        at = time.time() if now is None else now
+        if not _publish_atomically(inline_path(session_id), json.dumps({"from": STATE_OFF, "since": at}) + "\n"):
+            return set_session_state_if_absent(session_id, STATE_FULL, source=source)
+        if set_session_state_if_absent(session_id, STATE_FULL, source=source):
+            return True
+        _remove_inline_marker(session_id)
+        return False
 
 
 def inline_on_budget(session_id: str, expected_state: str, now: "float | None" = None) -> bool:
@@ -3240,12 +3247,14 @@ def set_session_state_if_absent(
     `default` is claimed BEFORE the state is published and dropped again when
     the seed loses, so an explicit write never ends up labelled a default.
 
-    Exclusive by construction, exactly as `set_tracking_if_absent` is and for the
-    same reasons -- see that docstring for why `os.link` rather than a
-    check-then-write, and why the temp name carries pid AND a nanosecond stamp.
-    The legacy spellings are re-checked after publishing for the same reason too:
-    an old client writing `<sid>.off` between the read and the publish must not
-    be overridden by automation.
+    Exclusive by construction, not by check-then-write: the content goes to a
+    UNIQUE temp file (pid AND a nanosecond stamp, O_EXCL, so two threads never
+    share it) and is PUBLISHED with os.link, which fails with EEXIST rather than
+    replacing. A researcher's `off` landing mid-seed keeps their `off`, and a
+    crash cannot strand a half-written state. The legacy spellings are re-checked
+    after publishing: an old client writing `<sid>.off` between the read and the
+    publish must not be overridden by automation. Every seed reaches this through
+    `seed_state` (Probe's hooks started the chat) or `seed_inline` (they did not).
     """
     if not valid_session_id(session_id) or state not in STATES:
         return False
@@ -3377,7 +3386,9 @@ def _capture_reason(state: dict | None) -> str:
     return reason
 
 
-def message(state: dict | None, *, live: bool = False, tracking: bool = True) -> str:
+def message(
+    state: dict | None, *, live: bool = False, tracking: bool = True, session_state: "str | None" = None
+) -> str:
     """One line for an agent with no status line to hang a segment on.
 
     Built from the same labels the segment uses, so the two surfaces cannot drift
@@ -3392,11 +3403,13 @@ def message(state: dict | None, *, live: bool = False, tracking: bool = True) ->
 
     NO WIDTH CAP HERE, unlike `render`. This is a sentence in a transcript, which
     wraps harmlessly; the segment shares one line with strangers, which does not.
+    `session_state` names the mode as the segment does (`on (daemon)` for a stored
+    `daemon`, else `on (inline)`).
     """
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
         return "Probe: this session is not tracked yet."
-    text = "Probe: " + _LABEL_TRACKED + project
+    text = "Probe: " + _recording_labels(session_state, True, "")[0] + project
     if live:
         text += _ACCENT_TEXT
     reason = _capture_reason(state) if tracking else ""
@@ -4087,8 +4100,8 @@ def _elide(slug: str, limit: int = MAX_SLUG_CHARS) -> str:
 def _name_room(label: str) -> int:
     """Columns left for the project name after `label` and the running accent.
 
-    `MAX_SLUG_CHARS` for the tracking label; a longer label (the daemon's) takes
-    its extra columns from the name, never from the ceiling.
+    `MAX_SLUG_CHARS` for `on (inline)` and `on (daemon)`; a longer label
+    (`on (daemon degraded)`) takes its extra columns from the name, never from the ceiling.
     """
     return MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - len(label) - len(_ACCENT_TEXT)
 
@@ -4098,21 +4111,21 @@ def _recording_labels(
 ) -> tuple[str, str]:
     """`(label before a project name, bare label)` for a session that records.
 
+    Only a stored `daemon` is the daemon's: the service starts a worker for
+    nothing else, so every other recording session reads `on (inline)` (the
+    agent records), never the old `tracking`. `inline` is kept for older callers.
     In the `daemon` state the capture suffix already explains a daemon that is
     not running (the worker is a child of capture), so that line keeps the
-    shorter `on (daemon)` and its columns go to the reason. An inline session
-    (the researcher's `/probe inline`) reads `on (inline)`.
+    shorter `on (daemon)` and its columns go to the reason.
     """
-    if inline and session_state == STATE_FULL:
-        return _LABEL_INLINE, _LABEL_INLINE_BARE
     if session_state != STATE_DAEMON:
-        return _LABEL_TRACKED, _LABEL_TRACKING_BARE
+        return _LABEL_INLINE, _LABEL_INLINE_BARE
     if daemon_live or capture_reason:
         return _LABEL_DAEMON, _LABEL_DAEMON_BARE
     return _LABEL_DAEMON_DEGRADED, _LABEL_DAEMON_DEGRADED_BARE
 
 
-def _no_capture_clause(reason: str, label_bare: str = _LABEL_TRACKING_BARE) -> str:
+def _no_capture_clause(reason: str, label_bare: str = _LABEL_INLINE_BARE) -> str:
     """The `· not capturing session transcript: …` suffix, as it hangs off
     `label_bare`.
 
@@ -4134,22 +4147,16 @@ def _no_capture_clause(reason: str, label_bare: str = _LABEL_TRACKING_BARE) -> s
     return _LABEL_NO_CAPTURE + _elide(reason, room)
 
 
-#: WHAT EACH NON-RECORDING STATE IS CALLED HERE, and the colour it is painted.
-#:
-#: `read-only` is spelled OUT rather than taken from `state_label`. The switch's
-#: own word is `read`, which names what the session may still do and not what it
-#: may no longer do -- alone on a status line, with no neighbouring word to lean
-#: on, `read` is taken for an activity in progress rather than for a restriction.
-#: This is not a second vocabulary: `read-only` is the state's canonical STORED
-#: name and an accepted spelling everywhere a state is typed, so `/probe read`
-#: and this label still name one thing, and `normalize_state` takes either back.
+#: WHAT EACH NON-RECORDING STATE IS CALLED HERE, and the colour it is painted:
+#: the five-state words (`INLINE_STATE_DISPLAY`; `render` swaps in the daemon's
+#: where it reads). `read only` is spelled out: alone on a status line, `read`
+#: reads as an activity in progress rather than a restriction.
 #:
 #: The colour is here rather than at the call site so that a state cannot be
-#: given a word without also being given a hue -- the two are one decision, and
-#: splitting them is how a fourth state ends up yellow by default.
+#: given a word without also being given a hue.
 _STATE_SEGMENT = {
-    STATE_READ_ONLY: ("read-only", _YELLOW),
-    STATE_OFF: ("off", _RED),
+    STATE_READ_ONLY: (INLINE_STATE_DISPLAY[STATE_READ_ONLY], _YELLOW),
+    STATE_OFF: (INLINE_STATE_DISPLAY[STATE_OFF], _RED),
 }
 
 
@@ -4167,10 +4174,11 @@ def render(
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
-    In the `daemon` state the label is `on (daemon)` while the daemon holds a
-    live lease (`daemon_live`), and `on (daemon degraded)` when it does not.
-    `daemon` says the daemon records and reads for this session (`daemon_session`),
-    so its `read-only` reads `read only (daemon)`.
+    Only the five states (`state_display`): in the `daemon` state the label is
+    `on (daemon)` while the daemon holds a live lease (`daemon_live`), and
+    `on (daemon degraded)` when it does not; any other recording state is
+    `on (inline)`. `daemon` says the daemon reads for this session now
+    (`is_daemon_mode`), so its `read-only` reads `read only (daemon)`.
 
     TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
     `is_tracking`; this only renders it. An earlier version carried a third —
@@ -4215,16 +4223,12 @@ def render(
         # rejected third state failed and `not capturing session transcript`
         # passed -- it changes what the reader does.
         #
-        # `session_state=None` is a caller from before the third state. It gets
-        # the two-state word -- and the two-state colour -- it has always got
-        # rather than a guess: yellow, because the one state red is reserved for
-        # is the one such a caller cannot tell us it is in.
-        label, hue = _STATE_SEGMENT.get(session_state, (_LABEL_NOT_TRACKING, _YELLOW))
-        if daemon and session_state == STATE_READ_ONLY:
+        # `session_state=None` is a caller from before the third state: its
+        # "not tracking" always meant read-only (yellow; red is for `off`).
+        label, hue = _STATE_SEGMENT.get(session_state, _STATE_SEGMENT[STATE_READ_ONLY])
+        if daemon and not inline and session_state == STATE_READ_ONLY:
             # The daemon still reads for this session; it records nothing.
             label = DAEMON_STATE_DISPLAY[STATE_READ_ONLY]
-        if inline and session_state == STATE_READ_ONLY:
-            label = "read only (inline)"
         return _INDENT + _paint(_DOT, hue, color) + " " + label
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact

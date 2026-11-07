@@ -293,7 +293,7 @@ function footerText(s: SessionState, sessionId: string, daemonLive?: boolean): s
   // Probe off: no Probe calls, and the Probe service holds the session
   // without capturing it. The status line's word for it.
   if (probeIsOff(s)) return "○ off";
-  return trackingStatusText(cached.tracking, cached.capture, live, inline);
+  return trackingStatusText(cached.tracking, cached.capture, live, inline, inDaemonProfile(s, sessionId) && !inline);
 }
 
 /** Has the researcher switched Probe off for this session? */

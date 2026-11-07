@@ -404,7 +404,7 @@ def _seed_tracking_signal() -> None:
     for an explicit marker and so read a default-off machine as tracking. That
     is how a session showing `untracked` filled the dashboard with projects.
 
-    Idempotent and never overrides a decision (`set_tracking_if_absent`), so a
+    Idempotent and never overrides a decision (`set_session_state_if_absent`), so a
     resume or post-compact start re-runs it harmlessly. Fail-soft: a seed that
     cannot be written leaves the file absent, which every reader now resolves
     against the same default anyway -- the seed makes the state explicit, it is

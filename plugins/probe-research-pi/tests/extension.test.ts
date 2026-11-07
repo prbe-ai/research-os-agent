@@ -357,12 +357,12 @@ describe("registerExtension — session_start", () => {
       params: expect.objectContaining({ sid: "pi-folder-session", cwd: "/repo/packages/app", agent: "pi" }),
     });
     expect(execFileMock.mock.calls.some(([command]) => command === bin)).toBe(false);
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ not tracking");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ read only (inline)");
   });
 
   it("says a session switched off is off, in the footer", async () => {
     // Probe off: the footer names the state, as the status line's `off` does
-    // (it read "not tracking", as for `read`).
+    // (it read "read only (inline)", as for `read`).
     installProbeCli();
     initializeOnce((_command, _args, _options, callback) => {
       callback(
@@ -408,7 +408,7 @@ describe("registerExtension — session_start", () => {
       { reason: "startup" },
       ctx,
     )).resolves.toBeUndefined();
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● tracking");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● on (inline)");
     expect(daemonSpawns()).toHaveLength(0);
   });
 
@@ -454,24 +454,24 @@ describe("registerExtension — session_start", () => {
 });
 
 describe("trackingStatusText", () => {
-  it("shows tracking when a daemon is live", () => {
-    expect(trackingStatusText(true, { running: true, reason: "running" })).toBe("● tracking");
+  it("shows on (inline) when capture is live", () => {
+    expect(trackingStatusText(true, { running: true, reason: "running" })).toBe("● on (inline)");
   });
 
   it("names the reason when tracking is on but capture is not", () => {
     expect(trackingStatusText(true, { running: false, reason: "not paired" })).toBe(
-      "◐ tracking · not capturing session transcript: not paired",
+      "◐ on (inline) · not capturing session transcript: not paired",
     );
   });
 
   it("says nothing about capture when tracking is off", () => {
     expect(trackingStatusText(false, { running: false, reason: "killswitch" })).toBe(
-      "○ not tracking",
+      "○ read only (inline)",
     );
   });
 
   it("falls back to the plain state when the CLI returned no capture block", () => {
-    expect(trackingStatusText(true, undefined)).toBe("● tracking");
+    expect(trackingStatusText(true, undefined)).toBe("● on (inline)");
   });
 
   it("says `on (inline)` while the researcher has Probe inline, even over a cached `read`", () => {
@@ -511,7 +511,7 @@ describe("registerExtension — the footer's third state", () => {
 
     expect(ctx.setStatus).toHaveBeenCalledWith(
       "probe-tracking",
-      "◐ tracking · not capturing session transcript: not paired",
+      "◐ on (inline) · not capturing session transcript: not paired",
     );
   });
 
@@ -568,7 +568,7 @@ describe("registerExtension — the footer's third state", () => {
       await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
 
       expect(reads.calls(sessionId)).toBe(3);
-      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● tracking");
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● on (inline)");
       await handlers.get("agent_settled")!({}, ctx);
       expect(reads.calls(sessionId), "a turn's end reads nothing").toBe(3);
     } finally {
@@ -689,7 +689,7 @@ describe("registerExtension — the footer's third state", () => {
     // An older probe CLI has no `capture` key at all, and a broken one may
     // have a bad one. Neither is a reason to blank the footer: tracking is
     // still known, and that is what gets rendered.
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● tracking");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● on (inline)");
   });
 
   it("re-reads the footer after the spawn attempt, so a refused spawn is visible", async () => {

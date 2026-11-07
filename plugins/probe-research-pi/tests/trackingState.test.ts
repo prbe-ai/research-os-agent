@@ -108,9 +108,10 @@ describe("initializeTrackingState", () => {
 });
 
 describe("trackingStatusText", () => {
-  it("renders the two persistent footer states", () => {
-    expect(trackingStatusText(true)).toBe("● tracking");
-    expect(trackingStatusText(false)).toBe("○ not tracking");
+  it("renders the two persistent footer states, never the old \"tracking\" (PR32)", () => {
+    expect(trackingStatusText(true)).toBe("● on (inline)");
+    expect(trackingStatusText(false)).toBe("○ read only (inline)");
+    expect(trackingStatusText(false, undefined, undefined, false, true)).toBe("○ read only (daemon)");
   });
 
   it("names the switch position in the daemon state", () => {
@@ -126,7 +127,7 @@ describe("trackingStatusText", () => {
       "◐ on (daemon) · not capturing session transcript: halted",
     );
     expect(trackingStatusText(true, { running: false, reason: "halted" })).toBe(
-      "◐ tracking · not capturing session transcript: halted",
+      "◐ on (inline) · not capturing session transcript: halted",
     );
   });
 });

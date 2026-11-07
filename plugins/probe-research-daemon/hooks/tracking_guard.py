@@ -1528,8 +1528,12 @@ def _from_helper_agent(payload: dict) -> bool:
 
 def _inline_root() -> str:
     """This plugin's `inline/` folder: the main agent's copies of the skills
-    an inline agent records by (the lean plugin ships them beside `hooks/`)."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
+    an inline agent records by (the lean plugin ships them beside `hooks/`); the
+    agent plugin, which has none, keeps the same copies in `agent-skills/` (a chat
+    `seed_inline` set on (inline) can meet it after `/reload-plugins`)."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    inline = os.path.join(root, "inline")
+    return inline if os.path.isdir(inline) else os.path.join(root, "agent-skills")
 
 
 def _skills_reach_model(hook_event: str) -> bool:
