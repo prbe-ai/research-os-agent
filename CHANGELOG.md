@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **A training script in a container with no home directory records its run again.** Where a job runs as an arbitrary user with no `HOME` and no passwd entry (OpenShift, `docker run --user 12345`), `probe.init()` crashed on its first request since the SDK started sending through the Probe service (0.407.0): the service's folder was looked up under a home that does not exist. The service's paths now use the same private `$TMPDIR/probe-home-<uid>` the SDK already used for its own state, and the service starts with it as its home. The Probe service also no longer loads the CLI to find the import jobs folder.
+- **Uninstall works from inside a chat Probe records (agent-prompt install PR33).** `probe uninstall` (and `npx -y probe-research uninstall --yes --json`) no longer refuses `in_session`: in the chat that asked for it, it stops Probe's work, sends that chat's transcript and every queued write first (the unsent-research choice still applies), then removes everything. The chat keeps working, unrecorded: Probe's hooks there exit quietly and its status line goes away, so the uninstall no longer tells you to restart the window. The service that ran the uninstall now exits without writing its files back (`~/.local/state/probe/service/...` was left behind after every uninstall), and the keeper's after-exit unload no longer makes `keeper.lock` again.
 
 ## 0.437.0
 
