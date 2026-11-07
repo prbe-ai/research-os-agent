@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.435.0
+
 - **A first install on a slow computer no longer stops at "Probe did not download" (npm launcher 0.22.0, agent-prompt install PR29).** On a fresh Mac the first Probe service took more than 10 s to start, so the download's `probe` gave up before Probe's install could run inside it, and `sign-in --wait` answered `incomplete: Probe did not download (uv exited 69)`, which tells the agent to stop. The download now gives a service that is still starting the agent's time limit (the same wait an agent's own commands got in 0.433.0), and tries once more if it still did not answer, so the install finishes. If the service still does not answer, `sign-in --wait` and the other agent commands say `no_service` or `service_lost` (repair, then retry) or `updating` (run it again), with the service's own message, and a download that really failed still says `incomplete`.
 
 ## 0.434.0
