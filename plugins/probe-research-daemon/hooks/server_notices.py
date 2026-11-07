@@ -113,7 +113,16 @@ def read_account() -> "tuple[str, str] | None":
 
 
 def is_person_watching() -> bool:
-    return os.environ.get(ATTENDED_ENV) != "0"
+    """Would a person see this hook's person-only line? Not in a `claude -p` run (ATTENDED_ENV "0"),
+    and not in a harness that shows that line to no one (`_hook_harness.Row.shows_person_line`: Kimi
+    Code, Cursor): a once-per-computer notice claimed there would be spent unseen. Unknown reads as
+    watched, as before."""
+    if os.environ.get(ATTENDED_ENV) == "0":
+        return False
+    try:
+        return _load("_hook_harness").current().shows_person_line()
+    except Exception:  # noqa: BLE001 -- no registry here: watched, as before this rule
+        return True
 
 
 def fetch_list(base_url: str, token: str, version: str) -> "tuple[str | None, list] | None":

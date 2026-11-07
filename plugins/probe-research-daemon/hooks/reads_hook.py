@@ -627,7 +627,17 @@ def _status_paths(sid: str) -> "tuple[Path, Path]":
 
 def researcher_notice(sid: str, now: "float | None" = None) -> "str | None":
     """The one line to show the researcher now, or None: the daemon's or the
-    reader's state, when it differs from the last one shown."""
+    reader's state, when it differs from the last one shown (recorded as shown here)."""
+    change = notice_change(sid, now)
+    if change is None:
+        return None
+    text, key = change
+    return text if _record_notice(sid, key) else None
+
+
+def notice_change(sid: str, now: "float | None" = None) -> "tuple[str | None, str] | None":
+    """`(line or None, its state key)` when the daemon's or the reader's state differs from the last one
+    shown (a change with nothing to say has no line), else None. Records nothing but the first baseline."""
     status_file, shown_file = _status_paths(sid)
     down = daemon_down(sid, now)
     if down is not None:
@@ -645,19 +655,47 @@ def researcher_notice(sid: str, now: "float | None" = None) -> "str | None":
         last, seen = f"{STATUS_OK}|", False
     if key == last:
         if not seen:  # the baseline: written once, so the fast path's `-nt` goes quiet
-            try:
-                _write_atomic(shown_file, key)
-            except OSError:
-                pass
-        return None
-    try:
-        _write_atomic(shown_file, key)
-    except OSError:
+            _record_notice(sid, key)
         return None
     if state == STATUS_OK:
-        return FAILURE_MESSAGES[STATUS_OK] if last.split("|", 1)[0] in OUTAGES else None
+        return (FAILURE_MESSAGES[STATUS_OK] if last.split("|", 1)[0] in OUTAGES else None), key
     text = FAILURE_MESSAGES.get(state)
-    return text.format(reason=reason or "unknown", why=reason or "unknown") if text else None
+    return (text.format(reason=reason or "unknown", why=reason or "unknown") if text else None), key
+
+
+def _record_notice(sid: str, key: str) -> bool:
+    """The state `key` recorded as shown (the fast path's `-nt` then goes quiet). False: not written."""
+    try:
+        _write_atomic(_status_paths(sid)[1], key)
+    except OSError:
+        return False
+    return True
+
+
+def shows_person_line() -> bool:
+    """Does the harness running this hook show the person its `systemMessage`
+    (`_hook_harness.Row.shows_person_line`: not Kimi Code, not Cursor)? Unknown reads as yes."""
+    try:
+        return _hook_harness().current().shows_person_line()
+    except Exception:  # noqa: BLE001 -- no registry here: as before this rule
+        return True
+
+
+def researcher_lines(sid: str) -> "tuple[str | None, tuple[str, str] | None]":
+    """The researcher's state line for this hook: `(line, None)`, the person's `systemMessage`
+    (`researcher_notice`), where the harness shows one. Where it shows none, `(None, (text, key))`:
+    the line for the agent to pass on (the "Tell the researcher" line the writer's receipts use), its
+    state recorded only once the hook's output went out (`_hand_over`)."""
+    if shows_person_line():
+        return researcher_notice(sid), None
+    change = notice_change(sid)
+    if change is None:
+        return None, None
+    text, key = change
+    if text is None:
+        _record_notice(sid, key)  # a change with nothing to say
+        return None, None
+    return None, (TEXT_WRITER_RELAY.format(message=WRITER_RELAY_PREFIX + text), key)
 
 
 # ---------------------------------------------------------------------------
@@ -883,7 +921,7 @@ def take_banners(sid: str) -> "list[tuple[Path, str, object]]":
         if path.name.count(".") > 1:
             continue  # a service claim not received yet
         msg = _message(_read_json(path))
-        if not _should_show_banner(msg) or _is_unwatched_notice(msg):
+        if not _should_show_banner(msg) or _is_unseen_banner(msg):
             continue  # an unwatched one waits, marker untaken, for a hook the person watches
         marker = _take_banner(sid, msg)
         if marker is None:
@@ -894,11 +932,33 @@ def take_banners(sid: str) -> "list[tuple[Path, str, object]]":
     return out
 
 
+def take_relayed_refusals(sid: str) -> "list[tuple[Path, str]]":
+    """Where the harness shows no person-only line (`shows_person_line`: Kimi Code, Cursor), a refusal's
+    banner (severity blocking) goes to the agent as a line to pass on to the researcher instead, the
+    "Tell the researcher" line the daemon's state uses: each taken by its marker as a banner is, and
+    given back when the hook's output never went out (`_hand_over`). A notice (warning, info) stays
+    unclaimed for a harness that shows it. As `(marker, line)`."""
+    folder = _claimed_dir(sid)
+    if shows_person_line() or not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob(f"*-{SERVER_ID_PREFIX}*.json")):
+        if path.name.count(".") > 1:
+            continue  # a service claim not received yet
+        msg = _message(_read_json(path))
+        if not _should_show_banner(msg) or (msg.get("severity") or "blocking") in NOTICE_SEVERITIES:
+            continue
+        marker = _take_banner(sid, msg)
+        if marker is not None:
+            out.append((marker, TEXT_WRITER_RELAY.format(message=WRITER_RELAY_PREFIX + msg["text"])))
+    return out
+
+
 def mark_banners_shown(sid: str, msgs: "list[dict]") -> None:
     """The Stop waiter's wake carries these messages into a turn the person watches: their
     banners count as shown (a woken turn has no `systemMessage`)."""
     for msg in msgs:
-        if _should_show_banner(msg) and not _is_unwatched_notice(msg) and _take_banner(sid, msg) is not None:
+        if _should_show_banner(msg) and not _is_unseen_banner(msg) and _take_banner(sid, msg) is not None:
             _claim, claim = _claim_person(msg)
             if claim is not None:
                 claim.commit()
@@ -927,8 +987,14 @@ def _claim_person(msg: dict) -> "tuple[bool, object]":
     return claim is not None, claim
 
 
-def _is_unwatched_notice(msg: dict) -> bool:
-    """A notice in a `claude -p` run nobody watches: its banner would spend the person's one showing."""
+def _is_unseen_banner(msg: dict) -> bool:
+    """A banner no person would see here, so it is neither taken nor marked shown as a banner: any server
+    message's in a harness that shows no person-only line (`shows_person_line`: Kimi Code, Cursor; a
+    refusal's goes to the agent to pass on instead, `take_relayed_refusals`, and a notice's waits for a
+    harness that shows it); and a NOTICE's in a `claude -p` run (`server_notices.is_person_watching`),
+    which would spend the person's one showing (a refusal's is this session's alone: shown there as before)."""
+    if not shows_person_line():
+        return True
     if (msg.get("severity") or "blocking") not in NOTICE_SEVERITIES:
         return False
     try:
@@ -1447,18 +1513,27 @@ def _emit(event: str, texts: "list[str]", notice: "str | None" = None) -> bool:
     return True
 
 
-def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "str | None") -> None:
+def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "str | None",
+               relay: "tuple[str, str] | None" = None) -> None:
     """Emit this hook's messages, record the ones that went out as shown, and
     tell Probe which of them it held for the session (`report_delivered`).
     Output that never went out: its inbox messages wait again (`return_unshown`),
     and its server messages' banners go out with the next hook's. Under
     RECEIPT_ENV (the Probe service, for pi's extension) the output going out is
     not yet the agent having it: what to settle is written there instead, and
-    settled once the extension acks (`settle_receipt`)."""
+    settled once the extension acks (`settle_receipt`). `relay`: the researcher's
+    state line for the agent to pass on (`researcher_lines`), recorded once it went out;
+    a refusal's banner goes the same way where no person sees one (`take_relayed_refusals`)."""
     ids = [mid for mid, _text in items]
     banners = take_banners(sid)
+    relayed = take_relayed_refusals(sid)
     notice = "\n".join(([notice] if notice else []) + [banner for _marker, banner, _claim in banners]) or None
-    if _emit(event, [text for _id, text in items], notice):
+    # The lines for the researcher FIRST: a harness that cuts a long context (Cursor's 10,000
+    # characters, `replies.cut_context`) never cuts off one that is recorded as passed on.
+    texts = ([relay[0]] if relay else []) + [line for _marker, line in relayed] + [text for _id, text in items]
+    if _emit(event, texts, notice):
+        if relay:
+            _record_notice(sid, relay[1])
         receipt = os.environ.get(RECEIPT_ENV)
         if receipt and _save_receipt(receipt, sid, event, ids, banners):
             return
@@ -1472,6 +1547,11 @@ def _hand_over(sid: str, event: str, items: "list[tuple[str, str]]", notice: "st
         for marker, _banner, claim in banners:
             if claim is not None:
                 claim.release()
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+        for marker, _line in relayed:
             try:
                 marker.unlink()
             except OSError:
@@ -1554,7 +1634,8 @@ def on_prompt(payload: dict) -> int:
     # (live end-to-end test: the woken turn got a second unasked message).
     token = current_turn(sid) if _was_woken(sid) else new_turn(sid)
     touch_alive(sid, "UserPromptSubmit")
-    _hand_over(sid, "UserPromptSubmit", deliver_items(sid, token, "UserPromptSubmit"), researcher_notice(sid))
+    notice, relay = researcher_lines(sid)
+    _hand_over(sid, "UserPromptSubmit", deliver_items(sid, token, "UserPromptSubmit"), notice, relay)
     return 0
 
 
@@ -1563,7 +1644,8 @@ def on_tool(payload: dict) -> int:
     if not sid or from_helper_agent(payload):
         return 0
     touch_alive(sid, "PostToolUse")
-    _hand_over(sid, "PostToolUse", deliver_items(sid, current_turn(sid), "PostToolUse"), researcher_notice(sid))
+    notice, relay = researcher_lines(sid)
+    _hand_over(sid, "PostToolUse", deliver_items(sid, current_turn(sid), "PostToolUse"), notice, relay)
     return 0
 
 

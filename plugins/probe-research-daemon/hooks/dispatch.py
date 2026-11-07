@@ -265,12 +265,26 @@ def matches(matcher, tool: str) -> bool:
         return False
 
 
-def reads_waiting() -> bool:
+def payload_session(payload: bytes) -> str:
+    """The event's own session id: the one `session_id` value in its raw JSON (every lane's
+    payload carries it in Claude Code's shape; Kimi's and Cursor's are put in it before they get
+    here), read without parsing. "" when there is none or more than one (a tool's output may
+    hold a `session_id` of its own): never a guess."""
+    values = string_values(payload, _SESSION_KEY) if payload else set()
+    return _safe_id(next(iter(values))) if len(values) == 1 else ""
+
+
+def reads_waiting(payload: bytes = b"") -> bool:
     """The reads route's own shell fast path (routes.json, PostToolUse), in
     python: a Probe daemon message, a service claim its caller never received
     (`claimed/<sid>/<stem>.<token>.json`, the shell's `*.*.json`), or a newer
-    status, waits for this session."""
-    sid = _safe_id(os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or "")  # harness-literal-ok: the reads route's own gate
+    status, waits for this session. The session is the payload's (`payload_session`),
+    else the harness's session variable; with neither, any session's counts. Kimi
+    Code and Cursor export no variable the shell reads, so their every event looked
+    at every session's messages before the payload was asked."""
+    sid = payload_session(payload)
+    if not sid:
+        sid = _safe_id(os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or "")  # harness-literal-ok: the reads route's own gate
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
     root = os.path.join(base, "probe", "reads")
     for kind, dots in (("messages", 1), ("claimed", 2)):
@@ -300,6 +314,8 @@ def _listdir(path: str) -> list:
 
 
 _KEY = b'"tool_name"'
+#: The key of the event's session id (`payload_session`).
+_SESSION_KEY = b'"session_id"'
 _SPACE = b" \t\r\n"
 
 
@@ -1113,10 +1129,11 @@ def _is_catch_all(hook: dict, lane: str, wiring: dict) -> bool:
     return False
 
 
-def waiting_after_tool(lane: str, options) -> bool:
-    """On post-tool: does a daemon message wait for this event to deliver it?
-    Never when the harness shows no one the output (UNSHOWN)."""
-    return lane == "post-tool" and UNSHOWN not in options and reads_waiting()
+def waiting_after_tool(lane: str, options, payload: bytes = b"") -> bool:
+    """On post-tool: does a daemon message wait for this event (`payload`, its raw
+    JSON: whose session it is) to deliver it? Never when the harness shows no one
+    the output (UNSHOWN)."""
+    return lane == "post-tool" and UNSHOWN not in options and reads_waiting(payload)
 
 
 def record_keeping(hook: dict) -> bool:
@@ -1141,7 +1158,7 @@ def main(argv: list[str], payload: "bytes | None" = None):
         payload = sys.stdin.buffer.read()
     kept_only = RECORD_KEEPING in argv[2:]
     waiting_only = not kept_only and WAITING in argv[2:]
-    waiting = not kept_only and waiting_after_tool(lane, argv[2:])
+    waiting = not kept_only and waiting_after_tool(lane, argv[2:], payload)
     if lane in TOOL_LANES and not waiting and not could_route(lane, payload):
         return 0
     import json
@@ -1272,7 +1289,7 @@ def forward(argv: list, payload: "bytes | None" = None) -> int:
     lane = argv[0]
     if payload is None:
         payload = sys.stdin.buffer.read()
-    if lane in TOOL_LANES and not waiting_after_tool(lane, argv[1:]) and not could_route(lane, payload):
+    if lane in TOOL_LANES and not waiting_after_tool(lane, argv[1:], payload) and not could_route(lane, payload):
         return 0
     try:
         client = _load_by_path("_hook_forward")

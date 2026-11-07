@@ -68,6 +68,14 @@ def _document() -> dict:
     return _DOCUMENT
 
 
+#: The hook outputs (a row's `hook_output`) with a line shown to the PERSON and never the model:
+#: Claude Code's `systemMessage`, which Codex shows too and pi's extension says. Kimi Code's
+#: `message-json` has no such field (`harness_io.translate` drops it), and Cursor's `cursor-json`
+#: shows a hook's `user_message` only for a refused prompt or tool call (CLI 2026.11.05), so the
+#: Probe service drops it too (`cursor_agent/replies.get_context`).
+PERSON_LINE_OUTPUTS = ("claude-json",)
+
+
 class Row:
     """One registry row: its plain fields from the JSON, everything else from
     the full loader's row, loaded on first use."""
@@ -82,6 +90,11 @@ class Row:
 
     def can(self, capability: str) -> bool:
         return (self._raw.get("capabilities") or {}).get(capability) is True
+
+    def shows_person_line(self) -> bool:
+        """Does this harness show a hook's person-only line (`systemMessage`) to anyone? Where it
+        does not, a notice meant for the person once is never spent here (`server_notices`)."""
+        return (self._raw.get("hook_output") or "claude-json") in PERSON_LINE_OUTPUTS
 
     def __getattr__(self, name):
         return getattr(registry().get(self.id), name)

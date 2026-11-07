@@ -1597,10 +1597,12 @@ def main() -> None:
     # injected mid-compaction interrupts work the user did not start. Gated before
     # the call rather than after, because the notice RECORDS that it spoke --
     # computing it here would spend the once-a-day budget on an event that cannot
-    # deliver it, and silence the next real session start.
+    # deliver it, and silence the next real session start. The same for a session
+    # whose person sees no `systemMessage` (`server_notices.is_person_watching`:
+    # a `claude -p` run, Kimi Code, Cursor).
     stale_notice = (
         None
-        if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT
+        if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT or not server_notices.is_person_watching()
         else _stale_manifest_notice(fetched_at)
     )
 
