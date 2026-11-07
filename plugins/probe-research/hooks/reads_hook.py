@@ -15,7 +15,9 @@ same files through both.
                        every message from the daemon's writer (its replies and
                        receipts), plus at most ONE unasked message of the
                        reader's and at most ONE hint (the Probe service's,
-                       `origin` "hint") for the turn, as `additionalContext`
+                       `origin` "hint") for the turn, as `additionalContext`.
+                       Never a helper agent's prompt (Codex fires one for a
+                       helper with the main `session_id`): see below
     PostToolUse        the same, after each MAIN-agent tool call. A helper
                        agent's tool call never claims: its context is not the
                        main agent's, and a message put there would vanish with it
@@ -1478,15 +1480,11 @@ def _session(payload: dict) -> "str | None":
 
 
 def from_helper_agent(payload: dict) -> bool:
-    """A tool call made by a helper agent (subagent). Claude Code 2.1.283 puts
-    `agent_id` in the payload of a hook fired inside a subagent and never on the
-    main thread (its hook-input schema: "Present only when the hook fires from
-    within a subagent ... Use this field (not agent_type)"); `transcript_path`
-    stays the MAIN transcript, so the path check is only a second net."""
-    if payload.get("agent_id"):
-        return True
-    path = payload.get("transcript_path")
-    return isinstance(path, str) and "/subagents/" in path.replace("\\", "/")
+    """A hook fired inside a helper agent (subagent): its prompt and tool calls
+    never take the main agent's messages (`_hook_harness.from_helper_agent`:
+    `agent_id`, a `subagents/` transcript, or a transcript named for another
+    thread than `session_id`)."""
+    return _hook_harness().from_helper_agent(payload)
 
 
 def attended() -> bool:
@@ -1629,7 +1627,9 @@ def settle_receipt(path: str, shown: bool) -> int:
 
 def on_prompt(payload: dict) -> int:
     sid = _session(payload)
-    if not sid:
+    # A helper agent's first prompt (Codex fires UserPromptSubmit for one, with the
+    # main agent's `session_id`) is no turn of the main agent's and hears nothing.
+    if not sid or from_helper_agent(payload):
         return 0
     # The Stop waiter's wake runs through this hook too: that turn goes on
     # (live end-to-end test: the woken turn got a second unasked message).

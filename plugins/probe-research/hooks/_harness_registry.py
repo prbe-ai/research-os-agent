@@ -65,9 +65,14 @@ CAPABILITY_ROOT_SKILLS = "root_skills"
 #: installed plugin copy (`hooks/dispatch.py installed_root`) and a tap from
 #: 0.10.13 on hands its own watcher to the Probe service (`tap/handback.py`),
 #: so "no restart needed" may be said (`cli/updater.follows_without_restart`,
-#: `hooks/version_check._picked_up`). Claude Code, Codex, Kimi Code (with
+#: `hooks/version_check._picked_up`). Claude Code, Kimi Code (with
 #: CAPABILITY_LOADED_RECORDS below) and pi (its extension's shim switches to the
-#: pinned version at a session's next turn, `cli/pi_pins.sessions_follow`).
+#: pinned version at a session's next turn, `cli/pi_pins.sessions_follow`). Not
+#: Codex: 0.166 keeps an open thread on the plugin copy it loaded and runs none of
+#: its hooks once a newer copy is approved. An agent moved to the frozen hook shim
+#: with none of its processes open follows whatever its row says: the shim runs
+#: every event from the service's current release (`hook_switches.does_follow_updates`,
+#: read first by both callers above).
 CAPABILITY_FOLLOWS_UPDATES = "follows_updates"
 #: The harness keeps a plugin's manifest (hook entries, skills, MCP servers) from
 #: its start or /reload, so an open session follows an update only when the

@@ -1161,11 +1161,31 @@ def _user_scope_installs() -> bool:
     return all(isinstance(e, dict) and e.get("scope") == "user" for v in ours.values() for e in v or [])
 
 
+def _shim_follows(harness_id: str) -> bool:
+    """Has this agent moved to the frozen hook shim here, cut over with none of its
+    processes open (`_hook_switches.does_follow_updates`, the ledger fact
+    `probe.cli.updater.follows_without_restart` reads first)? Then the shim runs
+    every open session's hooks from the Probe service's current release, whatever
+    the registry's `follows_updates` says. One listdir when no machine here ever
+    switched; False on any doubt (an older dispatcher's copy of the module, handing
+    this event over, has no such rule)."""
+    try:
+        switches = _hook_harness().load_sibling("_hook_switches")
+        if not switches.has_any_ledger(switches.get_service_root()):
+            return False
+        service_dir = _hook_harness().load_sibling("_service_paths").service_dir()
+        ledger = switches.load_ledger(switches.get_ledger_path(service_dir))
+        return switches.does_follow_updates(ledger, harness_id) is True
+    except Exception:  # noqa: BLE001 - unproven: the registry's answer
+        return False
+
+
 def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     """`(follows, agent)`: do this agent's open sessions follow the update with
     no restart (`probe.cli.updater.follows_without_restart`, before it runs)?
-    An agent whose open sessions follow updates (the registry's
-    `follows_updates`: Claude Code, not Codex; never one with `loaded_records`, Kimi
+    An agent moved to the frozen hook shim with none of its processes open
+    (`_shim_follows`) does. Otherwise an agent whose open sessions follow updates (the
+    registry's `follows_updates`: Claude Code; never one with `loaded_records`, Kimi
     Code, whose answer needs the release installed first), every install at user scope where
     its ledger has scopes (`scoped_installs`: Claude Code's), the tap it
     updates to handing its sessions to the Probe
@@ -1176,6 +1196,8 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     try:
         harness = _hook_harness().current()
         agent = getattr(harness, "label", None) or agent
+        if _shim_follows(harness.id):
+            return True, agent
         capabilities = _hook_harness().load_sibling("_harness_registry")
         if not harness.can(capabilities.CAPABILITY_FOLLOWS_UPDATES):
             return False, agent

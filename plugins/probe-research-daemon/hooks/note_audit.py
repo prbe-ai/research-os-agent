@@ -184,6 +184,14 @@ def main() -> int:
     except Exception:
         payload = {}
 
+    # A helper agent's prompt (Codex fires one with the main `session_id`) is the
+    # main agent's words, not a person's: no audit, and the session's once is not
+    # spent on a context the researcher never reads (`_hook_harness.from_helper_agent`).
+    try:
+        if isinstance(payload, dict) and _hook_harness().from_helper_agent(payload):
+            return 0
+    except Exception:
+        return 0
     session_id = _session_id(payload)
     marker = _marker(session_id)
     # NO MARKER, NO ASK. Without somewhere to record that we have spoken this

@@ -1471,8 +1471,8 @@ def _version_check():
 def _inline_reaches_model(hook_event: str) -> bool:
     """Does context this hook adds reach the model? Not when the harness drops
     this hook's output (QUIET_ENV). A harness that adds context at the next
-    prompt (`prompt_context`: Claude Code, Kimi) hears it there; one that cannot
-    (Codex) hears it after its next tool call, where PostToolUse context lands."""
+    prompt (`prompt_context`: Claude Code, Codex, Kimi, Cursor) hears it there; one
+    that cannot hears it after its next tool call, where PostToolUse context lands."""
     if os.environ.get(QUIET_ENV) == "1":
         return False
     try:
@@ -1521,13 +1521,9 @@ def _announce_inline_once(hook_event: str, session_id: str) -> None:
 
 
 def _from_helper_agent(payload: dict) -> bool:
-    """A hook fired inside a helper agent (subagent), as `reads_hook.from_helper_agent`
-    tells it: Claude Code puts `agent_id` in that payload and never on the main
-    thread; a `/subagents/` transcript path is the second net."""
-    if payload.get("agent_id"):
-        return True
-    path = payload.get("transcript_path")
-    return isinstance(path, str) and "/subagents/" in path.replace("\\", "/")
+    """A hook fired inside a helper agent (subagent), as every hook tells it
+    (`_hook_harness.from_helper_agent`)."""
+    return _hook_harness().from_helper_agent(payload)
 
 
 def _inline_root() -> str:
@@ -2436,6 +2432,10 @@ def main() -> None:
             _session_marker.mark_session_profile(session_id, _session_marker.RECORDER_DAEMON)
         if hook_event == "PreToolUse":
             _deny_daemon_profile(payload, session_id)
+        elif hook_event == "UserPromptSubmit" and _from_helper_agent(payload):
+            # A helper agent's prompt is the main agent's words (Codex fires this hook for one,
+            # with the main `session_id`): never a typed switch, and no notice is heard there.
+            pass
         elif hook_event == "UserPromptSubmit":
             direction, shape, slug = _typed_direction(payload.get("prompt"))
             if direction is not None:
@@ -2445,7 +2445,8 @@ def main() -> None:
                 _announce_inline_once("UserPromptSubmit", session_id)
         elif hook_event == "PostToolUse":
             landed = None
-            if payload.get("tool_name") in ("Skill", "SlashCommand"):
+            # A helper agent's Skill call is never the switch: its words are the main agent's.
+            if payload.get("tool_name") in ("Skill", "SlashCommand") and not _from_helper_agent(payload):
                 direction, slug = _tool_direction(payload.get("tool_name"), payload.get("tool_input"))
                 if direction is not None:
                     landed = _apply_direction(direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload))
@@ -2457,6 +2458,8 @@ def main() -> None:
                 _announce_inline_once("PostToolUse", session_id)
         return
     if hook_event == "UserPromptSubmit":
+        if _from_helper_agent(payload):
+            return  # a helper agent's prompt: the main agent's words, never the researcher's
         direction, shape, slug = _typed_direction(payload.get("prompt"))
         if direction is None:
             notice = _daemon_notice(session_id, _payload_cwd(payload))
@@ -2473,6 +2476,8 @@ def main() -> None:
         return
     tool_name = payload.get("tool_name")
     if tool_name in ("Skill", "SlashCommand"):
+        if _from_helper_agent(payload):
+            return  # a helper agent's Skill call: never the switch, as its prompt is not
         direction, slug = _tool_direction(tool_name, payload.get("tool_input"))
         if direction is None:
             return

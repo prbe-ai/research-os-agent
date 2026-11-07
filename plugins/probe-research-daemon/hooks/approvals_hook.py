@@ -12,7 +12,9 @@ the prompt, silent when nothing waits:
                                       of THIS session waits, add ONE fixed line asking
                                       the agent to put it to the researcher word for
                                       word with its question tool (the question's
-                                      fields JSON-encoded, framed as data)
+                                      fields JSON-encoded, framed as data), or, with
+                                      no question tool, to send them to `probe
+                                      approvals`; never in a helper agent's prompt
     PreToolUse on the question tool   a question whose header names a waiting
                                       request but whose words or options differ, or
                                       that comes with its answers already filled in,
@@ -128,6 +130,11 @@ def _mode(payload: dict) -> "str | None":
 
 
 def _record_mode(payload: dict) -> None:
+    """The session's permission mode, from a hook of the main agent only: a helper
+    agent's hooks carry the main `session_id` (Codex) and their own mode, which
+    must never become the main session's (`_hook_harness.from_helper_agent`)."""
+    if _hook_harness().from_helper_agent(payload):
+        return
     sid = payload.get("session_id")
     mode = _mode(payload)
     if not isinstance(sid, str) or not sid or mode is None:
@@ -178,10 +185,17 @@ def _holder(req: dict) -> str:
     return "Probe" if req.get("policy") == FEEDBACK_POLICY else "The Probe daemon"
 
 
-def _nudge(req: dict) -> str:
+def _nudge(req: dict, *, has_tool: bool = True) -> str:
     """The one line added while a question waits. The question's fields are JSON,
-    so nothing in them can close a quote and speak as this line."""
+    so nothing in them can close a quote and speak as this line. A harness with
+    no question tool (`has_tool` False) sends the researcher to their own
+    terminal, as a question too long for the tool does."""
     q = req["question"]
+    if not has_tool:
+        return (_holder(req) + " is holding a question for the researcher. You have no question tool to "
+                "put it to them with, and you do not answer it yourself: tell the researcher that question "
+                + json.dumps(q["header"]) + " waits for them, and that they answer it in their own terminal "
+                "with `probe approvals`, which prints all of it.")
     if _terminal_only(req):
         return (_holder(req) + " is holding a question for the researcher that is too long to show in your "
                 "question tool. Do not ask it there and do not answer it yourself: tell the researcher that "
@@ -242,6 +256,11 @@ def _plain_options(q: dict) -> bool:
 
 
 def on_prompt(payload: dict, event: str) -> None:
+    # A helper agent's prompt is the main agent's words, and what lands there
+    # never reaches the researcher (`_hook_harness.from_helper_agent`); nor is
+    # its permission mode the main session's (`_record_mode`).
+    if _hook_harness().from_helper_agent(payload):
+        return
     _record_mode(payload)
     shim = _shim()
     if not shim["inject"]:
@@ -249,7 +268,8 @@ def on_prompt(payload: dict, event: str) -> None:
     waiting = _waiting(payload.get("session_id"))
     if not waiting:
         return
-    _emit({"hookSpecificOutput": {"hookEventName": event, "additionalContext": _nudge(waiting[0])}})
+    nudge = _nudge(waiting[0], has_tool=bool(shim["question_tool"]))
+    _emit({"hookSpecificOutput": {"hookEventName": event, "additionalContext": nudge}})
 
 
 def on_pre_question(payload: dict) -> None:

@@ -106,6 +106,26 @@ def get_switches(ledger: dict, harness: str, config_root: str) -> list:
     return found
 
 
+def does_follow_updates(ledger: dict, harness: str) -> bool:
+    """Do this agent's open sessions follow a Probe update with no restart, because the shim runs all
+    of them? Every config root of it here is on the shim (its last switch), cut over with none of its
+    processes open (`is_closed_cutover`): no live process kept Probe's old hooks, and the shim's hooks
+    never change, so each event runs the Probe service's routes of the release installed now. False
+    with no record. The one rule the CLI (`MigrationLedger.does_follow_updates`) and the hooks
+    (`version_check._picked_up`) both read."""
+    harnesses = ledger.get("harnesses")
+    roots = harnesses.get(harness) if isinstance(harnesses, dict) else None
+    records = [(root, record) for root, record in roots.items() if isinstance(record, dict)] \
+        if isinstance(roots, dict) else []
+    if not records:
+        return False
+    for root, record in records:
+        switches = get_switches(ledger, harness, root)
+        if not switches or switches[-1][1] != Side.SHIM or not record.get("is_closed_cutover"):
+            return False
+    return True
+
+
 def get_side(switches: list, when: float) -> str:
     """The side the last switch at or before `when` named; Probe's plugins before any."""
     side = Side.LEGACY

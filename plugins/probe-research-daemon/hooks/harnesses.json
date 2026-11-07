@@ -147,7 +147,7 @@
       "lean_profile": "second-plugin",
       "attribution_requires_pairing": true,
       "capabilities": {
-        "root_skills": false, "prompt_context": false,
+        "root_skills": false, "prompt_context": true,
         "wake": true,
         "follows_updates": false,
         "scoped_installs": false

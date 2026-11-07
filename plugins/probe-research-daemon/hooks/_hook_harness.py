@@ -154,6 +154,43 @@ def session_id(env=None) -> str:
     return ""
 
 
+#: A transcript file named for the thread that writes it ends in that thread's id:
+#: `rollout-<time>-<uuid>.jsonl` (the registry's `uuid_suffix` naming). Matched and
+#: compared with no regard to case: a UUID's hex digits name the same thread either way.
+_THREAD_FILE = r"-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"
+
+
+def from_helper_agent(payload: dict) -> bool:
+    """Did a helper agent (subagent) fire this hook, not the agent the researcher
+    talks to? What lands in a helper's context never reaches the researcher, and
+    its prompt is the main agent's words. Any one mark is enough:
+
+      * `agent_id`: on every hook fired inside a helper and never on the main
+        thread (Claude Code 2.1.283's hook-input schema; Codex 0.166 sets it on
+        a helper's prompt and tool calls too, live run 2026-11-06);
+      * a transcript inside a `subagents/` folder (Claude Code's helper
+        transcripts; its `transcript_path` stays the main one, so a second net);
+      * a transcript named for a thread other than `session_id`: a helper hook
+        that carries the root's `session_id` beside its own rollout and names no
+        `agent_id` (the service's `get_thread_id` reads the same mark). A main
+        thread's transcript is named for its own session."""
+    if payload.get("agent_id"):
+        return True
+    path = payload.get("transcript_path")
+    if not isinstance(path, str):
+        return False
+    path = path.replace("\\", "/")
+    if "/subagents/" in path:
+        return True
+    root = payload.get("session_id")
+    if not isinstance(root, str) or not root:
+        return False
+    import re  # noqa: PLC0415 -- json has loaded it already
+
+    found = re.search(_THREAD_FILE, path, re.IGNORECASE)
+    return found is not None and found.group(1).lower() != root.lower()
+
+
 def manifest_dir(env=None) -> str:
     """The plugin manifest folder of the harness running this hook
     (`.claude-plugin`, `.codex-plugin`, `.kimi-plugin`)."""
