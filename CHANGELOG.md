@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.437.0
+
 - **Codex: an answer that lands while the agent is mid-turn now wakes it when the turn ends, on machines still on Probe's own Codex hooks.** The waker (0.434.0) heard a Codex turn end only from the frozen hook shim, so a Codex window not yet moved to it (the move waits for every Codex window to close) kept a mid-turn answer until the researcher's next prompt or an unrelated mailbox change. The service now tells the waker about a turn end that Probe's plugin hooks send too. Found by the live smoke of 0.436.0 (harness-parity H2): an idle window was woken and read the answer; the mid-turn case waited 64 s with no wake.
 - **An idle Claude Code window's Stop wake no longer reports Probe's hooks as failing.** In a window still on Probe's own hooks, the service holds Claude Code's Stop wake as slices of up to a minute (`wait: "reads"`), and each slice with nothing to deliver answers `timed_out`. The frozen shim's path already counted that as "nothing yet", but this path counted it as a `hook_host` timeout, so any idle daemon session sent a "hooks keep failing" report every 6 hours. A wait the service did not answer, or one killed at its deadline, still counts.
 
