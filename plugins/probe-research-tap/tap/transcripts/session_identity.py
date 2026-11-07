@@ -7,8 +7,9 @@ its parent's session and its agentId (`get_subagent_session_id`, a UUID v5,
 which Claude Code never writes), and its last turn proves that id.
 Codex and pi have an explicit session header. Kimi Code's wire has a header
 (`metadata`) that names no session: Kimi keeps the session's identity in the
-session folder's `state.json`, which it writes itself. Uploader identity is
-separate.
+session folder's `state.json`, which it writes itself; a helper agent's wire
+(`agents/agent-<n>/`) gets a made id the same way a Claude sub-agent does, and
+`state.json` must list that helper. Uploader identity is separate.
 """
 
 from __future__ import annotations
@@ -283,7 +284,10 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
     Two producer-written facts must agree with the session being uploaded:
     the session folder's own name and the `id` Kimi wrote into its
     `state.json`. The wire itself must open with Kimi's `metadata` header, so
-    a stray file in a session folder is never taken for its transcript.
+    a stray file in a session folder is never taken for its transcript. A
+    helper's wire (`agents/agent-<n>/wire.jsonl`, a made id: UUID v5 of the
+    session and `agent-<n>`) proves its session the same way, and `state.json`
+    must list `agent-<n>` as a helper (`agents`, `type: sub`; Kimi 2.1-2.5).
     """
     try:
         first = json.loads(head_lines[0]) if head_lines else None
@@ -291,14 +295,21 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
         first = None
     if not isinstance(first, dict) or first.get("type") != _KIMI_HEADER_TYPE:
         raise ReconciliationRequired("transcript does not open with a Kimi Code header")
-    folder = next(
-        (
-            parent
-            for parent in path.parents
-            if _same_uuid(harness.canonical_session_id(parent.name), expected)
-        ),
-        None,
-    )
+    helper = _get_kimi_helper(path, harness) if UUID(expected).version == 5 else None
+    if helper is not None:
+        folder, session = helper
+        if get_subagent_session_id(session, path.parent.name) != expected:
+            folder = None
+    else:
+        session = expected
+        folder = next(
+            (
+                parent
+                for parent in path.parents
+                if _same_uuid(harness.canonical_session_id(parent.name), expected)
+            ),
+            None,
+        )
     if folder is None:
         raise IdentityMismatch(
             "native transcript identity is absent or differs from the filename/session"
@@ -310,21 +321,38 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
         raise ReconciliationRequired("Kimi Code session state is unreadable") from exc
     if not isinstance(state, dict) or not _same_uuid(
         harness.canonical_session_id(state.get("id") if isinstance(state.get("id"), str) else ""),
-        expected,
+        session,
     ):
         raise (IdentityMismatch if isinstance(state, dict) and state.get("id") else ReconciliationRequired)(
             "native transcript identity is absent or differs from the filename/session"
         )
+    if helper is not None:
+        agents = state.get("agents")
+        listed = agents.get(path.parent.name) if isinstance(agents, dict) else None
+        if not isinstance(listed, dict) or listed.get("type") != "sub":
+            raise ReconciliationRequired("Kimi Code's session state does not list this helper")
     proof = {
         "native_session_id": expected,
         "identity_method": "producer-record-v1",
-        "observed_lineage": [],
+        # A helper's link to the chat that started it.
+        "observed_lineage": [session] if helper is not None else [],
         "original_author": "unverified",
     }
     source_cwd = state.get("cwd")
     if isinstance(source_cwd, str) and Path(source_cwd).is_absolute():
         proof["source_cwd"] = source_cwd
     return proof
+
+
+def _get_kimi_helper(path: Path, harness) -> tuple[Path, str] | None:
+    """(session folder, session id) of a helper's wire at `<session>/agents/agent-<n>/wire.jsonl`."""
+    folder = path.parent.parent.parent
+    if not path.parent.name.startswith("agent-") or path.parent.parent.name != "agents":
+        return None
+    try:
+        return folder, str(UUID(harness.canonical_session_id(folder.name)))
+    except ValueError:
+        return None
 
 
 def compatible_copy(first: Path, second: Path) -> bool:

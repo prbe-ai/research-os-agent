@@ -5,7 +5,8 @@ Kimi Code (2.1.x) writes one `wire.jsonl` per agent:
 and `agents/agent-N/wire.jsonl` per subagent. Only the main wire is captured
 (the registry row's `transcripts.pattern`); a subagent's own steps stay out,
 like Claude Code's sidechains, and the main wire still holds the Agent tool's
-call and result.
+call and result. An import sends a subagent's wire as a chat of its own
+(PR37): its task, the one prompt the parent wrote it, is its first `user`.
 
 ONE OF TWO RECORD FAMILIES, SO NOTHING IS DOUBLED. Each wire carries the
 conversation twice:
@@ -39,6 +40,8 @@ Translation:
                                        output's SIZE only
     origin.kind skill_activation    -> CC `system` subtype=skill_activation,
                                        the skill's name and trigger only
+    origin.kind system_trigger, name subagent, in a subagent's own wire
+    (`agentId` not main)            -> CC `user`: its task
     origin.kind injection, hook_result, system_trigger, compaction_summary,
     task, cron_job, cron_missed, retry, other, <unknown>
                                     -> dropped: NOT researcher prompts (system
@@ -126,6 +129,8 @@ _TOOL_SUMMARY_KEYS: tuple[str, ...] = (
 
 #: User-role origins that are the researcher's own words.
 _PROMPT_ORIGINS = frozenset({"user"})
+#: The session's own agent; any other `agentId` is a subagent's.
+_MAIN_AGENT = "main"
 #: `meta.source` of the parts Kimi 2.4 puts first in a prompt that are not the
 #: researcher's: a UserPromptSubmit hook's output and an activated skill's body.
 #: Kimi 2.1 wrote both as messages of their own (origin `hook_result`, `skill_activation`).
@@ -439,6 +444,10 @@ def _translate_append_message(event: dict) -> dict | None:
         if origin.get("isError") is True:
             extras["is_error"] = True
         return _system_event(subtype="shell_output", timestamp=timestamp, extras=extras)
+    if kind == "system_trigger" and origin.get("name") == "subagent" and _is_subagent_record(event):
+        # A subagent's task, in its own wire: the parent's prompt to it, its first turn (PR37).
+        blocks = _blocks(message.get("content"))
+        return _message_event("user", timestamp, blocks) if blocks else None
     if kind == "skill_activation":
         extras = {
             key: _str(origin.get(src))
@@ -450,6 +459,11 @@ def _translate_append_message(event: dict) -> dict | None:
     # (stop-hook continuations, a subagent's prompt), compaction_summary,
     # task/cron prompts, retries and anything newer: not the researcher's words.
     return None
+
+
+def _is_subagent_record(event: dict) -> bool:
+    agent = event.get("agentId")
+    return isinstance(agent, str) and bool(agent) and agent != _MAIN_AGENT
 
 
 def _translate_loop_event(event: dict) -> dict | None:
