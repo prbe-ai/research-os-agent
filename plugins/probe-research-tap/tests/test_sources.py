@@ -5,7 +5,7 @@ from tap import sources
 
 
 def test_known_sources_are_the_shipped_harnesses():
-    assert set(sources.SOURCES) == {"claude_code", "codex", "pi", "kimi_code"}
+    assert set(sources.SOURCES) == {"claude_code", "codex", "pi", "kimi_code", "cursor_agent"}  # Cursor since #4306
 
 
 def test_every_source_s_sanitizer_imports_from_the_tap():
