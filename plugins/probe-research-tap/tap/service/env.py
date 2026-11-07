@@ -14,8 +14,8 @@ from __future__ import annotations
 #: session-id variable, read from the harness registry (`session_env`; not
 #: written here: this file is the tap's too, and names no harness): a request
 #: from inside an agent's session names it, so `probe.core.run` refuses what it
-#: refuses there (`probe session default`, the wizard actions in a
-#: daemon-recorded session). An id, never a credential.
+#: refuses there (the wizard actions in a daemon-recorded session). An id, never
+#: a credential.
 #: `tests/test_service_actions.py` keeps both covering every harness.
 CONTEXT_ENV = frozenset(
     {

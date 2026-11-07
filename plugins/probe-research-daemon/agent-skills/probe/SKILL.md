@@ -10,6 +10,8 @@ yourself.
 
 Typing `/probe …` moves the switch itself, before you read this; you never move it.
 To see where it landed, run `probe session status`.
+When the researcher asks to change what new chats start as, run
+`probe session default <on|read|off>` and say it applies to new chats only.
 
 ```
 /probe on      on (daemon): the daemon records and reads     /probe          advance one step

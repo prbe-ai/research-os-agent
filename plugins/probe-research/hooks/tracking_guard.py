@@ -786,22 +786,23 @@ def _asks_help(args: "list[str]") -> bool:
     """`--help` before any `--`, as the CLI's gate reads it: after `--` it is an
     argument (`probe project contributors -- --help` looks up a project). Right
     after a redirection it is a file name (`probe project create x &> --help`).
-    A token search: the CLI's write gate asks click (`write_gate._asks_help`), and it holds."""
+    A token search: the CLI's write gate asks click (`write_gate._asks_help`), and it holds.
+    `-h` counts only plainly (`_asks_help_plainly`): as an option's value the command runs."""
     words = args[: args.index("--")] if "--" in args else args
     return any(
         word == _session_marker.HELP_FLAG and (i == 0 or words[i - 1] not in _REDIRECTIONS)
         for i, word in enumerate(words)
-    )
+    ) or _asks_help_plainly(args)
 
 
 def _asks_help_plainly(args: "list[str]") -> bool:
-    """`_asks_help`, minus a `--help` click hands to the option before it as its
-    value (`probe wizard --folder --help` runs the wizard). The daemon profile's
-    refusals have no CLI backstop -- the write gate refuses only writes -- so
-    there a `--help` after a bare option is checked like any other run."""
+    """`--help` or `-h` (`is_help_flag`), minus one click hands to the option before
+    it as its value (`probe wizard --folder --help` runs the wizard). The daemon
+    profile's refusals have no CLI backstop -- the write gate refuses only writes --
+    so there a `--help` after a bare option is checked like any other run."""
     words = args[: args.index("--")] if "--" in args else args
     return any(
-        word == _session_marker.HELP_FLAG
+        _session_marker.is_help_flag(word, args)
         and (i == 0 or (words[i - 1] not in _REDIRECTIONS
                         and (not words[i - 1].startswith("-") or "=" in words[i - 1])))
         for i, word in enumerate(words)

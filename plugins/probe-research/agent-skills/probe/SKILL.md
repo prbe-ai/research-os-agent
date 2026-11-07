@@ -58,8 +58,10 @@ beats it.
 
 **Machine-wide Defaults**
 
-ONLY written by the wizard (`npx probe-research`). `probe session status`
-reports it as `machine_default_state`.
+Set by the wizard (`npx probe-research`). When the researcher asks to change
+what new chats start as, run `probe session default <on|read|off>` and say it
+applies to new chats only. `probe session status` reports it as
+`machine_default_state`.
 
 **Session transcripts, machine-wide**
 

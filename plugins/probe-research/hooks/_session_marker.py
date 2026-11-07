@@ -1391,6 +1391,29 @@ ROOT_VALUE_OPTIONS = frozenset({"--base-url", "--spool-dir"})
 #: The only help flag the CLI has (`-h` is not registered: click refuses it).
 HELP_FLAG = "--help"
 
+#: What the guard hook lets through as asking for help: `--help`, and `-h`, which
+#: click refuses as an unknown option before the command runs (D102). The CLI's
+#: own write gate reads only `--help`, so it still gates a `-h` run.
+HELP_FLAGS = frozenset({HELP_FLAG, "-h"})
+
+#: Commands that hand an unknown option on (`ignore_unknown_options`): there `-h`
+#: is an argument and the command runs (`probe daemon worker -h`), so it is no help.
+#: `test_daemon_profile.py` holds this to the CLI's tree.
+UNKNOWN_OPTIONS_PASSED = frozenset(
+    {"exec", "docs", "cli search", "daemon worker", "daemon override", "daemon session", "daemon task"}
+)
+
+
+def is_help_flag(word: str, args: "list[str]") -> bool:
+    """Is `word`, one of these args (after `probe`), a help flag the command
+    reads as one (`HELP_FLAGS`)? `-h` is not where the command passes it on."""
+    if word == HELP_FLAG:
+        return True
+    if word not in HELP_FLAGS:
+        return False
+    words = command_words(args)
+    return not {" ".join(words[:2]), " ".join(words[:1])} & UNKNOWN_OPTIONS_PASSED
+
 #: Groups whose whole job is READING research content. Refused only under `off`.
 #: `docs` reads Probe's own docs, not the team's record: a read so that `off`
 #: refuses it as it refuses `paper find`.
@@ -1629,7 +1652,9 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
      "example status", "example keep", "example delete", "import folders", "import review", "import status",
      # The person's uninstall, run in the chat they asked in (PR33b): Probe's own upkeep, never a write of records.
-     "uninstall"}
+     "uninstall",
+     # What NEW chats start as, set when the person asks (D102): a machine setting, not this chat's switch.
+     "session default"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
@@ -1664,18 +1689,24 @@ DAEMON_PROFILE_PLAIN_FLAGS = {
     "setup": frozenset({"--action", "--yes", "-y", "--json", "--no-browser"}),
 }
 
-#: The researcher's switch and defaults, typed into a shell. In the daemon
-#: profile the agent never moves them (`probe session state inline` included):
-#: not under `off`, and not while Probe is inline. The researcher moves them
-#: with `/probe`, which reaches the hooks, not a shell.
+#: The researcher's switch for this chat, typed into a shell. In the daemon
+#: profile the agent never moves it (`probe session state inline` included):
+#: not under `off`, and not while Probe is inline. The researcher moves it
+#: with `/probe`, which reaches the hooks, not a shell. `session default` is not
+#: on it (D102): it sets what NEW chats start as, which the agent sets when the
+#: person asks, as the install pages' `--session-default` already did.
 RESEARCHER_SWITCH = frozenset(
-    {"session state", "session toggle", "session track", "session untrack", "session default"}
+    {"session state", "session toggle", "session track", "session untrack"}
 )
+
+#: Where the default for new chats is set, said in each switch refusal: `/probe` reaches only this chat.
+SWITCH_DEFAULT_HINT = "`/probe` moves only this chat; `probe session default on|read|off` sets what new chats start as."
 
 #: What the guard answers an agent that types one of `RESEARCHER_SWITCH`.
 INLINE_SWITCH_DENY = (
     "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only "
-    "the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`)."
+    "the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`). "
+    + SWITCH_DEFAULT_HINT
 )
 
 #: What the guard answers an agent the daemon records for that types one of
@@ -1686,7 +1717,8 @@ INLINE_SWITCH_DENY = (
 RESEARCHER_SWITCH_DENY = (
     "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only "
     "the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`), and "
-    "a `/probe` they typed has already moved it. `probe session status` prints where it landed."
+    "a `/probe` they typed has already moved it. `probe session status` prints where it landed. "
+    + SWITCH_DEFAULT_HINT
 )
 
 DAEMON_PROFILE_DENY = (
