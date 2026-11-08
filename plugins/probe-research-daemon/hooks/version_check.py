@@ -1629,7 +1629,7 @@ def _stale_manifest_notice(fetched_at, now=None) -> str | None:
     return (
         "Probe Research could not confirm your client version "
         f"(last successful check: {when}). Your install may be out of date. "
-        f"Run `probe doctor` to compare; to upgrade, {_session_marker.WIZARD_HINT}."
+        f"Run `probe doctor` to compare; to upgrade, {_session_marker.UPDATE_HINT}."
     )
 
 
@@ -1762,14 +1762,14 @@ def main() -> None:
         + (" && claude plugin update probe-research-tap@research-os-agent" if tap_stale else "")
     )
     # What to do, said two ways: `run_line` for the person, `tell` for the
-    # agent's instructions. The wizard is a sentence, not a command to paste
-    # after "Run:" -- no user-facing text names a `probe` setup command.
+    # agent's instructions. The person asks their agent; the agent runs the
+    # in-chat update itself (fixes-1107b: never the wizard or a terminal).
     if has_update_cmd:
-        run_line = f"To update, {_session_marker.WIZARD_HINT}"
-        tell = f"to {_session_marker.WIZARD_HINT}"
+        run_line = "To update, ask your agent to update Probe."
+        tell = _session_marker.UPDATE_HINT
     else:
         run_line = f"Run: {cmds}"
-        tell = f"to run `{cmds}`"
+        tell = f"run `{cmds}`"
     advisory = manifest.get("advisory")
 
     # THE ROUTINE NUDGE IS WHAT CHANGED AND WHAT TO RUN, AND NOTHING ELSE. It
@@ -1864,7 +1864,7 @@ def main() -> None:
         ctx = (
             f"The Probe Research client is out of date ({summary}) and known to "
             "misbehave at that version: features may fail until it is updated. "
-            f"Tell the user {tell}{then}, and say so "
+            f"Tell the user, and offer to {tell} for them{then}; say so "
             "again if they hit an error that could be explained by the stale "
             "client. This one is worth raising unprompted; do not repeat it more "
             "than once unless something fails."
@@ -1872,7 +1872,7 @@ def main() -> None:
     else:
         ctx = (
             f"The Probe Research client is out of date ({summary}). If the user wants "
-            f"to update, tell them {tell}{then}. "
+            f"to update, {tell} for them{then}. "
             "Do not nag; only act if they ask."
         )
 

@@ -20,7 +20,7 @@
 import { readFileSync } from "node:fs";
 
 import { tokenFile, TOKEN_ENV, type PathEnv } from "./paths.js";
-import { WIZARD_HINT } from "./wizardHint.js";
+import { SIGN_IN_HINT } from "./signInHint.js";
 
 export type PairingResult =
   | { paired: true; source: "device-token" | "env"; detail: string }
@@ -52,6 +52,6 @@ export function checkPairing(env: PathEnv = process.env): PairingResult {
     reason:
       `probe-research-pi: not paired — no device token at ${devicePath}, ` +
       `and ${TOKEN_ENV} is unset. ` +
-      `Pair this device (see the probe-research-pi README) or ${WIZARD_HINT}; skipping capture for this session.`,
+      `Pair this device (see the probe-research-pi README) or ${SIGN_IN_HINT}; skipping capture for this session.`,
   };
 }

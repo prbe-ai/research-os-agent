@@ -21,8 +21,8 @@ This skill only changes the state of Probe - it doesn't actually track any work.
 | `off` | no | no | Make no Probe calls about the work, reads included; Probe's own upkeep the researcher asks for still runs. This session's transcript is not captured (see FYI for what still uploads). Say you could not look; never report that no prior work exists. |
 
 Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
-press leaves it for `read`. Whether the Probe daemon records is set in
-`probe wizard`, not by this switch: `/probe daemon` changes nothing.
+press leaves it for `read`. Whether the Probe daemon records is the Who records
+setting, not this switch: `/probe daemon` changes nothing.
 
 Typing `/probe …` moves the switch itself. You move this chat's switch only when
 the researcher asks you to, never on your own: run `npx -y probe-research session status` first
@@ -67,7 +67,7 @@ beats it.
 
 **Machine-wide Defaults**
 
-Set by the wizard (`npx probe-research`). When the researcher asks to change
+Set at install. When the researcher asks to change
 what new chats start as, run `npx -y probe-research session default <on|read|off>`
 (add `--directed` for `read` or `off`, once they said yes) and say it applies to
 new chats only. `npx -y probe-research session status` reports it as `machine_default_state`.
@@ -77,5 +77,5 @@ new chats only. `npx -y probe-research session status` reports it as `machine_de
 When the researcher wants this machine's sessions kept out of Probe while Probe
 itself stays on (tracking, search, the MCP), run `probe capture off --directed`
 once they said yes; `probe capture on` turns them back on (its approval link is
-the researcher's to click). Never `probe wizard --no-capture` for this. Off is a choice, not a
+the researcher's to click). Never an install's `--no-capture` for this. Off is a choice, not a
 fault: `probe status` says who turned it off and when.

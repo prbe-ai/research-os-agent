@@ -1,161 +1,53 @@
 ---
-description: Install Probe Research on this device - sign in, connect the coding agents, and import work the team already has (saved sessions, project folders, W&B runs). Agent-safe, idempotent, headless-friendly.
+description: Set up Probe Research on this computer from this chat - sign in, connect the coding agents, and bring in work the team already has (past chats, project folders, W&B runs). Agent-run, idempotent; the person only answers questions and approves in the browser.
 ---
 
 # Set up Probe Research
 
-One command does the whole install:
+Fetch https://research.prbe.ai/install.md and follow it. It signs the person in (one
+browser approval), installs the CLI, sets Probe up in this computer's coding agents and
+offers to bring in past work. On a computer already set up it opens the menu instead:
+repair, switch Full / Runs only, settings, account, past work, update, uninstall.
+
+Run every command yourself, in this chat, and spell it `npx -y probe-research …` (`probe`
+may not be on PATH yet). Never hand the person a command to type: they answer your
+questions and click Allow in the browser tab sign-in opens.
+
+## The commands the pages use
 
 ```bash
-npx probe-research
+npx -y probe-research sign-in --json           # opens the approval tab; then:
+npx -y probe-research sign-in --wait --json    # waits for the approval and finishes the sign-in
+npx -y probe-research install --yes --json     # set up or reinstall, keeping every choice
+npx -y probe-research status --json            # what is set up here
+npx -y probe-research repair --json            # checks every part, fixes what is broken
+npx -y probe-research update --json            # the CLI and the plugins
 ```
 
-It signs the user in, installs the CLI, configures the coding agents on this machine, and
-opens a menu for importing work they already have.
+What records less (Runs only, new chats off, sign out, removing an agent, uninstall) also
+takes `--directed`, added only after the person said yes to it.
 
-**Show the user each command before running anything that writes** (installs, sign-in,
-editing a shell profile, plugin installs). Reads (`--version`, `--help`, `probe doctor`)
-do not need announcing.
-
-Safe for any coding agent and safe to re-run. Prefer resolved binary paths over bare names
-- the user may have aliases that break bare invocations.
-
-## 0. Preflight (reads only)
-
-- Needs `uv`, `curl`, `git`, `python3`. If `uv` is missing:
-  `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- `node` only for the `npx` launcher; `probe wizard` is the same thing once the
-  CLI is installed.
-- Claude Code users: check `claude --version` >= 2.1.195. The plugin's MCP
-  resolves its credential through a headers helper that older builds ignore.
-- Already installed? `probe doctor` prints what is on, what is stale, and
-  whether sign-in worked. Start there rather than reinstalling.
-
-## 1. Install and configure
+## Confirm
 
 ```bash
-npx probe-research          # install + guided setup
-probe wizard                # same menu, once the CLI exists
-probe wizard --action configure   # skip the menu, go straight to the guided install: tracking, capture, updates
-```
-
-**The flags are the contract; the menu is a front end over them.** An omitted flag
-preserves whatever is already configured, so `--yes` in CI never silently revokes a
-capability someone turned on.
-
-```
---agent claude|codex|pi|both   which coding agents to configure (both = claude+codex)
---tracking / --no-tracking     tracking skills + the read-only MCP search
---capture  / --no-capture      stream those agents' sessions to the knowledgebase
---agent-rules / --no-...       the managed Probe block in each agent's global instructions
---auto-update / --no-...       keep the CLI and plugins current
---yes                          skip the menu and prompts (headless)
-```
-
-Headless example:
-
-```bash
-probe wizard --agent both --tracking --capture --agent-rules --yes
-```
-
-## 2. Sign in
-
-Sign-in happens before the menu, so step 1 usually covers it. On its own:
-
-```bash
-probe wizard <auth_code>                         # the 10-character code the website hands you
-probe wizard --action login                      # browser handoff (RFC 8628), nothing to paste
-probe wizard --action login --token probe_pat_…  # air-gapped paste path
-probe wizard --action login --context staging    # a second endpoint or tenant on one machine
-```
-
-Only the researcher types `--token`, in their own terminal - never from an agent tool
-call: it would land in shell history and in the captured transcript. The tokens sit in
-plaintext in `~/.config/probe/config.json`.
-
-Switching accounts, or signing in as someone else on a device that already holds
-credentials:
-
-```bash
-probe wizard --action account    # sign in, switch to an account saved here, or sign out
-```
-
-**Do not gate success on the exit code alone.** Confirm independently:
-
-```bash
-probe doctor
-```
-
-## 3. Import work the team already has
-
-A fresh install sees only what happens next. Everything below runs as a background job you
-can leave and come back to.
-
-```bash
-probe wizard --action import-research   # the menu: sessions, a folder, or both
-probe wizard --action imports           # monitor, see results, resume interrupted work
-```
-
-**Saved coding sessions.** Past Claude Code / Codex / pi sessions already on disk,
-imported into the knowledgebase and searchable alongside everything else. Distinct from
-`--capture`, which streams sessions from now on - one is history, the other is the feed.
-
-```bash
-probe wizard --action transcripts
-```
-
-**A project folder.** Point it at work already done: it uploads what it finds, describes
-each artifact, and reports how much of the folder it accounted for. Large files
-(checkpoints, datasets) are recorded as references, not copied.
-
-```bash
-probe wizard --action backfill
-probe wizard --action backfill --folder /path/to/project   # headless
-```
-
-**W&B runs.** Mirrors one W&B run's metric history into an existing probe run, so it is a
-per-run command and not part of the wizard menu. Register or pick the probe run first,
-then:
-
-```bash
-probe import wandb …
-```
-
-To bring in a whole W&B project at once, into an existing Probe project (add `--dry-run`
-to see the plan first):
-
-```bash
-probe wandb import-local ROOT --project P             # W&B run folders already on this machine
-probe wandb import-hosted ENTITY WB_PROJECT --project P   # from W&B's servers
-```
-
-For a continuously mirrored W&B workspace rather than a one-off, that is an integration
-configured in the dashboard, not here.
-
-## 4. Confirm
-
-```bash
-probe doctor                   # install, sign-in, capture pairing, daemon health, staleness
-probe wizard --action diagnose # the same ground from the menu
-probe session status           # which state THIS conversation is in (on / daemon / read / off), and why
-probe mcp status               # where the read credential comes from, is it valid
-probe wizard --action imports  # did the background imports finish
+npx -y probe-research status --json   # account, agents, who records, versions, the daemon
+probe session status                  # which state THIS conversation is in (on / daemon / read / off), and why
+probe mcp status                      # where the read credential comes from, is it valid
 ```
 
 In a fresh agent session, the MCP is connected when its tools appear
 (`browse`, `entity`, `search`, `metrics`, `find_papers`, `query_sql`). Claude Code
 defers MCP tools, so they may be names only until something loads them.
 
-## Manual and air-gapped installs
+## The MCP wired by hand
 
 ```bash
-probe wizard --action login                        # sign in FIRST: it mints the read token the plugin's
-/plugin install probe-research@research-os-agent   # headers helper reads on first use
-probe wizard --action manual
+npx -y probe-research sign-in --json               # sign in FIRST: it mints the read token the plugin's
+npx -y probe-research sign-in --wait --json        # headers helper reads on first use
+/plugin install probe-research@research-os-agent
 ```
 
-Deliberately not in the menu - it is the rarest path. Use it when the browser handoff
-cannot work, or when the MCP has to be wired by hand:
+Use it when the MCP has to be wired by hand:
 
 - **Hosted HTTP:** add to the MCP config (`~/.claude.json` or a project
   `.mcp.json`):
@@ -169,35 +61,18 @@ cannot work, or when the MCP has to be wired by hand:
   `~/.claude.json` which outlives every rotation and silently wins over the
   token you just set.
 
-## Keeping it updated
-
-```bash
-probe wizard --action update --yes  # CLI + plugins
-probe wizard --action settings      # turn auto-update on
-probe wizard --action defaults      # the default Probe state (on / read / off); Who records (agent or daemon - daemon needs capture) sits beside it
-```
-
 The CLI and the plugins ship together. Running one without the other is the usual cause of
 a capability that is configured but does nothing.
-
-## Removing it
-
-```bash
-probe capture off                                         # session transcripts off; tracking and the MCP stay on
-probe capture on                                          # back on (a person approves; nothing written while off uploads)
-probe wizard --action configure --no-capture --uninstall  # stop capture AND remove the plugin
-probe wizard --action uninstall                           # remove Probe's plugins from the agents you pick, and sign this device out
-probe wizard --action logout                              # stop imports, revoke this token, clear local config
-```
 
 ## Security notes
 
 - The write token and the read-only MCP token are different credentials. The
   MCP one cannot write.
-- Allowing the daemon in `--action settings` mints a third token for it: it
-  can read and write, and its deletes go to the trash or ask the researcher
-  first (unless the agent runs with permission prompts off). Turning it off
-  there revokes it. Without that token the daemon cannot record: a session
-  it records for reads `on (daemon) | daemon not recording`.
+- Who records → the daemon mints a third token for it: it can read and write,
+  and its deletes go to the trash or ask the researcher first (unless the agent
+  runs with permission prompts off). Setting Who records back to the agent
+  revokes it, once no open session uses it. Without that token the daemon
+  cannot record: a session it records for reads `on (daemon) | daemon not recording`.
 - Never echo a token. `probe mcp status` reports health without printing it.
-- `probe wizard --action logout` revokes the calling token; it does not touch other devices.
+- Signing out (`npx -y probe-research wizard --action logout --yes --json --directed`)
+  revokes this computer's token; it does not touch other devices.

@@ -34,7 +34,7 @@ export const INLINE_READS =
 
 /** `session_marker.INLINE_READS_OLD_CLI`: beside an older CLI, or one whose version is unknown. */
 export const INLINE_READS_OLD_CLI =
-  "This session has no Probe MCP tools, and this machine's `probe` CLI is too old to read Probe here: ask the researcher to update it (`probe wizard --action update`).";
+  "This session has no Probe MCP tools, and this machine's `probe` CLI is too old to read Probe here: update it (`npx -y probe-research update --json`).";
 
 /** `version_check.INLINE_BRIDGE_MIN_CLI`: the first CLI with `probe mcp tools|call`. */
 export const INLINE_BRIDGE_MIN_CLI = "0.220.0";

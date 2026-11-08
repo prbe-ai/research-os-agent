@@ -42,8 +42,8 @@ if this session was read-only, keep it read-only and record nothing. The saved
 recorder preference stays unchanged. `/probe on` tries the daemon again.
 
 Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
-press leaves it for `read`. Whether the daemon is used at all is set in
-`probe wizard`, not by this switch.
+press leaves it for `read`. Whether the daemon is used at all is the Who records
+setting, not this switch.
 
 ## SAY WHERE IT LANDED:
 

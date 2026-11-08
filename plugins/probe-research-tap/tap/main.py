@@ -351,7 +351,7 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
             "no ingest token configured (PROBE_INGEST_TOKEN or ingest_token in %s); "
             "%s — skipping",
             cfg.probe_config_path(),
-            cfg.WIZARD_HINT,
+            cfg.SIGN_IN_HINT,
         )
         return 0
 

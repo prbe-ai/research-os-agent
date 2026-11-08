@@ -1479,7 +1479,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
       if (inDaemonProfile(s, sessionId)) {
         // The guard refuses every Probe MCP call in this profile, so tools
         // registered here would only be offered to be refused.
-        announce(ctx, "The Probe daemon reads for this session, so Probe's MCP tools stay off. Who records is set in probe wizard.", "info");
+        announce(ctx, "The Probe daemon reads for this session, so Probe's MCP tools stay off. To change who records, ask your agent.", "info");
         return;
       }
       const existing = transports.mcp.get(sessionId);

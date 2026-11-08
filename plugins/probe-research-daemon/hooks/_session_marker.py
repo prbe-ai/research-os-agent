@@ -84,12 +84,21 @@ MAX_LABEL_CHARS = 1024
 #: python can be older than the daemon's, and a newer emoji is unassigned there.
 _UNPRINTABLE = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs", "Co"})
 
-#: The ONE way any message sends a person to set up, sign in, update or repair
-#: this device: setup is wizard-only (Richard 2026-09-29), so no user-facing text
-#: names a `probe <setup command>`. Lives here because this file is the one every
-#: surface can reach (the SDK imports it, the plugin hooks vendor it); the tap and
-#: the pi extension carry copies that tests/test_wizard_hint_sync.py pins to it.
-WIZARD_HINT = "run the Probe wizard: probe wizard or npx probe-research"
+#: How a message sends someone to fix this device from the chat (fixes-1107b): the
+#: command the agent runs itself, never the wizard or "a terminal"
+#: (tests/test_no_terminal_handoff.py). Here because every surface reaches this file
+#: (the SDK imports it, the hooks vendor it); the tap, the pi extension, safe_warn and
+#: two shell scripts copy SIGN_IN_HINT (tests/test_sign_in_hint_sync.py).
+SIGN_IN_HINT = "run `npx -y probe-research sign-in --json`"
+UPDATE_HINT = "run `npx -y probe-research update --json`"
+#: The install, keeping every choice: it re-pairs capture and re-points the agents' MCP.
+INSTALL_HINT = "run `npx -y probe-research install --yes --json`"
+#: Checks every part of this machine's Probe and fixes what fails (the CLI's env included).
+REPAIR_HINT = "run `npx -y probe-research repair --json`"
+#: Who records -> the daemon again: its key from the sign-in, and its AI libraries. A
+#: `--who-records` change records less by the gate's rule, so only on the person's ask (UC2).
+DAEMON_HINT = ("ask your agent to set Who records to the daemon "
+               "(`npx -y probe-research install --yes --json --who-records daemon --directed`)")
 
 _ELLIPSIS = "…"  # …
 #: The status line's one glyph. Its colour says the kind of state (green on, yellow read, red broken); the words
@@ -1043,8 +1052,8 @@ STATE_WORDS = tuple(STATE_LABELS[state] for state in SWITCH_STATES)
 
 #: What a TYPED `daemon` gets back instead of a state change.
 DAEMON_SWITCH_REFUSAL = (
-    "Whether the Probe daemon records is set in `probe wizard` (Defaults › Who records), "
-    "not by this switch, which is on / read / off. Nothing changed."
+    "Whether the Probe daemon records is the Who records setting, not this switch, which is "
+    f"on / read / off: {DAEMON_HINT}. Nothing changed."
 )
 
 #: WHAT A PERSON READS: five states, no others (Richard 2026-11-06: "on
@@ -3754,7 +3763,7 @@ INLINE_READS = (
 #: agent to `No such command`.
 INLINE_READS_OLD_CLI = (
     "This session has no Probe MCP tools, and this machine's `probe` CLI is too old to read Probe "
-    "here: ask the researcher to update it (`probe wizard --action update`)."
+    "here: update it (`npx -y probe-research update --json`)."
 )
 
 
@@ -4419,15 +4428,15 @@ def _capture_reason(state: dict | None) -> str:
 CAPTURE_REASON_FIXES = {
     "running": "",
     "not started": "start a new chat; capture starts with the chat",
-    "not installed": WIZARD_HINT,
-    "not paired": WIZARD_HINT,
+    "not installed": INSTALL_HINT,
+    "not paired": INSTALL_HINT,
     "killswitch": "turn transcripts back on: probe capture on",
     "disabled path": "see probe doctor",
     "no session file": "see probe doctor",
-    "interpreter too old": WIZARD_HINT,
+    "interpreter too old": REPAIR_HINT,
     "halted": "see probe doctor",
     "turned off": "turn transcripts back on: probe capture on",
-    "awaiting install": WIZARD_HINT,
+    "awaiting install": INSTALL_HINT,
     "not recording": "the Probe service is retrying; see probe doctor",
     "Probe is off": "turn Probe on: /probe on",
 }
@@ -4437,7 +4446,7 @@ DAEMON_REASON_FIXES = {
     "stopped": "see probe doctor",
     "gateway": "check the network, then see probe doctor",
     "budget": "see probe doctor",
-    "unauthorized": WIZARD_HINT,
+    "unauthorized": DAEMON_HINT,
     "error": "see probe doctor",
     "disk_full": "free some disk space",
 }

@@ -53,7 +53,7 @@ import { defaultOAuthStorageDeps, ProbeOAuthClientProvider, type OAuthStorageDep
 import { jsonSchemaToTypeBox, prefixToolName } from "./mcpSchema.js";
 import { packageVersion } from "./packageVersion.js";
 import { MCP_SERVER_URL, MCP_URL_ENV, type PathEnv } from "./core/paths.js";
-import { WIZARD_HINT } from "./core/wizardHint.js";
+import { SIGN_IN_HINT } from "./core/signInHint.js";
 
 const CLIENT_INFO = { name: "probe-research-pi", version: packageVersion() };
 
@@ -347,7 +347,7 @@ export function mcpToolDeclarations(transport: McpTransport, deps: McpToolDeps):
         if (!fresh) {
           throw new Error(
             `Probe MCP tool "${tool.name}" failed: not authorized, and credentials could not be re-resolved. ` +
-              `To fix it, ${WIZARD_HINT}, or run \`/probe-mcp-login\` for an interactive re-authentication.`,
+              `To fix it, ${SIGN_IN_HINT}, or run \`/probe-mcp-login\` for an interactive re-authentication.`,
           );
         }
         return await callMcpTool(fresh, tool.name, params, deps.timeouts.callToolMs);
@@ -430,7 +430,7 @@ export async function connectMcp(deps: McpBridgeDeps): Promise<{ transport: McpT
     if (!provider.tokens()) {
       return {
         skipped:
-          `no Probe MCP token found — run \`/probe-mcp-login\` to authenticate interactively, or ${WIZARD_HINT}.`,
+          `no Probe MCP token found — run \`/probe-mcp-login\` to authenticate interactively, or ${SIGN_IN_HINT}.`,
       };
     }
     try {
@@ -513,7 +513,7 @@ export async function interactiveOAuthConnect(
       status: "requires-interactive",
       message:
         "No Probe MCP token found, and this session has no interactive UI to complete OAuth login. " +
-        `To fix it, ${WIZARD_HINT}, or retry \`/probe-mcp-login\` from an interactive pi session.`,
+        `To fix it, ${SIGN_IN_HINT}, or retry \`/probe-mcp-login\` from an interactive pi session.`,
     };
   }
 

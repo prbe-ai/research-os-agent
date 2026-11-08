@@ -282,7 +282,7 @@ done
 # wizard writes a token, the session heals on its own. The server knows the
 # placeholder (probe.mcp.server.NO_TOKEN_PLACEHOLDER; tests pin the two).
 #
-# The wording is probe.sdk.session_marker.WIZARD_HINT, inlined: a shell script
-# cannot import it (tests/test_wizard_hint_sync.py pins the two together).
-echo "no Probe MCP token: run the Probe wizard: probe wizard or npx probe-research" >&2
+# The wording is probe.sdk.session_marker.SIGN_IN_HINT, inlined: a shell script
+# cannot import it (tests/test_sign_in_hint_sync.py pins the two together).
+echo 'no Probe MCP token: run `npx -y probe-research sign-in --json`' >&2
 emit "probe-no-token"

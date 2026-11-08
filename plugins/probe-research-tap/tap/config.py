@@ -71,11 +71,10 @@ REVOKE_PATH = "/agent-tap/revoke"
 REVOKE_REASON_UNINSTALL = "uninstall"
 REVOKE_REASON_REPAIR = "repair"
 
-#: Where every message sends a person to set up or repair this device: setup is
-#: wizard-only (Richard 2026-09-29). A copy of probe.sdk.session_marker.WIZARD_HINT,
-#: because this plugin is stdlib-only and cannot import `probe`;
-#: agent/tests/test_wizard_hint_sync.py fails when the two differ.
-WIZARD_HINT = "run the Probe wizard: probe wizard or npx probe-research"
+#: How a missing or rejected credential is fixed from the chat (fixes-1107b). A copy of
+#: probe.sdk.session_marker.SIGN_IN_HINT, because this plugin is stdlib-only and cannot import
+#: `probe`; agent/tests/test_sign_in_hint_sync.py fails when the two differ.
+SIGN_IN_HINT = "run `npx -y probe-research sign-in --json`"
 
 # Env overrides for the credential pair. There is deliberately NO hardcoded
 # base-URL fallback: a baked-in default is exactly what silently broke the
@@ -365,7 +364,7 @@ def api_base_url() -> str:
     raise APIBaseURLUnset(
         "no backend base URL configured — pair this device with "
         "`python -m tap pair <token>` (the host is read from the token), "
-        f"{WIZARD_HINT}, or set {ENV_BASE_URL}"
+        f"{SIGN_IN_HINT}, or set {ENV_BASE_URL}"
     )
 
 

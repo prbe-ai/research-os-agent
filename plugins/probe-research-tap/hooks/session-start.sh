@@ -243,7 +243,7 @@ PYEOF
 )
     fi
     if [ -z "$HAS_TOKEN" ]; then
-        echo "[$(date -u +%FT%TZ)] probe-research-tap: no token configured; run 'python3 -m tap pair <token>' (or run the Probe wizard: probe wizard or npx probe-research); skipping" >>"$LOG_FILE"
+        echo "[$(date -u +%FT%TZ)] probe-research-tap: no token configured; run 'python3 -m tap pair <token>' (or "'run `npx -y probe-research sign-in --json`'"); skipping" >>"$LOG_FILE"
         printf '{"continue": true}\n'
         exit 0
     fi

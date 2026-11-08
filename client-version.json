@@ -1,16 +1,16 @@
 {
   "cli": {
-    "latest": "0.461.0",
+    "latest": "0.462.0",
     "min": "0.226.2",
     "recommended": "0.303.0",
-    "message": "This Probe CLI is missing a security fix and has stopped updating itself. Run probe wizard --action update in a terminal; if it says a setup is running, restart the computer first."
+    "message": "This Probe CLI is missing a security fix and has stopped updating itself. Ask your agent to update Probe (`npx -y probe-research update --json`); if it says a setup is running, restart the computer first."
   },
   "plugin": {
-    "latest": "0.233.0",
+    "latest": "0.234.0",
     "min": "0.125.0"
   },
   "tap": {
-    "latest": "0.10.67",
+    "latest": "0.10.69",
     "min": "0.9.17",
     "recommended": "0.9.14",
     "message": "Taps before 0.9.14 upload sessions in the older format, and taps before 0.9.13 also send what your own commands printed."
