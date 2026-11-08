@@ -13,6 +13,8 @@ Typing `/probe …` moves the switch itself, before you read this. Run
 You move this chat's switch only when the researcher asks you to, never on your
 own: `npx -y probe-research session state <on|read|off|inline> --directed`
 (`--directed` says they asked; a refusal without it is the reminder).
+In auto mode (a machine setting) the main agent sets this chat's state by the
+work; a typed `/probe` takes this chat back.
 When the researcher asks to change what new chats start as, run
 `npx -y probe-research session default <on|read|off>` (add `--directed` for `read`
 or `off`, once they said yes) and say it applies to new chats only.
@@ -25,13 +27,14 @@ or `off`, once they said yes) and say it applies to new chats only.
 ```
 
 `/probe inline` is the researcher's: you go inline only when they ask
-(`npx -y probe-research session state inline --directed`). The daemon stops, and
-you read and write Probe yourself, recording by the two skills the notice names;
-any other `/probe` move hands Probe back to the daemon. A session another program
-launched cannot start inline (no environment variable sets it): once it has
-started, the researcher asks the agent in that session. A session with no person
-in it (a worker, `claude -p`) is moved from a terminal with
-`probe session state inline --session <id>`.
+(`npx -y probe-research session state inline --directed`), unless the machine is
+in auto mode, where the main agent may run `probe session state inline` itself.
+The daemon stops, and you read and write Probe yourself, recording by the two
+skills the notice names; any other `/probe` move hands Probe back to the daemon.
+A session another program launched cannot start inline (no environment variable
+sets it): once it has started, the researcher asks the agent in that session. A
+session with no person in it (a worker, `claude -p`) is moved from a terminal
+with `probe session state inline --session <id>`.
 
 If the team's free daemon allowance runs out, Probe automatically hands this
 session to inline mode and tells you why. Record and read by the inline notice;

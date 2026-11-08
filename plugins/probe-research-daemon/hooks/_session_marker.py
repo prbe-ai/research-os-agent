@@ -1762,6 +1762,13 @@ SKILL_SWITCH_DENY = (
     + SWITCH_DEFAULT_HINT
 )
 
+#: The agent's own Skill-tool call of the switch in an auto chat (`is_auto_chat`): it moves the switch
+#: through `session state`, which keeps the move the agent's, so auto goes on.
+AUTO_SKILL_SWITCH = (
+    "`{matched}` was not run: Probe is in auto mode, so set this chat's state with "
+    "`probe session state <on|read|off|inline>`."
+)
+
 #: `toggle`, `track` and `untrack` from an agent, `--directed` or not (T3).
 SWITCH_FLIP_DENY = (
     "`{matched}` flips this chat's Probe switch, so a retry would undo itself: it was refused before it ran. "
@@ -1769,14 +1776,25 @@ SWITCH_FLIP_DENY = (
     + SWITCH_DEFAULT_HINT
 )
 
-DAEMON_PROFILE_DENY = (
-    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`). To ask about the team\'s prior work: `probe ask "<question>"`. If you need to do it yourself, ask the researcher to type `/probe inline`.'
+_DAEMON_PROFILE_DENY_HEAD = (
+    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`). To ask about the team\'s prior work: `probe ask "<question>"`. '
 )
+DAEMON_PROFILE_DENY = _DAEMON_PROFILE_DENY_HEAD + "If you need to do it yourself, ask the researcher to type `/probe inline`."
+#: ...and in an auto chat (`is_auto_chat`), where the agent takes Probe inline itself (probe auto mode).
+DAEMON_PROFILE_DENY_AUTO = _DAEMON_PROFILE_DENY_HEAD + "If you need to do it yourself, run `probe session state inline`."
 
 #: `DAEMON_PROFILE_DENY` for a WRITE: `--directed` admits one the researcher
 #: asked for, and the daemon's writer takes any other (`probe ask --writer`). A
 #: read keeps the plain text: no flag admits it, `probe ask` reads.
 DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY + " " + WRITER_RETRY
+DAEMON_PROFILE_DENY_WRITE_AUTO = DAEMON_PROFILE_DENY_AUTO + "\n\n" + DIRECTED_RETRY + " " + WRITER_RETRY
+
+
+def get_daemon_profile_deny(session_id: "str | None", is_write: bool = False) -> str:
+    """The daemon profile's refusal (unformatted): the auto mode one in an auto chat."""
+    if session_id and is_auto_chat(session_id):
+        return DAEMON_PROFILE_DENY_WRITE_AUTO if is_write else DAEMON_PROFILE_DENY_AUTO
+    return DAEMON_PROFILE_DENY_WRITE if is_write else DAEMON_PROFILE_DENY
 
 #: What the papers hook answers a paper-type web search it holds (`papers_hook.py`):
 #: at most once per `PAPER_FIND_WINDOW_S`, and never after `probe paper find` ran
@@ -1795,7 +1813,7 @@ def moves_switch(args: "list[str]") -> "str | None":
     return "probe " + two if two in RESEARCHER_SWITCH else None
 
 
-def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
+def daemon_profile_allows(args: "list[str]", session_id: "str | None" = None) -> "tuple[bool, str]":
     """`(allowed, matched)` for the args after `probe` in the daemon profile.
 
     A write carrying `--directed` is allowed, as the CLI's gate allows it in the
@@ -1814,10 +1832,10 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
     head = words[0]
     two = " ".join(words[:2])
     if two in RESEARCHER_SWITCH:
-        return (switch_refusal(args) is None, "probe " + two)
+        return (switch_refusal(args, session_id=session_id) is None, "probe " + two)
     upkeep = upkeep_command(args)
     if upkeep is not None:
-        return (not records_less(args) or carries_directed(args), "probe " + upkeep)
+        return (needs_directed(args) is None, "probe " + upkeep)
     if head in DAEMON_PROFILE_PLAIN_FLAGS:
         return (_runs_plainly(args, head), "probe " + head)
     for key in (" ".join(words[:3]), two, head):
@@ -1869,23 +1887,22 @@ def _flag_writes(args: "list[str]", flags: "frozenset[str]") -> bool:
     )
 
 
-def daemon_profile_deny(args: "list[str]", matched: str) -> str:
+def daemon_profile_deny(args: "list[str]", matched: str, session_id: "str | None" = None) -> str:
     """The refusal for args `daemon_profile_allows` refused: the switch is told
     how the agent sets it (`switch_refusal`), upkeep that records less to ask
     first (`DIRECTED_REQUIRED_DENY`), upkeep with a flag it may not pass which
     one (`UPKEEP_FLAG_DENY`, never `/probe inline`), a write that `--directed`
     runs it (`DAEMON_PROFILE_DENY_WRITE`)."""
-    switch = switch_refusal(args, RESEARCHER_SWITCH_DENY)
+    switch = switch_refusal(args, RESEARCHER_SWITCH_DENY, session_id)
     if switch is not None:
         return switch
     key, offender = _check_upkeep(args)
-    if key is not None and offender is None and records_less(args) and not carries_directed(args):
-        return DIRECTED_REQUIRED_DENY.format(matched=records_less(args))
+    if key is not None and offender is None and needs_directed(args):
+        return needs_directed(args)
     if key is not None and offender is not None:
         return UPKEEP_FLAG_DENY.format(matched="probe " + key, offender=offender)
     kind, _matched = classify_probe_args(args)
-    deny = DAEMON_PROFILE_DENY_WRITE if kind == "write" else DAEMON_PROFILE_DENY
-    return deny.format(matched=matched)
+    return get_daemon_profile_deny(session_id, is_write=kind == "write").format(matched=matched)
 
 
 # ---------------------------------------------------------------------------
@@ -1909,7 +1926,8 @@ UPKEEP_FLAG_RULES = {
     "install": ("--agent --tracking --capture --auto-update --agent-rules --yes -y --profile --json",
                 "--no-tracking --no-capture --no-auto-update --no-agent-rules <auth_code>"),
     "wizard": ("--agent --tracking --capture --auto-update --agent-rules --action --yes -y --no-browser "
-               "--who-records --reinstall --pending --recommended --session-default --attempt --profile --json",
+               "--who-records --reinstall --pending --recommended --session-default --session-control --attempt "
+               "--profile --json",
                "--no-tracking --no-capture --no-auto-update --no-agent-rules --channel --uninstall --folder "
                "--experimental --token --base-url --context --ingest-token --hmac-secret --endpoint-only "
                "<auth_code>"),
@@ -1936,6 +1954,7 @@ UPKEEP_FLAG_RULES = {
     "wandb key request": ("--json", ""),
     "wandb key receive": ("--request --wait --json", ""),
     "session default": ("<value>", "--folder"),
+    "session control": ("<value>", ""),
     "service start": ("--min-version --json", ""),
     "service stop": ("--json", ""),
     "service status": ("--json", ""),
@@ -1979,8 +1998,9 @@ PROBE_UPKEEP = {
     "service start": {"--json": 0, "--min-version": 1},
     "service status": {"--json": 0},
     "service stop": {"--json": 0},
+    "session control": {"<arguments>": 1},
     "session default": {"<arguments>": 1},
-    "setup": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
+    "setup": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-control": 1, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
     "status": {"--demo-choice": 1, "--json": 0, "--past-work-choice": 1, "--refresh": 0, "--repaste-choice": 1, "--timeout": 1},
     "uninstall": {"--backup-unsent": 0, "--discard-unsent": 0, "--force": 0, "--json": 0, "--yes": 0, "-y": 0},
     "update": {"--check": 0, "--plugin": 0, "--yes": 0, "-y": 0},
@@ -1991,7 +2011,7 @@ PROBE_UPKEEP = {
     "wandb key status": {},
     "wandb login": {},
     "whoami": {},
-    "wizard": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
+    "wizard": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-control": 1, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
 }
 # END PROBE_UPKEEP
 
@@ -2015,6 +2035,13 @@ DIRECTED_REQUIRED_DENY = (
     "`{matched}` makes Probe record less, so it was refused before it ran: from an agent it runs only with "
     "`--directed`. Ask the person first, saying what stops; add `--directed` only if they say yes, never on "
     "your own."
+)
+
+
+#: Turning auto mode on from an agent without `--directed` (`grants_auto`).
+AUTO_CONTROL_DENY = (
+    "`{matched}` lets the agent set every chat's Probe switch, so it was refused before it ran: from an agent "
+    "it runs only with `--directed`. Ask the person first; add `--directed` only if they asked for auto mode."
 )
 
 
@@ -2147,6 +2174,37 @@ def records_less(args: "list[str]") -> "str | None":
     return None
 
 
+def grants_auto(args: "list[str]") -> "str | None":
+    """What these args (after `probe`) run that turns auto mode on (`session control auto`, `--session-control
+    auto`), spelled for a refusal, else None. It hands every chat's switch to the agent, so from an agent it
+    runs only with `--directed`, after the person asked (`AUTO_CONTROL_DENY`). A word the shell still
+    expands there may be `auto`, so it counts."""
+    words = command_words(args)
+    if " ".join(words[:2]) == "session control" and len(words) > 2:
+        value = words[2]
+        if value.strip().lower() == CONTROL_AUTO or not _SHELL_EXPANSION_CHARS.isdisjoint(value):
+            return "probe session control " + value
+        return None
+    if not words or words[0] not in RECORDS_LESS_FLAG_HEADS:
+        return None
+    for value in _flag_values(args, "--session-control"):
+        if value.strip().lower() == CONTROL_AUTO or not _SHELL_EXPANSION_CHARS.isdisjoint(value):
+            return "probe " + words[0] + " --session-control " + value
+    return None
+
+
+def needs_directed(args: "list[str]") -> "str | None":
+    """The refusal for upkeep that runs from an agent only with `--directed` (what records less, or turns
+    auto mode on) and was run without it, else None."""
+    if carries_directed(args):
+        return None
+    lowering = records_less(args)
+    if lowering:
+        return DIRECTED_REQUIRED_DENY.format(matched=lowering)
+    granting = grants_auto(args)
+    return AUTO_CONTROL_DENY.format(matched=granting) if granting else None
+
+
 def _lowers_default(value: str) -> bool:
     """Does this new-chat default (`read`, `off`, a spelling of either) record less than `on`?"""
     return normalize_state(value) in (STATE_READ_ONLY, STATE_OFF)
@@ -2182,12 +2240,14 @@ def get_switch_session(args: "list[str]") -> "str | None":
     return values[-1] if values else None
 
 
-def switch_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY) -> "str | None":
+def switch_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY,
+                   session_id: "str | None" = None) -> "str | None":
     """What an agent's move of this chat's switch is refused with, or None (T3).
 
     `session state <target> --directed` runs (the person asked); without the
-    flag it is refused with `deny`; `session state` alone only prints it.
-    `toggle`, `track` and `untrack` flip it, so they never run from an agent.
+    flag it is refused with `deny`, unless `session_id` is in auto
+    (`is_auto_chat`: the agent sets it by the work); `session state` alone only
+    prints it. `toggle`, `track` and `untrack` flip it, so they never run from an agent.
     """
     matched = moves_switch(args)
     if matched is None:
@@ -2195,6 +2255,8 @@ def switch_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY) -> "str | 
     if matched != "probe " + SWITCH_SET:
         return SWITCH_FLIP_DENY.format(matched=matched)
     if get_switch_target(args) is None or carries_directed(args):
+        return None
+    if session_id and is_auto_chat(session_id):
         return None
     return deny.format(matched=matched)
 
@@ -2301,17 +2363,15 @@ def show_server(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
 
 
-def agent_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY) -> "str | None":
+def agent_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY,
+                  session_id: "str | None" = None) -> "str | None":
     """What every chat state refuses an agent before anything else (T2, T3): its
-    move of this chat's switch (`switch_refusal`), and what records less without
-    `--directed` (`DIRECTED_REQUIRED_DENY`). None when neither applies."""
-    switch = switch_refusal(args, deny)
+    move of this chat's switch (`switch_refusal`; `session_id` for auto), and what
+    records less without `--directed` (`DIRECTED_REQUIRED_DENY`). None when neither applies."""
+    switch = switch_refusal(args, deny, session_id)
     if switch is not None:
         return switch
-    lowering = records_less(args)
-    if lowering and not carries_directed(args):
-        return DIRECTED_REQUIRED_DENY.format(matched=lowering)
-    return None
+    return needs_directed(args)
 
 
 #: The refusals, shared by the guard hook and the CLI gate. Placeholders:
@@ -2330,6 +2390,92 @@ DENY_REASON_OFF = (
     "restores searching); a repeat request is not permission: do not ask them to approve this "
     "call, and do not route around it."
 )
+
+#: The two above in an auto chat (`is_auto_chat`), where the agent sets the state itself (probe auto mode).
+DENY_REASON_AUTO_OFF = (
+    "Probe is off for this chat (auto mode), so `{matched}` was refused before it ran. If this is ML work, "
+    "run `probe session state on` (or `read` to only look something up) and retry; if not, leave Probe alone."
+)
+DENY_REASON_AUTO_READ = (
+    "Probe is read-only for this chat (auto mode), so `{matched}` was refused before it ran. If this work "
+    "should be recorded, run `probe session state on` and retry."
+)
+
+
+def get_deny_reason(state: "str | None", session_id: "str | None") -> str:
+    """The off or read-only refusal (unformatted) for `state`: the auto mode one in an auto chat."""
+    is_auto = bool(session_id) and is_auto_chat(session_id)
+    if state == STATE_OFF:
+        return DENY_REASON_AUTO_OFF if is_auto else DENY_REASON_OFF
+    return DENY_REASON_AUTO_READ if is_auto else DENY_REASON
+
+
+# ---------------------------------------------------------------------------
+# AUTO MODE'S LINE ON EACH RESEARCHER PROMPT (probe auto mode): the main agent
+# sets an auto chat's state by the work, so every prompt says where it stands.
+# The hook (`tracking_guard`) adds it; pi hears it through the same route.
+# ---------------------------------------------------------------------------
+
+#: Words that mark a prompt as ML work (track-work's "What counts as ML work"), whole
+#: words, any case. A hit only adds `AUTO_PROMPT_MENTION` while off or read and never
+#: moves the switch, which is why a fixed list is fine here (Richard 2026-11-07).
+ML_PROMPT_TERMS = (
+    "train", "training", "fine-tune", "fine-tuning", "finetune", "rl", "reward", "eval", "evals",
+    "evaluation", "benchmark", "sweep", "ablation", "hyperparameter", "hyperparameters", "dataset",
+    "datasets", "checkpoint", "epoch", "epochs", "loss", "baseline", "arxiv", "paper", "papers",
+    "reproduce", "lora", "gpu", "wandb", "prompt engineering", "inference", "model", "accuracy",
+)
+_ML_PROMPT_TERM = re.compile(
+    r"\b(" + "|".join(r"\s+".join(re.escape(part) for part in term.split())
+                      for term in sorted(ML_PROMPT_TERMS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+#: The chat's first researcher prompt, at its seeded default (`{state}`).
+AUTO_FIRST_PROMPT_LINE = (
+    "Probe is {state} here (the researcher's default, auto mode). Set it before you start: ML work, data included, "
+    "is `on`."
+)
+AUTO_OFF_LINE = "Probe is off here (auto mode). If this request is ML work, data included, run `probe session state on` first."
+AUTO_READ_LINE = (
+    "Probe is read here (auto mode). To record this request's ML work, data included, run `probe session state on` first."
+)
+#: On (the daemon's or the agent's) or inline (`{state}`).
+AUTO_ON_LINE = "Probe is {state} here (auto mode). If the work has clearly left ML, run `probe session state off`."
+#: Added while off or read when the prompt names an ML word (`{word}`, as the prompt spells it).
+AUTO_PROMPT_MENTION = ' It mentions "{word}".'
+
+
+def make_auto_prompt_line(state: str, is_first: bool, prompt: str) -> str:
+    """The one line an auto chat's researcher prompt gets: where Probe stands (`state`: off, read,
+    on or inline), and, while off or read, the first ML word the prompt names. Pure: the hook and
+    the eval both call it."""
+    off, read = STATE_LABELS[STATE_OFF], STATE_LABELS[STATE_READ_ONLY]
+    if is_first:
+        line = AUTO_FIRST_PROMPT_LINE.format(state=state)
+    elif state == off:
+        line = AUTO_OFF_LINE
+    elif state == read:
+        line = AUTO_READ_LINE
+    else:
+        line = AUTO_ON_LINE.format(state=state)
+    found = _ML_PROMPT_TERM.search(prompt or "") if state in (off, read) else None
+    if found:
+        line += AUTO_PROMPT_MENTION.format(word=" ".join(found.group(0).split()))
+    return line
+
+
+def get_auto_state_word(session_id: str, state: "str | None") -> str:
+    """Stored `state` as `make_auto_prompt_line` names it: off, read, on (the daemon's or the
+    agent's own recording), or inline (the agent took Probe over from the daemon, `is_inline`)."""
+    if state is None or state == STATE_OFF:
+        return STATE_LABELS[STATE_OFF]
+    if state == STATE_READ_ONLY:
+        return STATE_LABELS[STATE_READ_ONLY]
+    if state == STATE_FULL and is_inline(session_id, state):
+        return INLINE_WORD
+    return STATE_LABELS[STATE_FULL]
+
 
 DENY_REASON_DAEMON = (
     "The Probe daemon is recording this conversation (the `daemon` state), so `{matched}` was "
@@ -2655,6 +2801,7 @@ def is_upkeep_refusal(args: "list[str]") -> bool:
     """Is this refused `probe` command Probe's own upkeep or install (what the spool counts)?"""
     own = [arg for arg in args if arg != DIRECTED_FLAG]
     return (_upkeep_key(command_words(own)) is not None or records_less(own) is not None
+            or grants_auto(own) is not None
             or moves_switch(own) is not None or saves_server(own) is not None)
 
 
@@ -3076,6 +3223,8 @@ def _set_session_state_locked(session_id: str, state: str, now: "float | None", 
     if explicit:
         _publish_atomically(state_source_path(session_id), SOURCE_EXPLICIT + "\n")
         _save_kept_out(session_id, state)
+        # Anyone's explicit move ends the agent's: the agent's own setter stamps it again (`set_state_by_agent`).
+        _remove_agent_move(session_id)
     elif was_default:
         # Rewritten AFTER the state, so the source is not older than it.
         _publish_atomically(state_source_path(session_id), SOURCE_DEFAULT + "\n")
@@ -3335,11 +3484,14 @@ def get_moved_by_path(session_id: str) -> Path:
     return sessions_dir() / (session_id + MOVED_BY_SUFFIX)
 
 
-def save_agent_move(session_id: str, state: str, now: "float | None" = None) -> bool:
-    """Record that the agent moved this chat to `state` (a stored state, or MOVED_TO_INLINE) just now."""
+def save_agent_move(session_id: str, state: str, now: "float | None" = None, *, is_auto: bool = False) -> bool:
+    """Record that the agent moved this chat to `state` (a stored state, or MOVED_TO_INLINE) just now.
+    `is_auto`: the chat was in auto (`is_auto_chat`), so it stays there, and the Stop hook says nothing
+    (the agent's own line says it)."""
     if not valid_session_id(session_id) or state not in STATES + (MOVED_TO_INLINE,):
         return False
-    stamp = {"by": MOVED_BY_AGENT, "at": time.time() if now is None else now, "state": state, "told": False}
+    stamp = {"by": MOVED_BY_AGENT, "at": time.time() if now is None else now, "state": state, "told": is_auto,
+             "auto": is_auto}
     return _publish_atomically(get_moved_by_path(session_id), json.dumps(stamp) + "\n")
 
 
@@ -3360,7 +3512,89 @@ def load_agent_move(session_id: str) -> "dict | None":
     stands = is_inline(session_id, current) if target == MOVED_TO_INLINE else current == target
     if not stands:
         return None
-    return {"state": target, "at": at, "told": stamp.get("told") is True}
+    return {"state": target, "at": at, "told": stamp.get("told") is True, "auto": stamp.get("auto") is True}
+
+
+def is_auto_chat(session_id: str, config: "dict | None" = None) -> bool:
+    """Does the main agent set this chat's switch (probe auto mode)? The machine is in auto and
+    the researcher has not set it in this chat: undecided, still its seeded default, or where the
+    agent put it while in auto. A typed `/probe` (a newer `.state`, an explicit source) ends it.
+    `config`: a caller's config (the service renders for its callers), this process's when None."""
+    if not valid_session_id(session_id) or not is_auto_machine(config):
+        return False
+    if session_state(session_id) is None or state_source(session_id) == SOURCE_DEFAULT:
+        return True
+    move = load_agent_move(session_id)
+    return move is not None and move["auto"]
+
+
+#: An auto chat's first researcher prompt has had its line (`claim_first_prompt`).
+AUTO_PROMPTED_SUFFIX = ".auto-prompted"
+
+
+def claim_first_prompt(session_id: str) -> bool:
+    """True once per chat: the first researcher prompt of an auto chat (the hook's first line,
+    `AUTO_FIRST_PROMPT_LINE`). Created exclusively, so two hooks never both claim it; an
+    unwritable folder claims nothing (the plain state line goes instead)."""
+    if not valid_session_id(session_id):
+        return False
+    path = sessions_dir() / (session_id + AUTO_PROMPTED_SUFFIX)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except OSError:
+        return False
+    return True
+
+
+#: What a run launch says when it turned an off or read auto chat on (`set_auto_chat_on`).
+RUN_LAUNCH_ON = "Probe turned on for this chat: you launched a run."
+
+
+def set_auto_chat_on(session_id: str, source: "str | None" = None) -> "str | None":
+    """A run launched through Probe (`probe exec`, `run start`, the SDK's run create) in an auto chat
+    that is off or read: set it on, stored by who records (`on_state`), as the agent's auto move. The
+    state stored, or None when nothing changed (an explicit off or read keeps the chat out)."""
+    target = on_state(session_id, source)
+    with _StateLock(session_id):
+        if not is_auto_chat(session_id) or session_state(session_id) not in (STATE_OFF, STATE_READ_ONLY):
+            return None
+        if not _set_session_state_locked(session_id, target, None, explicit=True):
+            return None
+        save_agent_move(session_id, target, is_auto=True)
+    return target
+
+
+def set_state_by_agent(session_id: str, state: str, *, is_directed: bool) -> "tuple[bool, bool]":
+    """The agent's own move of this chat's switch to `state` (a stored state), decided and written under
+    the chat's lock, so a `/probe` the researcher types at the same moment is never overwritten: it runs
+    when the person asked (`is_directed`) or the chat is in auto (`is_auto_chat`, read inside the lock).
+    `(moved, is_auto)`; the stamp (`save_agent_move`) is written with the state."""
+    if not valid_session_id(session_id) or state not in STATES:
+        return (False, False)
+    with _StateLock(session_id):
+        is_auto = is_auto_chat(session_id)
+        if not (is_auto or is_directed):
+            return (False, False)
+        if not _set_session_state_locked(session_id, state, None, explicit=True):
+            return (False, is_auto)
+        save_agent_move(session_id, state, is_auto=is_auto)
+    return (True, is_auto)
+
+
+def _remove_agent_move(session_id: str) -> None:
+    try:
+        get_moved_by_path(session_id).unlink()
+    except OSError:
+        pass
+
+
+def _hand_switch_to_researcher(session_id: str) -> None:
+    """The researcher set this chat's switch (`/probe`, pi's command, a terminal): it is theirs now,
+    whatever it already read: the agent's stamp goes and the source is explicit. The session's
+    `_StateLock` must be held (it is not reentrant)."""
+    _publish_atomically(state_source_path(session_id), SOURCE_EXPLICIT + "\n")
+    _remove_agent_move(session_id)
 
 
 def mark_agent_move_told(session_id: str) -> None:
@@ -3603,36 +3837,53 @@ def is_inline(session_id: str, state: "str | None" = None) -> bool:
     return _open_marker(session_id, state) is not None
 
 
-def switch_to_inline(session_id: str, now: "float | None" = None) -> bool:
-    """The researcher's `/probe inline` (never the agent's: callers only reach
-    this from a typed prompt, pi's command or a terminal). True when the session
-    is inline (in the agent profile: `on`) afterwards. In a daemon-profile
-    session: the marker (`from` the state before, `off` when there was none),
-    then `full`; a session already inline stays. A stretch closed earlier whose
-    log could not be written is logged first, or nothing moves: overwriting its
-    marker would hand that stretch back to the daemon."""
+def switch_to_inline(session_id: str, now: "float | None" = None, *, is_agent: bool = False,
+                     is_directed: bool = False) -> bool:
+    """`/probe inline`: the researcher's (a typed prompt, pi's command or a terminal), or with
+    `is_agent` the agent's own (`session state inline`: when the person asked, `is_directed`, or the
+    chat is in auto, read inside the lock). True when the session is inline (in the agent profile:
+    `on`) afterwards. In a daemon-profile session: the marker (`from` the state before, `off` when
+    there was none), then `full`; a session already inline stays, though the researcher's move still
+    makes the switch theirs (`_hand_switch_to_researcher`). A stretch closed earlier whose log could not be
+    written is logged first, or nothing moves: overwriting its marker would hand that stretch back to
+    the daemon."""
     if not valid_session_id(session_id):
         return False
     if session_profile(session_id) != RECORDER_DAEMON:
+        if is_agent:
+            return set_state_by_agent(session_id, STATE_FULL, is_directed=is_directed)[0]
         return set_session_state(session_id, STATE_FULL, now)
     with _StateLock(session_id):
-        state = session_state(session_id)
-        if is_inline(session_id, state) and state == STATE_FULL:
-            return True
-        stale = inline_marker(session_id)
-        if stale is not None and "until" not in stale and is_inline(session_id, state):
-            if _close_inline(session_id, stale, now) is not False:
-                return False
-        if stale is not None and "until" in stale and not _log_inline_interval(session_id, stale, stale["until"]):
+        is_auto = is_auto_chat(session_id)
+        if is_agent and not (is_auto or is_directed):
             return False
-        at = time.time() if now is None else now
-        prior = state if state in INLINE_FROM else STATE_OFF
-        if not _publish_atomically(inline_path(session_id), json.dumps({"from": prior, "since": at}) + "\n"):
+        moved = _enter_inline_locked(session_id, now)
+        if moved and is_agent:
+            save_agent_move(session_id, MOVED_TO_INLINE, is_auto=is_auto)
+        elif moved:
+            _hand_switch_to_researcher(session_id)
+    return moved
+
+
+def _enter_inline_locked(session_id: str, now: "float | None") -> bool:
+    """`switch_to_inline`'s move, with the session's `_StateLock` already held."""
+    state = session_state(session_id)
+    if is_inline(session_id, state) and state == STATE_FULL:
+        return True
+    stale = inline_marker(session_id)
+    if stale is not None and "until" not in stale and is_inline(session_id, state):
+        if _close_inline(session_id, stale, now) is not False:
             return False
-        if not _set_state_unlocked(session_id, STATE_FULL):
-            _remove_inline_marker(session_id)
-            return False
-        _save_kept_out(session_id, STATE_FULL)
+    if stale is not None and "until" in stale and not _log_inline_interval(session_id, stale, stale["until"]):
+        return False
+    at = time.time() if now is None else now
+    prior = state if state in INLINE_FROM else STATE_OFF
+    if not _publish_atomically(inline_path(session_id), json.dumps({"from": prior, "since": at}) + "\n"):
+        return False
+    if not _set_state_unlocked(session_id, STATE_FULL):
+        _remove_inline_marker(session_id)
+        return False
+    _save_kept_out(session_id, STATE_FULL)
     return True
 
 
@@ -5028,6 +5279,59 @@ def write_recorder(source: str, value: str) -> Path:
     return path
 
 
+#: Who sets a chat's switch (probe auto mode, 2026-11-07): `auto`, the main agent, by
+#: the work, until the researcher types `/probe` in that chat; `manual` (the key
+#: absent), the researcher, as before. Top level, beside the new-chat default.
+CONTROL_KEY = "session_control"
+CONTROL_AUTO = "auto"
+CONTROL_MANUAL = "manual"
+CONTROLS = (CONTROL_AUTO, CONTROL_MANUAL)
+
+
+def load_session_control(config: "dict | None" = None) -> str:
+    """This machine's control: `auto` only when the config says so, else `manual`. Never raises."""
+    data = _read_config() if config is None else config
+    defaults = data.get(DEFAULTS_KEY) if isinstance(data, dict) else None
+    value = defaults.get(CONTROL_KEY) if isinstance(defaults, dict) else None
+    return CONTROL_AUTO if value == CONTROL_AUTO else CONTROL_MANUAL
+
+
+def is_auto_machine(config: "dict | None" = None) -> bool:
+    return load_session_control(config) == CONTROL_AUTO
+
+
+def save_session_control(value: str) -> Path:
+    """Persist the control; returns the config path. Same file, lock and loader as
+    `write_recorder`; `manual` removes the key (absent is manual)."""
+    if value not in CONTROLS:
+        raise ValueError(f"expected one of {CONTROLS}, got {value!r}")
+    from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
+        CONFIG_VERSION,
+        DEFAULT_CONTEXT,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    path = config_path()
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(target, strict=True, migrate=True) or {
+            "version": CONFIG_VERSION,
+            "current_context": DEFAULT_CONTEXT,
+            "contexts": {},
+        }
+        defaults = data.get(DEFAULTS_KEY)
+        data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
+        if value == CONTROL_AUTO:
+            data[DEFAULTS_KEY][CONTROL_KEY] = CONTROL_AUTO
+        else:
+            data[DEFAULTS_KEY].pop(CONTROL_KEY, None)
+        _save_json_file(target, data, private=True, _resolved=True)
+    return path
+
+
 #: Images pasted into a prompt upload with the captured session (2026-10-12):
 #: on unless this machine turned it off. The capture tap reads the same key
 #: (`tap/config.py` `pasted_images_on`) before it uploads one.
@@ -5150,6 +5454,11 @@ def _recording_labels(
     return _LABEL_DAEMON_DEGRADED, _LABEL_DAEMON_DEGRADED_BARE
 
 
+def _add_auto_tag(label: str) -> str:
+    """`label` with auto mode named inside its parentheses: `on (daemon, auto)`, `read only (inline, auto)`."""
+    return label.replace(")", ", auto)", 1) if ")" in label else label + " (auto)"
+
+
 def _no_capture_clause(reason: str, label_bare: str = _LABEL_INLINE_BARE) -> str:
     """The `· not capturing session transcript: …` suffix, as it hangs off
     `label_bare`.
@@ -5197,8 +5506,12 @@ def render(
     daemon: bool = False,
     inline: bool = False,
     lowered: str = "",
+    is_auto: bool = False,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
+
+    `is_auto`: the agent sets this chat's switch (probe auto mode): its labels say `auto`, and an
+    off chat shows no segment at all.
 
     `lowered`: what the agent lowered on this computer and is lowered still (`STATUS_WORDS`, less
     its `Probe: `), said after the label in place of the project (fixes-1107b PR B).
@@ -5254,10 +5567,14 @@ def render(
         #
         # `session_state=None` is a caller from before the third state: its
         # "not tracking" always meant read-only (yellow; red is for `off`).
+        if is_auto and session_state == STATE_OFF and not lowered:
+            return ""  # auto mode: an off chat is not Probe's to show (Richard, 2026-11-07), unless the agent lowered a setting
         label, hue = _STATE_SEGMENT.get(session_state, _STATE_SEGMENT[STATE_READ_ONLY])
         if daemon and not inline and session_state == STATE_READ_ONLY:
             # The daemon still reads for this session; it records nothing.
             label = DAEMON_STATE_DISPLAY[STATE_READ_ONLY]
+        if is_auto:
+            label = _add_auto_tag(label)
         return _INDENT + _paint(_DOT, hue, color) + " " + label + _render_lowered_clause(lowered)
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact
@@ -5270,6 +5587,8 @@ def render(
         reason = ""
     head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
     label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason, inline)
+    if is_auto:
+        label_tracked, label_bare = _add_auto_tag(label_tracked), _add_auto_tag(label_bare)
     if lowered:
         return head + label_bare + _render_lowered_clause(lowered)
 

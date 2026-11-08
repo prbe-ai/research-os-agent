@@ -128,6 +128,30 @@ describe("every turn goes to the service", () => {
     expect(fake.requests.find((r) => r.method === "hooks.ack")!.params).toEqual({ receipt: "cd".repeat(16), shown: true });
   });
 
+  it("hands an off auto chat's prompt to the service for its one line, and nothing else (probe auto mode)", async () => {
+    let auto = true;
+    const fake = await serve((request) => {
+      if (request.method === "session.initialize") {
+        const sid = (request.params as Record<string, unknown>).sid;
+        return { result: { state: { session_id: sid, tracking: false, signal: "off", seeded: true, source: "machine", state: "off", auto } } };
+      }
+      if (eventOf(request) === "before_agent_start") {
+        return { result: answer({ actions: [{ kind: "message", text: "Probe is off for this chat (auto mode)." }, { kind: "system_prompt", text: "TEAM NOTE" }] }) };
+      }
+      return { result: answer({ actions: [] }) };
+    });
+    const first = await start();
+    const turn = await first.on("before_agent_start")({ prompt: "fix the CSS", systemPrompt: "BASE", systemPromptOptions: {} }, first.ctx);
+    expect(turn).toEqual({ message: { customType: "probe-daemon", content: "Probe is off for this chat (auto mode).", display: false } });
+    expect(forwarded(fake)).toContain("before_agent_start");
+    // The researcher's own off chat (not auto): nothing of Probe rides the prompt.
+    auto = false;
+    const asked = forwarded(fake).length;
+    const second = await start();
+    expect(await second.on("before_agent_start")({ prompt: "fix the CSS", systemPrompt: "BASE", systemPromptOptions: {} }, second.ctx)).toBeUndefined();
+    expect(forwarded(fake).slice(asked)).toEqual(["session_start"]);
+  });
+
   it("asks the service's pre-tool routes, and only them: pi's own guard does not run", async () => {
     const fake = await serve((request) => (eventOf(request) === "tool_call"
       ? { result: answer({ actions: [{ kind: "block", text: "`bash` refused by the routes" }] }) }

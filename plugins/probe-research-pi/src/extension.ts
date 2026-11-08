@@ -75,6 +75,7 @@ import {
   ProbeState,
   Recorder,
   trackingStatusText,
+  autoFooter,
   type CaptureReading,
   type ProbeStateValue,
   type RecorderValue,
@@ -170,6 +171,11 @@ export interface SessionState {
      */
     trackingOff: { sessionId: string; off: boolean } | undefined;
     /**
+     * Probe auto mode: the main agent sets this session's switch (`session initialize`'s `auto`).
+     * Keyed by session like `profile`; absent is not auto.
+     */
+    auto: { sessionId: string; auto: boolean } | undefined;
+    /**
      * The daemon's health as the researcher last heard it, in the daemon profile:
      * `status` null until the first notice-worthy reading, `prompts` for the
      * not-started grace. See `profile.ts::researcherDaemonNotice`.
@@ -226,6 +232,7 @@ function freshSession(): SessionState {
       tracking: undefined,
       profile: undefined,
       trackingOff: undefined,
+      auto: undefined,
       daemonHealth: undefined,
       lastTurnInDaemon: false,
     },
@@ -280,8 +287,14 @@ function trackingOffFor(s: SessionState, sessionId: string | undefined): boolean
   return sessionId !== undefined && s.probe.trackingOff?.sessionId === sessionId && s.probe.trackingOff.off;
 }
 
-/** The footer for this session: in `daemon`, it reads the lease file. */
+/** The footer for this session: in `daemon`, it reads the lease file; an auto chat's is tagged or hidden. */
 function footerText(s: SessionState, sessionId: string, daemonLive?: boolean): string | undefined {
+  // An off auto chat's footer stays when the agent lowered a setting: that line is the warning.
+  const isQuietOff = probeIsOff(s) && !loweredSuffix(s.probe.tracking?.lowered);
+  return autoFooter(manualFooterText(s, sessionId, daemonLive), isAutoChat(s, sessionId), isQuietOff);
+}
+
+function manualFooterText(s: SessionState, sessionId: string, daemonLive?: boolean): string | undefined {
   const cached = s.probe.tracking;
   if (!cached) return undefined;
   const live =
@@ -306,6 +319,11 @@ function footerText(s: SessionState, sessionId: string, daemonLive?: boolean): s
 /** Has the researcher switched Probe off for this session? */
 function probeIsOff(s: SessionState): boolean {
   return s.probe.state === ProbeState.Off;
+}
+
+/** Does the main agent set this session's switch (probe auto mode), as the CLI last said? */
+function isAutoChat(s: SessionState, sessionId: string | undefined): boolean {
+  return sessionId !== undefined && s.probe.auto?.sessionId === sessionId && s.probe.auto.auto;
 }
 
 /** A tool call's input fields the service's guard never reads (the body of a write or an edit): never sent
@@ -548,6 +566,7 @@ async function refreshTrackingStatus(
     }
   }
   s.probe.profile = { sessionId, profile: state.profile };
+  s.probe.auto = { sessionId, auto: state.auto };
   if (ctx.hasUI) {
     try {
       ctx.ui.setStatus("probe-tracking", footerText(s, sessionId));
@@ -1051,14 +1070,31 @@ export function prepareExtension(env: ImplEnv): Candidate {
     return { systemPrompt: parts.join("\n\n"), message: effects?.messages.length ? effects.messages.join("\n\n") : null };
   }
 
+  /**
+   * Probe auto mode, an off chat: the turn's prompt through the service for its one line on where
+   * this chat's Probe stands (the guard's prompt route), as a hidden message. Never the team note or
+   * the session-start context: nothing else of Probe rides an off chat's prompt.
+   */
+  async function forwardAutoLine(event: any, ctx: any, sessionId: string) {
+    const answer = await forwarder.send(ForwardedEvent.BeforeAgentStart, ctx, { prompt: event.prompt, agent_dir: piConfigRoot(process.env) });
+    if (!wasAccepted(answer)) return undefined;
+    const effects = answeredEffects(answer);
+    if (effects?.receipts.length) setImmediate(() => void forwarder.settle(effects, true));
+    if (!effects?.messages.length) return undefined;
+    logLine(`auto mode line for ${sessionId}`);
+    return { message: { customType: "probe-daemon", content: effects.messages.join("\n\n"), display: false } };
+  }
+
   const onBeforeAgentStart: EventHandler = async (event, ctx) => {
     // Not awaited: the prompt must not wait on a footer read.
     void rereadPendingCapture(ctx, "before_agent_start");
     const sessionId = ctx?.sessionManager?.getSessionId();
     // `probe session state inline` from a terminal moves the switch on disk
     // without a typed `/probe`: read it back, or a cached `off` would return
-    // below before the agent hears it is inline.
-    if (sessionId && ctx && s.probe.state !== ProbeState.Full && inDaemonProfile(s, sessionId) && sessionIsInline(sessionId)) {
+    // below before the agent hears it is inline. In an auto chat the agent
+    // moves an off switch from its own shell, so an off reading is read back too.
+    if (sessionId && ctx && ((s.probe.state !== ProbeState.Full && inDaemonProfile(s, sessionId) && sessionIsInline(sessionId))
+      || (probeIsOff(s) && isAutoChat(s, sessionId)))) {
       await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
     }
     forwarder.beginTurn(sessionId);
@@ -1081,7 +1117,9 @@ export function prepareExtension(env: ImplEnv): Candidate {
       }
       deactivateProbeTools(api);
     }
-    if (probeIsOff(s) || !sessionId) return;
+    if (!sessionId) return;
+    // An off auto chat still hears the service's line on where Probe stands; nothing else rides it.
+    if (probeIsOff(s)) return isAutoChat(s, sessionId) ? await forwardAutoLine(event, ctx, sessionId) : undefined;
     // The service builds the prompt's additions (the team note, daemon reads and notices included);
     // one it did not answer goes on with no change (service-only task 16).
     const forwarded = await forwardPrompt(event, ctx, sessionId, event.systemPrompt);

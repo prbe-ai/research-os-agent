@@ -85,6 +85,11 @@ export interface TrackingState {
    * fixes-1107b PR B). Absent when nothing is, or from a CLI that predates it.
    */
   lowered?: string;
+  /**
+   * The main agent sets this chat's switch (probe auto mode: the machine is in auto and the
+   * researcher has not typed `/probe` here). False from a CLI that predates it.
+   */
+  auto: boolean;
 }
 
 export interface TrackingExecOptions {
@@ -208,6 +213,7 @@ export async function initializeTrackingState(
           ? value.retired_config_notice
           : undefined,
       lowered: parseLowered(value.recording_lowered),
+      auto: value.auto === true,
     };
   } catch (err) {
     deps.log(
@@ -322,6 +328,16 @@ export function loweredSuffix(lowered?: string): string {
  * cannot run (it is capture's child), so that line keeps the shorter label.
  * `daemonReads`: a read-only session whose reader is the daemon's.
  */
+/**
+ * The footer in an auto chat (probe auto mode: the main agent sets the switch): hidden while off,
+ * else its label says `auto` (`on (daemon, auto)`). Unchanged in a manual chat.
+ */
+export function autoFooter(text: string | undefined, isAuto: boolean, isOff: boolean): string | undefined {
+  if (!isAuto || text === undefined) return text;
+  if (isOff) return undefined;
+  return text.includes(")") ? text.replace(")", ", auto)") : `${text} (auto)`;
+}
+
 export function trackingStatusText(
   tracking: boolean,
   capture?: CaptureReading,

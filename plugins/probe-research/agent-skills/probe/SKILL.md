@@ -30,6 +30,9 @@ the researcher asks you to, never on your own: run `npx -y probe-research sessio
 `npx -y probe-research session state <on|read|off> --directed` (`--directed` says
 they asked; a refusal without it is the reminder).
 
+In auto mode (a machine setting) the main agent sets this chat's state by the
+work; a typed `/probe` takes this chat back.
+
 FYI:
 
 - Moving the switch never deletes anything and never backfills anything. An

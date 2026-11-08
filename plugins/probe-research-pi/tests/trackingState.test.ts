@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  autoFooter,
   initializeTrackingState,
   loweredSuffix,
   parseLowered,
@@ -40,7 +41,20 @@ describe("initializeTrackingState", () => {
       profile: Recorder.Agent,
       seeded: true,
       source: "/repo/.probe/config.json",
+      // ...and no `auto`: the researcher sets the switch.
+      auto: false,
     });
+  });
+
+  it.each([
+    { sent: true, read: true },
+    { sent: false, read: false },
+    { sent: "true", read: false },
+    { sent: undefined, read: false },
+  ])("reads auto $sent as $read (probe auto mode), and never fails the payload over it", async ({ sent, read }) => {
+    const answer = { session_id: "pi-session-1", tracking: false, signal: "off", seeded: true, source: "machine", auto: sent };
+    const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
+    expect(state?.auto).toBe(read);
   });
 
   it.each([
@@ -155,5 +169,20 @@ describe("trackingStatusText", () => {
     expect(trackingStatusText(true, { running: false, reason: "halted" })).toBe(
       "◐ on (inline) · not capturing session transcript: halted",
     );
+  });
+});
+
+describe("autoFooter (probe auto mode)", () => {
+  it("hides an auto chat's off and tags its other labels", () => {
+    expect(autoFooter("○ off", true, true)).toBeUndefined();
+    expect(autoFooter("● on (daemon)", true, false)).toBe("● on (daemon, auto)");
+    expect(autoFooter("○ read only (inline)", true, false)).toBe("○ read only (inline, auto)");
+  });
+  it("keeps an off auto chat's footer when the caller says it carries a warning", () => {
+    expect(autoFooter("○ off · new chats off", true, false)).toBe("○ off · new chats off (auto)");
+  });
+  it("leaves a manual chat's footer as it was", () => {
+    expect(autoFooter("○ off", false, true)).toBe("○ off");
+    expect(autoFooter(undefined, true, false)).toBeUndefined();
   });
 });
