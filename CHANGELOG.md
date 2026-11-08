@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Codex no longer shows a "warnings" badge for Probe's hooks (tap 0.10.70).** The capture plugin's session-end hook asked Codex for 20 s, the time Claude Code needs; Codex allows a session-end hook 3 s, so on every start it said "clamping SessionEnd hook timeout to 3s", even where that hook is switched off. Codex now reads the plugin's own `hooks/codex.json`: the same hooks, with the session-end one at 3 s. Nothing changes in what runs: Codex already stopped that hook at 3 s, the hook waits at most 2.6 s there, and the Probe service finishes the session's last upload whether or not the hook is still waiting. Claude Code keeps its 20 s. A Codex still on Probe's older hooks approves the renamed entries at the next Probe update, as after any plugin update.
+- **A past-work import leaves out chats that started off because new chats did, again.** When new chats start off, a chat that began off and was never switched is no longer in `probe import review` (`--chats-all`, `--chats-*`, the install's past-work offer, `probe import folders`, the wizard's import and the Mac app's review), as before 0.454.0; it counts among the chats the consent names as switched off. Chats switched to read or off on purpose, and the kept-out list, stay out as before. The one exception is the missed-chats offer (`import review --sessions missed`): it still brings in the chats that started off during a stretch your agent turned recording down. A chat turned on later is a chat like any other.
 
 ## 0.463.0
 
