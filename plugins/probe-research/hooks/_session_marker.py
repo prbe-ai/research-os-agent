@@ -1368,6 +1368,8 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: governed (see `version_check._spawn_session_maintenance`); `project use` only sets the
 #: local default project. `wandb discover` scans a local folder and `wandb key
 #: set|status` and `wandb login` store or check a local credential: none of them talks to Probe.
+#: `wandb key request|receive` (the W&B key drop, fixes-1107b T5) hand that local credential over from
+#: the person's browser: they write no record of the work either.
 #: `example keep` ends the live example's hold on this chat (its pins) and marks it
 #: kept: cleanup, like its delete, so it stays possible in every state.
 #: `import folders|review|status` read this computer's chats, folders and import jobs and save a
@@ -1375,7 +1377,7 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: person asks for (`--directed` in a daemon chat; refused in a `read` or `off` one, D51).
 UNGATED_COMMANDS = frozenset(
     {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status", "wandb login",
-     "example keep", "import folders", "import review", "import status"}
+     "wandb key request", "wandb key receive", "example keep", "import folders", "import review", "import status"}
 )
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
@@ -1903,6 +1905,8 @@ UPKEEP_FLAG_RULES = {
     "wandb discover": ("<root>", ""),
     "wandb key set": ("--key", ""),
     "wandb key status": ("", ""),
+    "wandb key request": ("--json", ""),
+    "wandb key receive": ("--request --wait --json", ""),
     "session default": ("<value>", "--folder"),
     "service start": ("--min-version --json", ""),
     "service stop": ("", ""),
@@ -1952,6 +1956,8 @@ PROBE_UPKEEP = {
     "uninstall": {"--backup-unsent": 0, "--discard-unsent": 0, "--force": 0, "--json": 0, "--yes": 0, "-y": 0},
     "update": {"--check": 0, "--plugin": 0, "--yes": 0, "-y": 0},
     "wandb discover": {"<arguments>": 1},
+    "wandb key receive": {"--json": 0, "--request": 1, "--wait": 0},
+    "wandb key request": {"--json": 0},
     "wandb key set": {"--key": 1},
     "wandb key status": {},
     "wandb login": {},

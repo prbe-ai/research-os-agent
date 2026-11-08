@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe wandb key request` and `probe wandb key receive --request <id> --wait --json` save a person's W&B key to `~/.netrc` with no terminal (fixes-1107b T5).** The person pastes the key in a browser page (research.prbe.ai/wandb-key); it travels encrypted to a one-time key pair made on this computer, is checked with W&B, written to the `api.wandb.ai` entry only (other entries and macros kept, `$NETRC` honoured, 0600, under a lock), read back, and only then reported saved. `receive` stops at the agent's 110 s with `run_again`. From an agent's chat, `wandb login` and `wandb key set` answer `use_key_drop` (exit 3) instead of a hidden prompt, and `wandb key set --key <value>` answers `secret_in_argv`. New reasons: `use_key_drop`, `secret_in_argv`, `wandb_key_expired`, `wandb_key_used`, `wandb_key_rejected`, `wandb_key_save_failed`.
+
 ## 0.453.0
 
 - npx launcher 0.28.0: every command the install pages run from a chat (Probe's own upkeep as `--json` or `--directed`, this chat's switch `session state`, the new-chat default `session default`, the W&B key) now runs on CLI 0.452.0 or newer, so a computer with an older Probe gets the release that lets its agent manage Probe from any chat instead of a `daemon_chat` refusal. The launcher reads the upkeep list from the CLI's own `upkeep.json`; the same commands from your own terminal run on whatever Probe is installed, as before. It also publishes T7's sign-in change: the agent's sign-in sends `prior_email` and `prior_team_id`, so the approval tab says which account and team the computer moves from.
