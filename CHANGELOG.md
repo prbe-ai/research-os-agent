@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A daemon-recorded chat in the Cursor app is held to the daemon's rules until the app's window closes, as a chat in any other agent is (T8).** The Cursor app runs its agent in an extension host (`cursor` on Linux, `Cursor Helper (Plugin)` on macOS). The Probe service's caller check knew only the Cursor CLI's process name, so it never remembered an app chat's agent as daemon-recorded, and a chat could drop that by registering again in another mode. The check now takes every process name a harness's hook routes pick a chat's owner by. Measured on the Linux app (3.29.9) in a throwaway HOME against a local stack: Probe's plugin, always-applied rule, skills and `/probe` load and work there, its hooks fire for app chats, the app exports the chat's id to the agent's shell (`CURSOR_CONVERSATION_ID`), and the service records app chats. The install's report now says the Cursor status line is in the Cursor CLI only, since the app has none.
+
 ## 0.450.0
 
 - **`outbox.drained` now counts writes the server refused for the values they carried (`dead_lettered_invalid_request`).** A queued write the server answers with its field-by-field 422 (an artifact name with a leading `/`, say) is the caller's mistake, not a lost write, and the delivery-loss alert no longer posts a drain whose every dead letter is one of those or a "run not found". A 422 the client raises itself (its staged bytes are gone) still counts as a loss.
