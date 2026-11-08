@@ -428,18 +428,6 @@ function addAutoTag(words: string, reading: FooterReading): string {
   return reading.isAuto ? words.replace(/\)$/, ", auto)") : words;
 }
 
-/** The footer word for a chat Probe is off for (`get_state_words`' `off`). */
-export const OFF_LABEL = "off";
-
-/**
- * The footer for a chat Probe is off for: `○ off` (`○ off (auto)` in an auto chat), then a lowering note. Drawn,
- * not hidden: the status line's row stays whatever it prints, so it says off (Richard, 2026-11-08).
- */
-export function renderOffFooter(reading: Pick<FooterReading, "lowered" | "isAuto">): string {
-  const words = reading.isAuto ? `${OFF_LABEL} (auto)` : OFF_LABEL;
-  return joinFooter(READ_DOT, words, getLoweredNote(reading.lowered));
-}
-
 /** The footer for a session Probe is not off for: `● on (daemon)`, `○ read (inline) | runs only`. */
 export function renderFooter(reading: FooterReading): string {
   // An inline session records (the agent does) even while a cached reading from before `/probe inline` says `read`.

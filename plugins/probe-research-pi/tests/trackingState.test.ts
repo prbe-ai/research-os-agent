@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  renderOffFooter,
   Configured,
   getLoweredNote,
   initializeTrackingState,
@@ -247,10 +246,3 @@ describe("renderFooter in an auto chat (probe auto mode)", () => {
   });
 });
 
-describe("renderOffFooter", () => {
-  it("says off, auto when the agent sets it, and the agent's lowering", () => {
-    expect(renderOffFooter({})).toBe("○ off");
-    expect(renderOffFooter({ isAuto: true })).toBe("○ off (auto)");
-    expect(renderOffFooter({ lowered: "Probe: new chats off" })).toBe("○ off | new chats off");
-  });
-});
