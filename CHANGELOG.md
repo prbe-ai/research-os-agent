@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- npx launcher 0.29.0: the install pages' commands now run on CLI 0.457.0 or newer, which has the past-chat narrowing (`import review --chats-agent|--chats-since|--chats-folder`), the W&B key drop (`wandb key request|receive`), the record-lowering notices and `--sessions missed`, and the confirmed `service stop`; a computer with an older Probe gets that release for the pages' calls instead of "No such option".
+
 ## 0.457.0
 
 - **More than 10,000 past chats are narrowed in the chat, never in a terminal picker (fixes-1107b T6a).** `probe import review` takes `--chats-agent <agent>` (repeatable), `--chats-since <YYYY-MM-DD>` and `--chats-folder <path>` (repeatable; the folder or below it), each implying `--sessions all`, and the consent gains one line naming the narrowing. `too_many_chats` no longer says "Pick them in a terminal": it carries `count`, `max_chats` and `narrow` (chats per agent, the top 5 folders, each month newest first, and `since`, the earliest first-of-month from which the chats fit in one review), and a narrowing that matches nothing answers `incomplete` with the same counts for every chat. A day or agent the CLI cannot read is one JSON line, never stderr only.
