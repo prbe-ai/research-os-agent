@@ -11,13 +11,15 @@
  *    `finishHostedSession()`, the `tap finish` half of it, through the service.
  *  - The footer's re-read until a recorder claims the session (`recheckUntilClaimed`), and the
  *    sentinel pruning: a pi-only install has no session-start.sh to prune them.
+ *  - The service's worker stamp (`loadWorkerStamp`, `getStartingEndMs`): a daemon with no lease yet
+ *    is starting for DAEMON_START_GRACE_MS, then the footer says `daemon not recording`.
  */
 
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 import { hostedServicePid } from "./hosted.js";
-import { hostedFile, pidFile, shutdownSentinelFile, WATCHER_PREFIX, watcherDir, type PathEnv } from "./paths.js";
+import { hostedFile, pidFile, probeStateDir, shutdownSentinelFile, WATCHER_PREFIX, watcherDir, type PathEnv } from "./paths.js";
 import type { CaptureReading, TrackingChild, TrackingExecFileFn } from "./trackingState.js";
 
 export interface ChildLike {
@@ -303,6 +305,59 @@ export function recheckUntilClaimed(
       (err) => deps.log(`capture re-read failed: ${err instanceof Error ? err.message : String(err)}`),
     );
   }, wait);
+}
+
+/**
+ * `<state>/sessions/<sid>.worker`: what the Probe service last did about this session's daemon worker, by wall clock
+ * (`session_marker.WORKER_SUFFIX`): `{"state": "starting" | "gave_up" | "crash_loop" | "exited", "at": <unix seconds>}`.
+ * `exited`: any other exit, so a launch that already died never reads as starting.
+ */
+export const WORKER_SUFFIX = ".worker";
+export const WorkerState = {
+  Starting: "starting",
+  GaveUp: "gave_up",
+  CrashLoop: "crash_loop",
+  Exited: "exited",
+} as const;
+export type WorkerStateValue = (typeof WorkerState)[keyof typeof WorkerState];
+
+/** How long a spawned worker may go without its first lease before the footer says `daemon not recording`
+ * (`session_marker.DAEMON_START_GRACE_S`). */
+export const DAEMON_START_GRACE_MS = 120_000;
+
+export interface WorkerStamp {
+  state: WorkerStateValue;
+  atMs: number;
+}
+
+/** The session's worker stamp when well-formed, else null (an older service, or no worker asked for yet). An
+ * unknown state is no stamp (a newer service's word). */
+export function loadWorkerStamp(
+  sessionId: string,
+  deps: { env: PathEnv; readFileSync: (path: string) => string },
+): WorkerStamp | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(deps.readFileSync(join(probeStateDir(deps.env), "sessions", `${sessionId}${WORKER_SUFFIX}`)));
+  } catch {
+    return null;
+  }
+  if (typeof data !== "object" || data === null) return null;
+  const { state, at } = data as { state?: unknown; at?: unknown };
+  const known = Object.values(WorkerState).find((value) => value === state);
+  if (known === undefined || typeof at !== "number" || !Number.isFinite(at)) return null;
+  return { state: known, atMs: at * 1000 };
+}
+
+/**
+ * When a worker with no lease yet stops counting as STARTING (`session_marker.is_worker_starting`): the window's end
+ * (ms) while the stamp says `starting` and is at most DAEMON_START_GRACE_MS old, else null (any other state, too
+ * old, or stamped in the future).
+ */
+export function getStartingEndMs(stamp: WorkerStamp, nowMs: number): number | null {
+  if (stamp.state !== WorkerState.Starting) return null;
+  const age = nowMs - stamp.atMs;
+  return age >= 0 && age <= DAEMON_START_GRACE_MS ? stamp.atMs + DAEMON_START_GRACE_MS : null;
 }
 
 /** Sentinels older than this are from a session that is long over — see below. */

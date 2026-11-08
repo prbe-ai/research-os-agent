@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  autoFooter,
+  Configured,
+  getLoweredNote,
   initializeTrackingState,
-  loweredSuffix,
+  isSignedOut,
   parseLowered,
   parseProfile,
   Recorder,
+  renderFooter,
   SESSION_INITIALIZE,
-  trackingStatusText,
+  STATUS_UNAVAILABLE_FOOTER,
   type TrackingStateDeps,
 } from "../src/core/trackingState.js";
 
@@ -43,6 +45,8 @@ describe("initializeTrackingState", () => {
       source: "/repo/.probe/config.json",
       // ...and no `auto`: the researcher sets the switch.
       auto: false,
+      // ...and no lowering: nobody signed it out.
+      signedOut: false,
     });
   });
 
@@ -91,7 +95,11 @@ describe("initializeTrackingState", () => {
 
   it.each([
     { sent: [{ scope: "default", status: "Probe: new chats off" }], read: "Probe: new chats off" },
-    { sent: [{ scope: "profile", status: null }, { scope: "sign_in", status: "Probe: signed out" }], read: "Probe: signed out" },
+    { sent: [{ scope: "profile", status: null }, { scope: "default", status: "Probe: runs only" }], read: "Probe: runs only" },
+    // The sign-out is the whole footer, never a note (`get_lowered_status_word` skips it).
+    { sent: [{ scope: "sign_in", status: "Probe: signed out" }, { scope: "default", status: "Probe: new chats off" }],
+      read: "Probe: new chats off" },
+    { sent: [{ scope: "sign_in", status: "Probe: signed out" }], read: undefined },
     { sent: [{ status: "Probe: a\nb" }], read: undefined },
     { sent: [], read: undefined },
     { sent: "Probe: new chats off", read: undefined },
@@ -107,10 +115,39 @@ describe("initializeTrackingState", () => {
     expect(parseLowered(sent)).toBe(read);
   });
 
-  it("puts it after the footer's label in the status line's words", () => {
-    expect(trackingStatusText(true) + loweredSuffix("Probe: new chats off")).toBe("● on (inline) · new chats off");
-    expect(loweredSuffix("Probe: runs only")).toBe(" · runs only");
-    expect(loweredSuffix(undefined)).toBe("");
+  it.each([
+    { sent: [{ scope: "sign_in", state: "signed_out", status: "Probe: signed out" }], read: true },
+    { sent: [{ scope: "default", status: "Probe: new chats off" }], read: false },
+    { sent: [], read: false },
+    { sent: undefined, read: false },
+  ])("reads a sign-out by the agent ($sent) apart from the notes", async ({ sent, read }) => {
+    const answer = {
+      session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine",
+      recording_lowered: sent,
+    };
+    const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
+    expect(state?.signedOut).toBe(read);
+    expect(isSignedOut(sent)).toBe(read);
+  });
+
+  it("makes it the footer's note in the status line's words", () => {
+    expect(renderFooter({ tracking: true, lowered: "Probe: new chats off" })).toBe("Probe | ● on (inline) | new chats off");
+    expect(getLoweredNote("Probe: runs only")).toBe("runs only");
+    expect(getLoweredNote(undefined)).toBe("");
+  });
+
+  it.each([
+    { sent: Configured.Ok, read: Configured.Ok },
+    { sent: Configured.Missing, read: Configured.Missing },
+    { sent: Configured.Unreadable, read: Configured.Unreadable },
+    { sent: undefined, read: undefined },
+    { sent: "broken", read: undefined },
+    { sent: 1, read: undefined },
+  ])("reads whether Probe is set up ($sent) leniently: unknown is absent, never a guess", async ({ sent, read }) => {
+    const answer = { session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine", configured: sent };
+    const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
+    expect(state?.tracking).toBe(true);
+    expect(state?.configured).toBe(read);
   });
 
   it.each([
@@ -147,42 +184,64 @@ describe("initializeTrackingState", () => {
   });
 });
 
-describe("trackingStatusText", () => {
-  it("renders the two persistent footer states, never the old \"tracking\" (PR32)", () => {
-    expect(trackingStatusText(true)).toBe("● on (inline)");
-    expect(trackingStatusText(false)).toBe("○ read only (inline)");
-    expect(trackingStatusText(false, undefined, undefined, false, true)).toBe("○ read only (daemon)");
+describe("renderFooter", () => {
+  it("says the status line's words after its prefix, with pi's glyphs (● records, ○ reads)", () => {
+    expect(renderFooter({ tracking: true })).toBe("Probe | ● on (inline)");
+    expect(renderFooter({ tracking: false })).toBe("Probe | ○ read (inline)");
+    expect(renderFooter({ tracking: false, daemonReads: true })).toBe("Probe | ○ read (daemon)");
+    expect(renderFooter({ tracking: true, daemonLive: true })).toBe("Probe | ● on (daemon)");
+    expect(STATUS_UNAVAILABLE_FOOTER).toBe("Probe | ● status unavailable");
   });
 
-  it("names the switch position in the daemon state", () => {
-    expect(trackingStatusText(true, undefined, true)).toBe("● on (daemon)");
-    expect(trackingStatusText(true, undefined, false)).toBe("● on (daemon degraded)");
-    expect(trackingStatusText(true, { running: true, reason: "running" }, false)).toBe(
-      "● on (daemon degraded)",
+  it("says a daemon that is not recording in the note, never in the state words", () => {
+    expect(renderFooter({ tracking: true, daemonLive: false })).toBe("Probe | ● on (daemon) | daemon not recording");
+    expect(renderFooter({ tracking: true, capture: { running: true, reason: "running" }, daemonLive: false })).toBe(
+      "Probe | ● on (daemon) | daemon not recording",
+    );
+    // The researcher set Probe inline: the agent records, so the daemon is nobody's problem.
+    expect(renderFooter({ tracking: true, daemonLive: false, inline: true })).toBe("Probe | ● on (inline)");
+  });
+
+  it("carries one note, in the status line's order: capture down, daemon, lowering, transcripts off", () => {
+    const down = { running: false, reason: "halted" };
+    const off = { running: false, reason: "turned off" };
+    const lowered = "Probe: new chats off";
+    expect(renderFooter({ tracking: true, capture: down, daemonLive: false, lowered })).toBe(
+      "Probe | ● on (daemon) | session transcript not recorded: halted",
+    );
+    expect(renderFooter({ tracking: true, capture: down, lowered })).toBe(
+      "Probe | ● on (inline) | session transcript not recorded: halted",
+    );
+    expect(renderFooter({ tracking: true, daemonLive: false, lowered })).toBe("Probe | ● on (daemon) | daemon not recording");
+    expect(renderFooter({ tracking: true, daemonLive: true, capture: off, lowered })).toBe("Probe | ● on (daemon) | new chats off");
+    // Transcripts turned off on purpose explain a daemon that records nothing: no fault, no `daemon not recording`.
+    expect(renderFooter({ tracking: true, daemonLive: false, capture: off })).toBe("Probe | ● on (daemon) | transcripts off");
+    expect(renderFooter({ tracking: true, capture: off })).toBe("Probe | ● on (inline) | transcripts off");
+  });
+
+  it("says nothing about capture or the daemon when the session reads: a lowering only", () => {
+    expect(renderFooter({ tracking: false, capture: { running: false, reason: "killswitch" } })).toBe("Probe | ○ read (inline)");
+    expect(renderFooter({ tracking: false, daemonReads: true, lowered: "Probe: runs only" })).toBe(
+      "Probe | ○ read (daemon) | runs only",
     );
   });
 
-  it("keeps the short daemon label when capture is down, so the reason reads whole", () => {
-    expect(trackingStatusText(true, { running: false, reason: "halted" }, false)).toBe(
-      "◐ on (daemon) · not capturing session transcript: halted",
-    );
-    expect(trackingStatusText(true, { running: false, reason: "halted" })).toBe(
-      "◐ on (inline) · not capturing session transcript: halted",
+  it("keeps the footer one line when a reason is not", () => {
+    expect(renderFooter({ tracking: true, capture: { running: false, reason: "a\nb" } })).toBe(
+      "Probe | ● on (inline) | session transcript not recorded: a b",
     );
   });
 });
 
-describe("autoFooter (probe auto mode)", () => {
-  it("hides an auto chat's off and tags its other labels", () => {
-    expect(autoFooter("○ off", true, true)).toBeUndefined();
-    expect(autoFooter("● on (daemon)", true, false)).toBe("● on (daemon, auto)");
-    expect(autoFooter("○ read only (inline)", true, false)).toBe("○ read only (inline, auto)");
+describe("renderFooter in an auto chat (probe auto mode)", () => {
+  it("puts auto inside the parentheses, as the status line does", () => {
+    expect(renderFooter({ tracking: true, daemonLive: true, isAuto: true })).toBe("Probe | ● on (daemon, auto)");
+    expect(renderFooter({ tracking: true, isAuto: true })).toBe("Probe | ● on (inline, auto)");
+    expect(renderFooter({ tracking: false, isAuto: true })).toBe("Probe | ○ read (inline, auto)");
+    expect(renderFooter({ tracking: false, daemonReads: true, isAuto: true, lowered: "Probe: runs only" }))
+      .toBe("Probe | ○ read (daemon, auto) | runs only");
   });
-  it("keeps an off auto chat's footer when the caller says it carries a warning", () => {
-    expect(autoFooter("○ off · new chats off", true, false)).toBe("○ off · new chats off (auto)");
-  });
-  it("leaves a manual chat's footer as it was", () => {
-    expect(autoFooter("○ off", false, true)).toBe("○ off");
-    expect(autoFooter(undefined, true, false)).toBeUndefined();
+  it("leaves a manual chat's words as they were", () => {
+    expect(renderFooter({ tracking: true, daemonLive: true, isAuto: false })).toBe("Probe | ● on (daemon)");
   });
 });

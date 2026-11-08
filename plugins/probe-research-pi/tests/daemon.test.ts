@@ -9,13 +9,17 @@ import {
   CaptureReason,
   CLAIM_RECHECK_MS,
   ClaimRecheck,
+  DAEMON_START_GRACE_MS,
   finishHostedSession,
+  getStartingEndMs,
   HOSTED_FINISH_GRACE_MS,
   HostedFinish,
   isDaemonAlive,
+  loadWorkerStamp,
   pruneStaleShutdownSentinels,
   recheckUntilClaimed,
   stopDaemon,
+  WorkerState,
   type ClaimRecheckDeps,
   type DaemonDeps,
   type PruneDeps,
@@ -355,5 +359,54 @@ describe("recheckUntilClaimed", () => {
       expect(awaitingClaim(capture)).toBe(false);
     }
     expect(awaitingClaim(unclaimed)).toBe(true);
+  });
+});
+
+describe("the worker stamp", () => {
+  // The Probe service writes `<state>/sessions/<sid>.worker` when it asks for a session's daemon worker and when it
+  // gives up on one: the footer tells a daemon still starting from one that never will.
+  const env = { XDG_STATE_HOME: "/state" };
+  const path = join("/state", "probe", "sessions", "sid-1.worker");
+  const read = (content: string | null) => loadWorkerStamp("sid-1", {
+    env,
+    readFileSync: (asked) => {
+      if (asked !== path || content === null) throw new Error("ENOENT");
+      return content;
+    },
+  });
+
+  it("reads the service's stamp, by wall clock", () => {
+    expect(read(JSON.stringify({ state: "starting", at: 1_700_000_000.5 }))).toEqual({
+      state: WorkerState.Starting,
+      atMs: 1_700_000_000_500,
+    });
+    expect(read(JSON.stringify({ state: "gave_up", at: 1 }))?.state).toBe(WorkerState.GaveUp);
+    expect(read(JSON.stringify({ state: "crash_loop", at: 1 }))?.state).toBe(WorkerState.CrashLoop);
+    expect(read(JSON.stringify({ state: "exited", at: 1 }))?.state).toBe(WorkerState.Exited);
+  });
+
+  it.each([
+    { name: "no stamp (an older service)", content: null },
+    { name: "not JSON", content: "{" },
+    { name: "an unknown state", content: JSON.stringify({ state: "running", at: 1 }) },
+    { name: "no time", content: JSON.stringify({ state: "starting" }) },
+    { name: "a time that is not a number", content: JSON.stringify({ state: "starting", at: "1" }) },
+    { name: "not an object", content: "[]" },
+  ])("reads $name as no stamp", ({ content }) => {
+    expect(read(content)).toBeNull();
+  });
+
+  it("counts as starting for DAEMON_START_GRACE_MS after the service asked, then not", () => {
+    expect(DAEMON_START_GRACE_MS).toBe(120_000);
+    const at = 1_000_000;
+    const starting = { state: WorkerState.Starting, atMs: at };
+    expect(getStartingEndMs(starting, at)).toBe(at + DAEMON_START_GRACE_MS);
+    expect(getStartingEndMs(starting, at + DAEMON_START_GRACE_MS), "the window's last moment").toBe(at + DAEMON_START_GRACE_MS);
+    expect(getStartingEndMs(starting, at + DAEMON_START_GRACE_MS + 1)).toBeNull();
+    expect(getStartingEndMs(starting, at - 1), "stamped in the future").toBeNull();
+    expect(getStartingEndMs({ state: WorkerState.GaveUp, atMs: at }, at)).toBeNull();
+    expect(getStartingEndMs({ state: WorkerState.CrashLoop, atMs: at }, at)).toBeNull();
+    // A launch that already died never reads as starting, however fresh its stamp.
+    expect(getStartingEndMs({ state: WorkerState.Exited, atMs: at }, at)).toBeNull();
   });
 });

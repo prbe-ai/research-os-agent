@@ -198,6 +198,6 @@ probe wizard --action logout                              # stop imports, revoke
   can read and write, and its deletes go to the trash or ask the researcher
   first (unless the agent runs with permission prompts off). Turning it off
   there revokes it. Without that token the daemon cannot record: a session
-  it records for reads `on (daemon degraded)`.
+  it records for reads `on (daemon) | daemon not recording`.
 - Never echo a token. `probe mcp status` reports health without printing it.
 - `probe wizard --action logout` revokes the calling token; it does not touch other devices.

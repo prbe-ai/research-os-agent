@@ -100,10 +100,31 @@ plugin is added to the central prbe-ai marketplace, the install becomes `probe-r
 
 - **Status line** (`hooks/statusline.py`, `hooks/statusline_refresh.py`):
   an opt-in segment under Claude Code's input box saying whether this session's
-  work is landing in Probe — `● tracking`, `● tracking → <project>`, or
-  `● tracking → <project> · running` in green; `● read-only` in yellow and
-  `● off` in RED when it is not. The Probe wizard's Install turns it on and its
+  work is landing in Probe, and where. The Probe wizard's Install turns it on and its
   Uninstall removes it (`npx probe-research`); set `PROBE_STATUSLINE=off` to mute the refresh.
+
+  | State | The line |
+  |---|---|
+  | on, the daemon records | `Probe \| ● on (daemon) \| BIRD SFT Fine Tuning` (green dot) |
+  | on, the agent records | `Probe \| ● on (inline) \| BIRD SFT Fine Tuning` (green dot) |
+  | read | `Probe \| ● read (daemon) \| BIRD SFT Fine Tuning` (yellow dot) |
+  | off, or Probe not set up | nothing |
+  | a problem | `… \| BIRD SFT Fine Tuning \| session transcript not recorded` (the note in yellow) |
+  | Probe itself broken | `Probe \| ● service down`, `status unavailable` or `signed out` (red dot) |
+
+  The title is the project's name (its slug until a name is known); with none the last divider goes too.
+  One note at most, most serious first. The line never carries a command; this is what to do:
+
+  | Note | What to do |
+  |---|---|
+  | `session transcript not recorded` | `probe statusline show` names the reason and its fix (often `probe wizard`) |
+  | `daemon not recording` | `probe doctor`; a missing daemon key: allow the daemon in `probe wizard` |
+  | `runs only`, `new chats off`, … | the agent turned this down; change it back in the app, the wizard or `/probe` |
+  | `transcripts off` | chosen; `probe capture on` turns them back on |
+  | `service down`, `status unavailable` | `probe doctor`; `probe statusline show` says what the line saw |
+
+  `probe statusline show [--session <id>] [--agent kimi_code|cursor_agent] [--json]` prints the line the service
+  draws for a session, why a hidden line is hidden, and every note with its reason and fix.
 
   `statusLine` is a single global slot in the user's settings and there is no
   plugin manifest field for it, so the installer CHAINS: it keeps whatever was

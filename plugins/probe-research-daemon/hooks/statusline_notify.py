@@ -10,13 +10,13 @@ whole design problem is making that not be noise.
 
 ON CHANGE, NOT ON A CADENCE. A line every turn saying the same thing is something
 a reader learns to skip in about four turns, at which point it is worse than
-absent: it costs attention and delivers nothing. So this fires when the state
-key actually moves — untracked -> tracked, a different project, a run starting or
-finishing — which in a normal session is three or four lines total.
+absent: it costs attention and delivers nothing. So this fires when what the
+notice shows moves (`state_key`: the state words, the title, a capture problem),
+never for a run starting or finishing, which in a normal session is a few lines.
 
-    Probe: tracked → session-tracking-indicator
-    Probe: tracked → session-tracking-indicator · running
-    Probe: this session is not tracked yet.
+    Probe | on (inline) | BIRD SFT Fine Tuning
+    Probe | on (daemon) | nothing filed yet
+    Probe | on (inline) | BIRD SFT Fine Tuning | session transcript not recorded: halted; fix: see probe doctor
 
 OPT-IN, exactly like the segment. The wizard's status-line step under Codex sets the
 flag this reads; nothing here runs for anyone who did not ask for it.
@@ -72,10 +72,11 @@ def notice(marker, session_id: str) -> str | None:
     What it must not do is repeat it.
     """
     state = marker.read(session_id)
-    key = marker.state_key(state, live=marker.is_live(state))
+    switch = marker.session_state(session_id)
+    key = marker.state_key(state, session_state=switch)  # what the notice shows: a run starting changes nothing
     if key == marker.read_notified(session_id):
         return None
-    text = marker.message(state, live=key.endswith("|running"), session_state=marker.session_state(session_id))
+    text = marker.message(state, session_state=switch)
     marker.write_notified(session_id, key)
     return text
 

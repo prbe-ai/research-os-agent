@@ -43,6 +43,7 @@ path where an exception is a broken prompt.
 
 from __future__ import annotations
 
+import enum
 import json
 import math
 import os
@@ -91,147 +92,53 @@ _UNPRINTABLE = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs", "Co"})
 WIZARD_HINT = "run the Probe wizard: probe wizard or npx probe-research"
 
 _ELLIPSIS = "…"  # …
-#: ONE glyph for both states, and it is FILLED in both. A hollow ring is faint
-#: at terminal font sizes and reads as a rendering artefact rather than a mark.
-#: Nothing is lost by using the same glyph twice: the state is carried by the
-#: WORD ("untracked" / "tracked →"), which is why the dot could be spared the
-#: job in the first place. Colour distinguishes them for a quick glance; the
-#: word distinguishes them when colour is off, absent, or unseeable.
+#: The status line's one glyph. Its colour says the kind of state (green on, yellow read, red broken); the words
+#: say it too, so nothing is lost with colour off.
 _DOT = "●"  # ●
-_ARROW = "→"  # →
-_SEPARATOR = "·"  # ·
-
-_INDENT = "  "
+_INDENT = "  "  # the segment is concatenated after a chained neighbour: keep a gap
 _GLYPH_WIDTH = 2  # the dot plus its trailing space
 
-#: The state is spelled OUT, not encoded in the glyph. `● folding` requires the
-#: reader to already know that a filled dot means tracked; `tracked → folding`
-#: does not, and a status line is read by people who did not install it.
-#: The `daemon` state's words: `on (daemon)`, the switch's `on` with who records
-#: in parentheses (Richard 2026-09-29; `DAEMON_STATE_DISPLAY`).
-_LABEL_DAEMON = "on (daemon) " + _ARROW + " "
-_LABEL_DAEMON_BARE = "on (daemon)"
-#: Still `on (daemon)`, but the daemon holds no live lease (no key, out of
-#: budget, gateway down, not started yet). The mode stays on screen; `degraded`
-#: says the daemon is not the one doing it.
-_LABEL_DAEMON_DEGRADED = "on (daemon degraded) " + _ARROW + " "
-_LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
-#: Every other recording state: the agent records (`/probe inline`, the agent
-#: profile, a chat Probe's hooks never started; Richard 2026-11-06). Never the
-#: old `tracking`, which named no mode.
-_LABEL_INLINE = "on (inline) " + _ARROW + " "
-_LABEL_INLINE_BARE = "on (inline)"
-#: The two non-recording states are spelled by `_STATE_SEGMENT`, down in the
-#: Rendering section beside the colour each one is painted. Both words are
-#: SHORTER than `not tracking` (9 and 3 against 12), so MAX_SEGMENT_CHARS is
-#: untouched.
+#: The segment's fields, joined: `Probe | ● <state words> | <title> | <note>` (Richard 2026-11-07).
+STATUS_PREFIX_LABEL = "Probe"
+STATUS_DIVIDER = " | "
 
-#: A middle dot, NOT a second arrow. `tracked → folding ▸ running` puts two
-#: arrow-shaped glyphs in one short segment, and the eye reads them as a
-#: sequence of three things rather than as a name with a state hung off it.
-_ACCENT_TEXT = " " + _SEPARATOR + " running"
+#: The one note a line carries, most serious first. Problems only, plus `transcripts off`, which is why a daemon chat
+#: records nothing. Failure lines carry the status alone, never a command (Richard 2026-11-07).
+NOTE_TRANSCRIPT_NOT_RECORDED = "session transcript not recorded"
+NOTE_DAEMON_NOT_RECORDING = "daemon not recording"
+NOTE_TRANSCRIPTS_OFF = "transcripts off"
+NOTE_STATUS_UNAVAILABLE = "status unavailable"
+NOTE_SERVICE_DOWN = "service down"
+NOTE_SIGNED_OUT = "signed out"
+NOTE_NOTHING_FILED = "nothing filed yet"  # the notice's, when the chat has filed nothing
 
-#: The third state: tracking is ON and the work IS landing, but no
-#: transcript-capture daemon is live for this conversation.
-#:
-#: A HALF-FILLED dot, not a hollow one. Hollow is faint at terminal font sizes
-#: (see `_DOT`), and the reader must be able to tell this from `not tracking` at
-#: a glance; the WORD carries the meaning for anyone whose terminal renders both
-#: dots the same. The dot stays GREEN when painted, because green means
-#: "landing" and the work still is — yellow already belongs to `not tracking`,
-#: and reusing it would make a degraded session look like a switched-off one.
-_DOT_DEGRADED = "◐"  # ◐
-#: SPELLED OUT. An earlier `no capture:` named the mechanism, and read beside
-#: `tracking` it was taken for its opposite -- "nothing is being recorded" --
-#: when the work IS landing and only the conversation is not. Naming the
-#: transcript says exactly which half is missing. The columns this costs are
-#: paid by `MAX_SEGMENT_CHARS` below, never by the project name.
-_LABEL_NO_CAPTURE = " " + _SEPARATOR + " not capturing session transcript: "
-
-#: The capture reason for transcripts turned off on purpose (`capture_state.TURNED_OFF_REASON`):
-#: a choice, so it renders as a plain note with the full dot, never as a fault.
+#: The capture reason for transcripts turned off on purpose (`capture_state.TURNED_OFF_REASON`).
 _CHOSEN_OFF_REASON = "turned off"
-_LABEL_TRANSCRIPTS_OFF = " " + _SEPARATOR + " transcripts off"
-#: Before a machine-wide lowering's words (`render`'s `lowered`), and their bound.
-_LABEL_SEPARATOR = " " + _SEPARATOR + " "
 _MAX_LOWERED_CHARS = 24
 
-#: The longest word in `probe.cli.capture_state.REASONS` (`interpreter too old`).
-#: A literal, because nothing of ours may be imported on the render path;
-#: `test_every_reason_in_the_closed_vocabulary_renders_whole_on_the_bare_line`
-#: pins it against the vocabulary, so a longer reason added there fails a test
-#: here rather than rendering as `interp…` on somebody's status line.
-_LONGEST_REASON_CHARS = 19
+#: Room for a title when a note shares the line: the length of Richard's example title (`BIRD SFT Fine Tuning`).
+TITLE_ROOM_WITH_NOTE = 20
+#: A title past this many characters is not one (the server's own name limit).
+MAX_TITLE_LEN = 200
+#: How many project titles the marker keeps (the last rows of the work read; the picked project is the last).
+MAX_TITLE_ROWS = 32
 
-#: Below this many columns an elided project name identifies nothing — `a-rea…`
-#: is not a name, it is noise wearing one. When the reason is long enough to
-#: push the name under this floor, the name is dropped ENTIRELY and the segment
-#: falls back to the bare label (`_LABEL_INLINE_BARE`, `_LABEL_DAEMON_BARE`), which
-#: this file already renders for "recording, nothing filed yet".
-_MIN_SLUG_CHARS_DEGRADED = 8
-
-#: Hard ceiling on the rendered segment, leading indent included, counted in
-#: VISIBLE characters. The cap exists because the status line must not WRAP: a
-#: wrapped line reflows every other segment sharing it, which is the one failure
-#: that makes neighbouring output less readable rather than merely longer.
-#:
-#: DERIVED FROM THE WIDEST LINE THAT MUST RENDER WHOLE: the degraded bare form
-#: carrying the longest reason in the closed vocabulary,
-#: `  ◐ on (inline) · not capturing session transcript: interpreter too old` (71).
-#: The reason is the one actionable thing on that line and is on screen nowhere
-#: else, so it is the last thing cut (`_no_capture_clause`); a ceiling it cannot
-#: fit under would elide the diagnosis on every degraded render.
-#:
-#: The previous ceiling, 51, was measured against the HEALTHY line instead: the
-#: smallest number at which a 26-character name budget survived, 26 being what
-#: this lab's project names need (median 18, longest 29). The capture suffix was
-#: 15 columns then and fit beneath it; spelling the suffix out made the degraded
-#: line the binding one. The name budget grows with the ceiling (see
-#: `MAX_SLUG_CHARS`), so nothing that fit whole before fits worse now.
-#:
-#: THE LABEL IS PAID FOR BY THE CEILING, NEVER BY THE NAME. Spelling out
-#: "on (inline) → " costs fourteen columns; taking them from the name would elide
-#: the project the segment exists to identify. When a label changes length, this
-#: number moves with it by construction.
-#: `test_this_labs_project_names_mostly_fit_whole` pins the name budget.
-#:
-#: The bare label is the WIDER of the two that can carry the capture suffix
-#: (see `_recording_labels`).
+#: The segment's ceiling in terminal columns, leading indent included: the widest line that must render whole,
+#: `  Probe | ● on (daemon) | <20-column title> | session transcript not recorded` (80). Derived, so it moves when
+#: the words do; only words reachable today count (auto mode's `, auto` re-derives it).
 MAX_SEGMENT_CHARS = (
-    len(_INDENT)
-    + _GLYPH_WIDTH
-    + max(len(_LABEL_INLINE_BARE), len(_LABEL_DAEMON_BARE))
-    + len(_LABEL_NO_CAPTURE)
-    + _LONGEST_REASON_CHARS
+    len(_INDENT) + len(STATUS_PREFIX_LABEL) + len(STATUS_DIVIDER) + _GLYPH_WIDTH + len("on (daemon)")
+    + len(STATUS_DIVIDER) + TITLE_ROOM_WITH_NOTE + len(STATUS_DIVIDER) + len(NOTE_TRANSCRIPT_NOT_RECORDED)
 )
-
-#: What the name may occupy. DERIVED, and derived against the LIVE width even
-#: when idle, so the name keeps one budget in both states: a name that shrank the
-#: moment a run started -- and grew back when it ended -- would read as the status
-#: line glitching rather than as the run changing.
-#:
-#: Wider than any name this lab has (43 against a longest of 29), so a healthy
-#: line reaches the ceiling only in theory; the columns the ceiling grew by are
-#: spent on the reason, and only when there is one.
-MAX_SLUG_CHARS = (
-    MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - max(len(_LABEL_INLINE), len(_LABEL_DAEMON)) - len(_ACCENT_TEXT)
+#: The title's budget with no note: the same in every state, so it never moves when the state does.
+MAX_TITLE_CHARS = (
+    MAX_SEGMENT_CHARS - len(_INDENT) - len(STATUS_PREFIX_LABEL) - len(STATUS_DIVIDER) - _GLYPH_WIDTH
+    - len("read (daemon)") - len(STATUS_DIVIDER)
 )
+#: Below this many columns a cut title names nothing: it is dropped (a guard against unbounded input).
+_MIN_TITLE_CHARS = 8
 
-# Basic SGR codes, never 256-colour or truecolour: the status line is rendered
-# inside the user's terminal theme, and a hardcoded hex that looks right on one
-# background is unreadable on the other. These resolve against whatever palette
-# they already chose. Claude Code additionally dims the whole line, so treat
-# these as a hint of hue rather than as emphasis.
-#
-# Three, and each is a state someone can name: landing (green), not landing but
-# still reading (yellow), and switched off entirely (red). A fourth colour would
-# be a state nobody defined.
-#
-# RED IS THE ONE THAT STOPS A READER, and `off` is the one state that earns it:
-# it is the only position of the switch under which an agent cannot find prior
-# work AND cannot know what it missed. `read-only` still answers questions, so
-# it keeps the yellow that means "look, but nothing is on fire".
-_DIM = "\033[2m"
+# Basic SGR codes, never 256-colour: the line renders inside the user's own terminal theme.
 _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
 _RED = "\033[31m"
@@ -351,12 +258,29 @@ def read(session_id: str) -> dict | None:
     state = _read_marker(session_id)
     if state is None:
         return None
-    scope = read_scope(session_id)
-    if scope is not None:
-        return {**state, "project": scope}
-    if state.get("project") is not None and not _printable(state.get("project")):
-        return {**state, "project": None}
-    return state
+    record = _read_scope_record(session_id)
+    if record is not None:
+        state = {**state, "project": record["project"]}
+    elif state.get("project") is not None and not _printable(state.get("project")):
+        state = {**state, "project": None}
+    return {**state, "project_title": _pick_title(state, record)}
+
+
+def _pick_title(state: dict, scope: "dict | None") -> "str | None":
+    """The title for the winning slug: the newer of the marker's title map (refreshed from the server) and the
+    daemon's scope title, each by when it was observed. None: neither knows one (the line shows the slug)."""
+    slug = state.get("project")
+    if not isinstance(slug, str):
+        return None
+    titles = state.get("project_titles")
+    mapped = titles.get(slug) if isinstance(titles, dict) else None
+    mapped = mapped if is_printable_title(mapped) else None
+    scoped = scope.get("title") if scope is not None and scope.get("project") == slug else None
+    scoped = scoped if is_printable_title(scoped) else None
+    if mapped and scoped:
+        mapped_at, scoped_at = _finite(state.get("titles_at")) or 0.0, _finite(scope.get("updated_at")) or 0.0
+        return scoped if scoped_at > mapped_at else mapped
+    return mapped or scoped
 
 
 def scope_path(session_id: str) -> Path:
@@ -371,9 +295,37 @@ def _printable(value: object) -> bool:
             and all(unicodedata.category(ch) not in _UNPRINTABLE for ch in value))
 
 
-def write_scope(session_id: str, project: str, project_id: str | None = None) -> bool:
-    """Record the project the daemon's latest write landed in (its slug, and its
-    id so a delete by id can clear it). True when it landed.
+#: Format characters a title may carry: ZWJ and the emoji variation selector build emoji (`👩‍🔬`); every other `Cf`
+#: (bidi controls above all) stays refused.
+_TITLE_ALLOWED_CF = frozenset({"\u200d", "\ufe0f"})
+
+
+#: Combining marks a title may stack on one character: scripts with diacritics use up to 3; more draws over the
+#: rows around it in many terminals (a teammate names the project).
+MAX_TITLE_MARKS = 4
+
+
+def _has_mark_stack(value: str) -> bool:
+    run = 0
+    for ch in value:
+        run = run + 1 if unicodedata.category(ch) in ("Mn", "Me") else 0
+        if run > MAX_TITLE_MARKS:
+            return True
+    return False
+
+
+def is_printable_title(value: object) -> bool:
+    """A project title the line can print: like `_printable`, but capped at the server's own name limit, letting the
+    two characters emoji are built from through, and refusing a pile of combining marks."""
+    return (isinstance(value, str) and 0 < len(value) <= MAX_TITLE_LEN
+            and all(ch in _TITLE_ALLOWED_CF or unicodedata.category(ch) not in _UNPRINTABLE for ch in value)
+            and not _has_mark_stack(value))
+
+
+def write_scope(session_id: str, project: str, project_id: str | None = None, title: str | None = None) -> bool:
+    """Record the project the daemon's latest write landed in (its slug, its id so a delete by id can clear it, and
+    its title when the lookup read the project row). True when it landed; a title that fails `is_printable_title` is
+    dropped and the slug kept.
 
     A file of its own, not a key in the marker: the refresh hook REPLACES the
     marker every few seconds from the server's answer, and a second writer's key
@@ -382,6 +334,8 @@ def write_scope(session_id: str, project: str, project_id: str | None = None) ->
     if not valid_session_id(session_id) or not _printable(project):
         return False
     record = {"project": project, "project_id": project_id, "updated_at": time.time()}
+    if is_printable_title(title):
+        record["title"] = title
     return _publish_atomically(scope_path(session_id), json.dumps(record) + "\n")
 
 
@@ -558,6 +512,7 @@ def from_session_work(payload: dict) -> dict:
     there is one.
     """
     project = None
+    titles: dict = {}
     projects = payload.get("projects")
     if isinstance(projects, list):
         for row in projects:
@@ -566,6 +521,11 @@ def from_session_work(payload: dict) -> dict:
             slug = row.get("slug") or row.get("name")
             if isinstance(slug, str) and slug:
                 project = slug
+                name = row.get("name")
+                titles.pop(slug, None)  # re-insert: the dict keeps response order, newest last
+                if is_printable_title(name):
+                    titles[slug] = name
+    titles = dict(list(titles.items())[-MAX_TITLE_ROWS:])
 
     # The work read carries no run STATUS, only identity. The ids are kept so the
     # renderer can intersect them with the run locks this box holds — the local
@@ -581,7 +541,7 @@ def from_session_work(payload: dict) -> dict:
             if isinstance(entity_id, str) and entity_id:
                 run_ids.append(entity_id)
 
-    return {"project": project, "run_ids": run_ids}
+    return {"project": project, "run_ids": run_ids, "project_titles": titles, "titles_at": time.time()}
 
 
 def from_active_runs(payload: object) -> list[str]:
@@ -3014,6 +2974,73 @@ LEASE_VERSION = 1
 DAEMON_LIVE = "live"
 DAEMON_DEGRADED = "degraded"
 
+#: `<sid>.worker`: what the Probe service last did about this chat's daemon worker, by wall clock, so the status
+#: line, `probe statusline show` and pi can tell a worker that is starting from one that never will.
+#: `{"state": "starting" | "gave_up" | "crash_loop", "at": <unix seconds>}`; the Supervisor writes it on spawn and
+#: on give-up (`probe.service.sessions.workers`).
+WORKER_SUFFIX = ".worker"
+WORKER_STARTING = "starting"
+WORKER_GAVE_UP = "gave_up"
+WORKER_CRASH_LOOP = "crash_loop"
+#: Any other exit (a crash before the third, a retry later): the launch it stamped is over, so it is not starting.
+WORKER_EXITED = "exited"
+WORKER_STATES = (WORKER_STARTING, WORKER_GAVE_UP, WORKER_CRASH_LOOP, WORKER_EXITED)
+#: How long a spawned worker may go without its first lease before the line says `daemon not recording`.
+DAEMON_START_GRACE_S = 120.0
+
+
+def get_worker_stamp_path(session_id: str) -> Path:
+    return sessions_dir() / (session_id + WORKER_SUFFIX)
+
+
+def write_worker_stamp(session_id: str, state: str, now: "float | None" = None) -> bool:
+    """Record what the service just did about this chat's worker. True when it landed; never raises."""
+    if not valid_session_id(session_id) or state not in WORKER_STATES:
+        return False
+    record = {"state": state, "at": time.time() if now is None else now}
+    try:
+        return _publish_atomically(get_worker_stamp_path(session_id), json.dumps(record) + "\n")
+    except OSError:
+        return False
+
+
+def read_worker_stamp(session_id: str) -> "dict | None":
+    """The worker stamp when well-formed, else None (no stamp: an older service, or no worker asked for yet)."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        data = json.loads(get_worker_stamp_path(session_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("state") not in WORKER_STATES:
+        return None
+    try:
+        at = float(data.get("at"))
+    except (TypeError, ValueError):
+        return None
+    return {"state": data["state"], "at": at} if math.isfinite(at) else None
+
+
+def is_worker_starting(session_id: str, now: "float | None" = None) -> "bool | None":
+    """Whether a chat with no lease yet is still STARTING: True within DAEMON_START_GRACE_S of the service asking for
+    its worker, False after that or once the service gave up, None with no stamp (an older service: keep today's
+    rule, a held key reads as starting)."""
+    stamp = read_worker_stamp(session_id)
+    if stamp is None:
+        return None
+    if stamp["state"] != WORKER_STARTING:
+        return False
+    at = time.time() if now is None else now
+    return 0 <= at - stamp["at"] <= DAEMON_START_GRACE_S
+
+
+def is_daemon_starting(session_id: str, daemon: "tuple | None", config: "dict | None" = None) -> bool:
+    """Is a daemon chat with no lease yet still STARTING (no note)? Its worker has taken no lease (`not-started`), the
+    daemon's key is held (without it no worker ever can) and the service asked for it at most DAEMON_START_GRACE_S
+    ago (no stamp: an older service, today's rule). One rule for the line and `probe statusline show`."""
+    return (daemon is not None and daemon[1] == DAEMON_NOT_STARTED and companion_key_held(config)
+            and is_worker_starting(session_id) is not False)
+
 
 def lease_path(session_id: str) -> Path:
     return sessions_dir() / (session_id + LEASE_SUFFIX)
@@ -4359,20 +4386,6 @@ def notify_enabled() -> bool:
     return notify_flag_path().is_file()
 
 
-def state_key(state: dict | None, *, live: bool) -> str:
-    """What "changed" MEANS, as one comparable string.
-
-    Only the two things the notice actually reports. `updated_at` moves on every
-    refresh and `run_ids` churns as runs come and go, so comparing whole markers
-    would fire a notice several times a minute while nothing a reader cares about
-    had changed.
-    """
-    project = state.get("project") if isinstance(state, dict) else None
-    if not (isinstance(project, str) and project):
-        return "untracked"
-    return f"{project}|{'running' if live else 'idle'}"
-
-
 def _capture_reason(state: dict | None) -> str:
     """Why no transcript daemon is watching this session, or `""` for silence.
 
@@ -4400,38 +4413,78 @@ def _capture_reason(state: dict | None) -> str:
     return reason
 
 
+#: How to fix each capture reason (`probe.cli.capture.state.REASONS`) and each daemon reason (`DAEMON_REASON_WORDS`):
+#: one source for `probe statusline show`, the notice and doctor. Kept here because the plugin hooks load this file
+#: with no `probe` package; `tests/test_statusline_fixes.py` pins the keys to both vocabularies.
+CAPTURE_REASON_FIXES = {
+    "running": "",
+    "not started": "start a new chat; capture starts with the chat",
+    "not installed": WIZARD_HINT,
+    "not paired": WIZARD_HINT,
+    "killswitch": "turn transcripts back on: probe capture on",
+    "disabled path": "see probe doctor",
+    "no session file": "see probe doctor",
+    "interpreter too old": WIZARD_HINT,
+    "halted": "see probe doctor",
+    "turned off": "turn transcripts back on: probe capture on",
+    "awaiting install": WIZARD_HINT,
+    "not recording": "the Probe service is retrying; see probe doctor",
+    "Probe is off": "turn Probe on: /probe on",
+}
+DAEMON_REASON_FIXES = {
+    "not-started": "see probe doctor",
+    "expired": "see probe doctor",
+    "stopped": "see probe doctor",
+    "gateway": "check the network, then see probe doctor",
+    "budget": "see probe doctor",
+    "unauthorized": WIZARD_HINT,
+    "error": "see probe doctor",
+    "disk_full": "free some disk space",
+}
+
+
+def get_capture_fix(reason: str) -> str:
+    """How to fix a capture reason; a reason this copy does not know points at doctor."""
+    return CAPTURE_REASON_FIXES.get(reason, "see probe doctor")
+
+
+def get_daemon_fix(reason: "str | None") -> str:
+    """How to fix a daemon reason; an unknown one points at doctor."""
+    return DAEMON_REASON_FIXES.get(reason or "", "see probe doctor")
+
+
+def _get_notice_words(session_state: "str | None") -> str:
+    """The notice's state words: `on (daemon)` for a stored `daemon`, else `on (inline)` (its caller knows no more)."""
+    state = STATE_FULL if session_state not in (STATE_DAEMON, STATE_FULL) else session_state
+    return get_state_words(state, Reader.DAEMON if state == STATE_DAEMON else Reader.INLINE)
+
+
+def state_key(state: dict | None, *, live: bool = False, session_state: "str | None" = None) -> str:
+    """What "changed" means for the notice: exactly what it would show (words, title, note and reason), so a capture
+    failure is heard and a run starting or stopping is not. `live` is accepted for older callers and ignored."""
+    title = _get_line_title(state)
+    reason = _capture_reason(state)
+    return "|".join((_get_notice_words(session_state), title or "-", reason or "-"))
+
+
 def message(
     state: dict | None, *, live: bool = False, tracking: bool = True, session_state: "str | None" = None
 ) -> str:
-    """One line for an agent with no status line to hang a segment on.
+    """One line for an agent with no status line, read by the person: `Probe | <words> | <title> | <note>`, the
+    status line's own words with no glyph and no width cap (the one place a capture reason and its fix fit).
 
-    Built from the same labels the segment uses, so the two surfaces cannot drift
-    into describing the same state differently. No colour and no glyph: this is a
-    sentence in a transcript, not a mark on a line.
-
-    `tracking` defaults to True because that is the only state this notice has
-    ever been emitted in — `statusline_notify.py` reaches here having already
-    resolved the switch. It is a parameter rather than an assumption so a caller
-    that has NOT resolved it cannot accidentally claim a capture failure matters
-    to a session that is recording nothing.
-
-    NO WIDTH CAP HERE, unlike `render`. This is a sentence in a transcript, which
-    wraps harmlessly; the segment shares one line with strangers, which does not.
-    `session_state` names the mode as the segment does (`on (daemon)` for a stored
-    `daemon`, else `on (inline)`).
+    `tracking` defaults to True: `statusline_notify.py` reaches here only for a recording chat. `live` is accepted for
+    older callers and ignored.
     """
-    project = state.get("project") if isinstance(state, dict) else None
-    if not (isinstance(project, str) and project):
-        return "Probe: this session is not tracked yet."
-    text = "Probe: " + _recording_labels(session_state, True, "")[0] + project
-    if live:
-        text += _ACCENT_TEXT
+    words = _get_notice_words(session_state)
+    title = _get_line_title(state)
+    fields = [STATUS_PREFIX_LABEL, words, title or NOTE_NOTHING_FILED]
     reason = _capture_reason(state) if tracking else ""
     if reason == _CHOSEN_OFF_REASON:
-        text += "; session transcripts are turned off"
+        fields.append(NOTE_TRANSCRIPTS_OFF)
     elif reason:
-        text += ", but not capturing session transcript: " + reason
-    return text
+        fields.append(f"{NOTE_TRANSCRIPT_NOT_RECORDED}: {reason}; fix: {get_capture_fix(reason)}")
+    return STATUS_DIVIDER.join(fields)
 
 
 def read_notified(session_id: str) -> str | None:
@@ -5406,92 +5459,151 @@ def configured(config: dict | None = None, environ=None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Rendering
+# Rendering: `  Probe | ● <state words> | <title> | <note>` (Richard 2026-11-07). Off draws nothing; a failure line
+# is `  Probe | ● <failure>` with a red dot. One line, bounded by MAX_SEGMENT_CHARS terminal columns.
 # ---------------------------------------------------------------------------
 
 
-def _paint(text: str, code: str, color: bool) -> str:
-    """`text` in `code`, closed immediately. The ONLY place an SGR is emitted.
+class Reader(enum.Enum):
+    """Who reads and records for a chat right now: the daemon, or the agent itself (inline)."""
 
-    One function, so "every code opened is closed" is a property of this file
-    rather than a habit at four call sites: an unterminated run bleeds into
-    whatever the neighbouring status-line segment prints next.
-    """
-    return code + text + _RESET if color else text
+    DAEMON = "daemon"
+    INLINE = "inline"
 
 
-def _elide(slug: str, limit: int = MAX_SLUG_CHARS) -> str:
-    if len(slug) <= limit:
-        return slug
-    return slug[: limit - 1] + _ELLIPSIS
+def _paint(text: str, code: str, should_paint: bool) -> str:
+    """`text` in `code`, closed at once. The ONLY place the renderer emits an SGR."""
+    return code + text + _RESET if should_paint else text
 
 
-def _name_room(label: str) -> int:
-    """Columns left for the project name after `label` and the running accent.
-
-    `MAX_SLUG_CHARS` for `on (inline)` and `on (daemon)`; a longer label
-    (`on (daemon degraded)`) takes its extra columns from the name, never from the ceiling.
-    """
-    return MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - len(label) - len(_ACCENT_TEXT)
+#: Characters that never start a cluster of their own: combining marks, ZWJ, the emoji variation selector and the
+#: skin-tone modifiers attach to the character before them. ZWJ and VS16 are `_TITLE_ALLOWED_CF` (marker.py).
+_JOINERS = _TITLE_ALLOWED_CF
+_ZWJ = "\u200d"
+_VS16 = "\ufe0f"
 
 
-def _recording_labels(
-    session_state: "str | None", daemon_live: bool, capture_reason: str, inline: bool = False
-) -> tuple[str, str]:
-    """`(label before a project name, bare label)` for a session that records.
-
-    Only a stored `daemon` is the daemon's: the service starts a worker for
-    nothing else, so every other recording session reads `on (inline)` (the
-    agent records), never the old `tracking`. `inline` is kept for older callers.
-    In the `daemon` state the capture suffix already explains a daemon that is
-    not running (the worker is a child of capture), so that line keeps the
-    shorter `on (daemon)` and its columns go to the reason.
-    """
-    if session_state != STATE_DAEMON:
-        return _LABEL_INLINE, _LABEL_INLINE_BARE
-    if daemon_live or capture_reason:
-        return _LABEL_DAEMON, _LABEL_DAEMON_BARE
-    return _LABEL_DAEMON_DEGRADED, _LABEL_DAEMON_DEGRADED_BARE
+def _is_joined_to_previous(ch: str, previous: str) -> bool:
+    if ch in _JOINERS or previous == _ZWJ or unicodedata.category(ch) in ("Mn", "Me"):
+        return True
+    return 0x1F3FB <= ord(ch) <= 0x1F3FF  # skin-tone modifier
 
 
-def _add_auto_tag(label: str) -> str:
-    """`label` with auto mode named inside its parentheses: `on (daemon, auto)`, `read only (inline, auto)`."""
-    return label.replace(")", ", auto)", 1) if ")" in label else label + " (auto)"
+def _is_regional(ch: str) -> bool:
+    return 0x1F1E6 <= ord(ch) <= 0x1F1FF
 
 
-def _no_capture_clause(reason: str, label_bare: str = _LABEL_INLINE_BARE) -> str:
-    """The `· not capturing session transcript: …` suffix, as it hangs off
-    `label_bare`.
+def _split_clusters(text: str) -> "list[str]":
+    """`text` cut into visible characters: a base and what joins it, or a flag's two regional indicators."""
+    out: "list[str]" = []
+    for ch in text:
+        if out and (_is_joined_to_previous(ch, out[-1][-1])
+                    or (_is_regional(ch) and len(out[-1]) == 1 and _is_regional(out[-1]))):
+            out[-1] += ch
+        else:
+            out.append(ch)
+    return out
 
-    THE LAST STOP FOR THE WIDTH CAP. With no project name left to give up, the
-    reason itself is elided. The vocabulary in `probe.cli.capture_state` is short
-    enough that this never fires today, but this renderer reads whatever a
-    refresh hook of ANY vintage wrote into the marker, and an unbounded field on
-    a status line wraps the whole line — which reflows every other segment on it.
-    """
-    if not reason:
+
+def _get_cluster_width(cluster: str) -> int:
+    """Terminal columns for one visible character. When unsure it counts more, never fewer: a ZWJ sequence counts
+    each emoji in it (terminals that do not join them draw them all)."""
+    width = 0
+    for ch in cluster:
+        if ch in _JOINERS or unicodedata.category(ch) in ("Mn", "Me", "Cf") or 0x1F3FB <= ord(ch) <= 0x1F3FF:
+            continue
+        width += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return max(width, 2) if _VS16 in cluster else width
+
+
+def get_text_width(text: str) -> int:
+    """Terminal columns `text` takes (status-line text: no control characters)."""
+    return sum(_get_cluster_width(c) for c in _split_clusters(text))
+
+
+def _elide(text: str, limit: int = MAX_TITLE_CHARS) -> str:
+    """`text` cut to `limit` columns with an ellipsis, only between visible characters."""
+    if get_text_width(text) <= limit:
+        return text
+    kept, width = "", 0
+    for cluster in _split_clusters(text):
+        step = _get_cluster_width(cluster)
+        if width + step + 1 > limit:
+            break
+        kept, width = kept + cluster, width + step
+    return kept + _ELLIPSIS
+
+
+def get_state_words(session_state: "str | None", reader: Reader, *, is_auto: bool = False) -> str:
+    """The state as the status line says it: `on (daemon)`, `on (inline)`, `read (daemon)`, `read (inline)`, or `off`
+    (never drawn). `is_auto` puts the auto tag inside the parentheses (`on (daemon, auto)`). A word this copy does not
+    know raises, so a newer CLI's state renders as `status unavailable`, never as a guess."""
+    if session_state == STATE_OFF:
+        return "off"
+    if session_state in (STATE_DAEMON, STATE_FULL):
+        who = "daemon" if session_state == STATE_DAEMON and reader is Reader.DAEMON else "inline"
+        level = "on"
+    elif session_state == STATE_READ_ONLY:
+        who, level = reader.value, "read"
+    else:
+        raise ValueError(f"unknown session_state {session_state!r}")
+    return f"{level} ({who}, auto)" if is_auto else f"{level} ({who})"
+
+
+def _get_reader(session_state: str, is_daemon: bool, is_inline: bool) -> Reader:
+    if is_inline:
+        return Reader.INLINE
+    if session_state == STATE_DAEMON or (session_state == STATE_READ_ONLY and is_daemon):
+        return Reader.DAEMON
+    return Reader.INLINE
+
+
+def _get_line_title(state: "dict | None") -> str:
+    """The line's title: the project's title, else its slug, else nothing. A `|` is drawn as `/`."""
+    if not isinstance(state, dict):
         return ""
-    room = (
-        MAX_SEGMENT_CHARS
-        - len(_INDENT)
-        - _GLYPH_WIDTH
-        - len(label_bare)
-        - len(_LABEL_NO_CAPTURE)
-    )
-    return _LABEL_NO_CAPTURE + _elide(reason, room)
+    for key in ("project_title", "project"):
+        value = state.get(key)
+        if is_printable_title(value):
+            return value.replace("|", "/")
+    return ""
 
 
-#: WHAT EACH NON-RECORDING STATE IS CALLED HERE, and the colour it is painted:
-#: the five-state words (`INLINE_STATE_DISPLAY`; `render` swaps in the daemon's
-#: where it reads). `read only` is spelled out: alone on a status line, `read`
-#: reads as an activity in progress rather than a restriction.
-#:
-#: The colour is here rather than at the call site so that a state cannot be
-#: given a word without also being given a hue.
-_STATE_SEGMENT = {
-    STATE_READ_ONLY: (INLINE_STATE_DISPLAY[STATE_READ_ONLY], _YELLOW),
-    STATE_OFF: (INLINE_STATE_DISPLAY[STATE_OFF], _RED),
-}
+def _pick_note(*, recording: bool, reader: Reader, session_state: str, reason: str, daemon_live: bool,
+               lowered: str) -> "tuple[str, str]":
+    """`(note, its reason)`: the one note the line carries, most serious first. Read chats show only a lowering."""
+    words = lowered[len(STATUS_PREFIX):] if lowered.startswith(STATUS_PREFIX) else lowered
+    words = _elide(words.replace("\n", " "), _MAX_LOWERED_CHARS) if words else ""
+    if not recording:
+        return (words, "") if words else ("", "")
+    chosen_off = reason == _CHOSEN_OFF_REASON
+    if reason and not chosen_off:
+        return NOTE_TRANSCRIPT_NOT_RECORDED, reason
+    if session_state == STATE_DAEMON and reader is Reader.DAEMON and not daemon_live and not chosen_off:
+        return NOTE_DAEMON_NOT_RECORDING, ""
+    if words:
+        return words, ""
+    if chosen_off:
+        return NOTE_TRANSCRIPTS_OFF, ""
+    return "", ""
+
+
+def _fit_fields(words: str, hue: str, title: str, note: str, reason: str, should_paint: bool, ceiling: int) -> str:
+    """Lay the fields out under `ceiling` columns: the title yields first (cut, then dropped below
+    `_MIN_TITLE_CHARS`), the note last. The capture reason rides on the note only when no title shows."""
+    head = _INDENT + STATUS_PREFIX_LABEL + STATUS_DIVIDER + _paint(_DOT, hue, should_paint) + " " + words
+    head_width = len(_INDENT) + len(STATUS_PREFIX_LABEL) + len(STATUS_DIVIDER) + _GLYPH_WIDTH + len(words)
+    note_room = ceiling - head_width - len(STATUS_DIVIDER)
+    if note:
+        note = _elide(note, note_room)
+    note_width = len(STATUS_DIVIDER) + get_text_width(note) if note else 0
+    if title:
+        room = min(ceiling - head_width - note_width - len(STATUS_DIVIDER), MAX_TITLE_CHARS)
+        title = _elide(title, room) if room >= _MIN_TITLE_CHARS else ""
+    if note and reason and not title:
+        note = _elide(note + ": " + reason.replace("\n", " "), note_room)
+    line = head + (STATUS_DIVIDER + title if title else "")
+    return line + (STATUS_DIVIDER + _paint(note, _YELLOW, should_paint) if note else "")
 
 
 def render(
@@ -5508,151 +5620,38 @@ def render(
     lowered: str = "",
     is_auto: bool = False,
 ) -> str:
-    """The status-line segment. One line, bounded, self-delimiting, or empty.
+    """The status-line segment, or `""` when Probe is off for this chat or not set up.
 
-    `is_auto`: the agent sets this chat's switch (probe auto mode): its labels say `auto`, and an
-    off chat shows no segment at all.
-
-    `lowered`: what the agent lowered on this computer and is lowered still (`STATUS_WORDS`, less
-    its `Probe: `), said after the label in place of the project (fixes-1107b PR B).
-
-    Only the five states (`state_display`): in the `daemon` state the label is
-    `on (daemon)` while the daemon holds a live lease (`daemon_live`), and
-    `on (daemon degraded)` when it does not; any other recording state is
-    `on (inline)`. `daemon` says the daemon reads for this session now
-    (`is_daemon_mode`), so its `read-only` reads `read only (daemon)`.
-
-    TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
-    `is_tracking`; this only renders it. An earlier version carried a third —
-    "tracking off" as something distinct from "untracked" — and that was a
-    mistake. A reader does not care WHY nothing is being recorded, only whether
-    anything is, and the third state made them decode a distinction that changed
-    nothing they would do.
-
-    `tracked, not capturing session transcript` is a third state of a DIFFERENT
-    question, and it earns its place by the same test the rejected one failed: it
-    changes what the reader does. The work is landing — projects, runs, metrics,
-    artifacts, all of it — and the CONVERSATION is not being recorded. Only the
-    researcher can decide whether that matters for this session, and they cannot
-    decide it without being told. It renders as a SUFFIX on the tracking segment,
-    never as a replacement for it, because a line reading only "not capturing
-    session transcript" says the opposite of what is true.
-
-    THE SEGMENT MUST SURVIVE ANY NEIGHBOUR. It shares one line with whatever else
-    is chained into `statusLine`, so four properties are load-bearing:
-
-    * **No newline, ever.** Claude Code splits this command's stdout on newlines
-      and renders each as its own status row.
-    * **A two-space indent and a glyph in front.** Output is concatenated with the
-      neighbour's; without the gap `…main● tracking` fuses into one token.
-    * **Bounded width.** Overflow wraps the line, reflowing every segment on it —
-      the one way this makes other output worse rather than merely longer.
-    * **One coloured character, always closed, never counted.** Only the dot is
-      painted (`_paint` is the single place an SGR is emitted), and layout is
-      computed on PLAIN text — measuring a coloured string counts invisible bytes.
-
-    Empty when Probe is not configured on this machine: someone who does not use
-    it should not spend a column being told so.
+    `daemon_live`: the daemon holds a live lease or is still starting (the caller decides; `is_worker_starting`).
+    `daemon`: the daemon reads for this chat now (`is_daemon_mode`); `inline` (`is_inline`) wins over it.
+    `lowered`: a machine-wide lowering the agent made (`get_lowered_status_word`), shown as the note.
+    `live` is accepted for older callers and ignored: a running run is not a problem, so it has no note.
     """
     if not configured:
         return ""
-
-    if not tracking:
-        # THE SWITCH NOW HAS THREE POSITIONS AND TWO OF THEM ARE NOT RECORDING,
-        # and the difference is the one thing a reader can act on: under
-        # `read-only` an agent will still find prior work, under `off` it will
-        # not and will not know what it missed. That passes the same test the
-        # rejected third state failed and `not capturing session transcript`
-        # passed -- it changes what the reader does.
-        #
-        # `session_state=None` is a caller from before the third state: its
-        # "not tracking" always meant read-only (yellow; red is for `off`).
-        if is_auto and session_state == STATE_OFF and not lowered:
-            return ""  # auto mode: an off chat is not Probe's to show (Richard, 2026-11-07), unless the agent lowered a setting
-        label, hue = _STATE_SEGMENT.get(session_state, _STATE_SEGMENT[STATE_READ_ONLY])
-        if daemon and not inline and session_state == STATE_READ_ONLY:
-            # The daemon still reads for this session; it records nothing.
-            label = DAEMON_STATE_DISPLAY[STATE_READ_ONLY]
-        if is_auto:
-            label = _add_auto_tag(label)
-        return _INDENT + _paint(_DOT, hue, color) + " " + label + _render_lowered_clause(lowered)
-
-    # Read PAST the `not tracking` return above on purpose: capture is a fact
-    # about a session that is recording, and naming it for one that is not would
-    # be an answer to a question nobody asked.
-    reason = _capture_reason(state)
-    # Turned off on purpose: nothing is wrong, so the full dot and a plain note.
-    chosen_off = reason == _CHOSEN_OFF_REASON
-    if chosen_off:
-        reason = ""
-    head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
-    label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason, inline)
-    if is_auto:
-        label_tracked, label_bare = _add_auto_tag(label_tracked), _add_auto_tag(label_bare)
-    if lowered:
-        return head + label_bare + _render_lowered_clause(lowered)
-
-    project = state.get("project") if isinstance(state, dict) else None
-    if not (isinstance(project, str) and project):
-        # Tracking is on, nothing filed yet. State it without inventing a name.
-        if chosen_off:
-            return head + label_bare + _LABEL_TRANSCRIPTS_OFF
-        return head + label_bare + _no_capture_clause(reason, label_bare)
-
-    if chosen_off:
-        room = _name_room(label_tracked) + len(_ACCENT_TEXT) - len(_LABEL_TRANSCRIPTS_OFF)
-        if room >= _MIN_SLUG_CHARS_DEGRADED:
-            return head + label_tracked + _elide(project, room) + _LABEL_TRANSCRIPTS_OFF
-        return head + label_bare + _LABEL_TRANSCRIPTS_OFF
-
-    if not reason:
-        # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves
-        # both widths whether or not the accent shows, so truncation only ever
-        # costs characters of the project name.
-        accent = _ACCENT_TEXT if live else ""
-        return head + label_tracked + _elide(project, _name_room(label_tracked)) + accent
-
-    # DEGRADED — WHAT YIELDS FIRST, AND WHY.
-    #
-    # The name, and it yields all the way to nothing. The reason is the only
-    # actionable thing on the line — it names what to fix — and it is on screen
-    # nowhere else; the project name is on the dashboard, in `probe session
-    # status`, and usually in the previous turn's own output. `not capturing
-    # session transcript: interp…` names nothing to fix, so the reason is the
-    # LAST thing cut, and only after the name has been given up entirely
-    # (`_no_capture_clause`).
-    #
-    # The live-run accent goes with the name, and hands the reason back its ten
-    # columns. One qualifier per segment stays legible; `· running · not
-    # capturing session transcript: halted` reads as a list of unrelated facts,
-    # and the accent returns the moment capture is healthy — which is also the
-    # moment it is worth reading.
-    room = (
-        MAX_SEGMENT_CHARS
-        - len(_INDENT)
-        - _GLYPH_WIDTH
-        - len(label_tracked)
-        - len(_LABEL_NO_CAPTURE)
-        - len(reason)
-    )
-    if room >= _MIN_SLUG_CHARS_DEGRADED:
-        return head + label_tracked + _elide(project, room) + _LABEL_NO_CAPTURE + reason
-    return head + label_bare + _no_capture_clause(reason, label_bare)
-
-
-
-
-def _render_lowered_clause(lowered: str) -> str:
-    """` · new chats off`: one machine-wide lowering, its words bounded (never a newline)."""
-    if not lowered:
+    if session_state is None:  # a caller from before the five states
+        session_state = STATE_FULL if tracking else STATE_READ_ONLY
+    if session_state == STATE_OFF:
         return ""
-    words = lowered[len(STATUS_PREFIX):] if lowered.startswith(STATUS_PREFIX) else lowered
-    return _LABEL_SEPARATOR + _elide(words.replace("\n", " "), _MAX_LOWERED_CHARS)
+    recording = tracking and session_state != STATE_READ_ONLY
+    shown = session_state if recording else STATE_READ_ONLY
+    reader = _get_reader(shown, daemon, inline)
+    words = get_state_words(shown, reader, is_auto=is_auto)
+    note, reason = _pick_note(recording=recording, reader=reader, session_state=shown,
+                              reason=_capture_reason(state), daemon_live=daemon_live, lowered=lowered)
+    ceiling = MAX_SEGMENT_CHARS + (len(", auto") if is_auto else 0)
+    return _fit_fields(words, _GREEN if recording else _YELLOW, _get_line_title(state), note, reason, color, ceiling)
+
+
+def render_failure(note: str, *, should_paint: bool = True) -> str:
+    """A line for Probe itself being broken: `  Probe | ● <note>` with a red dot, the status alone."""
+    return (_INDENT + STATUS_PREFIX_LABEL + STATUS_DIVIDER + _paint(_DOT, _RED, should_paint) + " "
+            + note.replace("\n", " "))
 
 
 def render_signed_out(*, should_paint: bool = True) -> str:
-    """The segment where nothing is signed in because the agent signed the person out (PR B)."""
-    return _INDENT + _paint(_DOT, _RED, should_paint) + " " + STATUS_WORDS[(SCOPE_SIGN_IN, LOWERED_SIGNED_OUT)]
+    """The line where nothing is signed in because the agent signed the person out (PR B)."""
+    return render_failure(NOTE_SIGNED_OUT, should_paint=should_paint)
 
 
 def get_lowered_status_word(config: "dict | None" = None) -> str:

@@ -134,7 +134,10 @@ vi.mock("../src/serviceForward.js", async (importOriginal) => {
 const { registerExtension } = await import("./shimHarness.js");
 const { pidFile, shutdownSentinelFile, disabledFile, teamNoteDocumentPath, extensionLogFile } = await import("../src/core/paths.js");
 const { MCP_SERVED_VIA_ADAPTER_MESSAGE } = await import("../src/adapterHandoff.js");
-const { trackingStatusText } = await import("../src/core/trackingState.js");
+const { renderFooter, SIGNED_OUT_FOOTER, STATUS_UNAVAILABLE_FOOTER } = await import("../src/core/trackingState.js");
+const { DAEMON_START_GRACE_MS } = await import("../src/core/daemon.js");
+const { prepareExtension } = await import("../src/extension.js");
+const { emptySharedState } = await import("../src/shim.js");
 const paths = await import("../src/core/paths.js");
 // The real module, for a stand-in Probe service process (the mock above stands in for every spawn the extension makes).
 const realChildProcess = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -213,6 +216,8 @@ const ENV_KEYS = [
   // this file's own module docstring and mcpBridge.test.ts's for the same
   // rule stated more fully.
   "PROBE_MCP_TOKEN",
+  // A Probe token in pi's own environment counts as set up (the footer, `configured`): never the shell's.
+  "PROBE_TOKEN",
 ] as const;
 
 function uniqueSessionId(label: string): string {
@@ -286,6 +291,7 @@ beforeEach(() => {
   // connectAndRegisterTools). Deleting this is what makes that hold
   // regardless of the shell this suite happens to run in.
   delete process.env.PROBE_MCP_TOKEN;
+  delete process.env.PROBE_TOKEN;
 
   // A fake, always-resolvable tap checkout + interpreter so paired tests
   // don't depend on a real Python being installed on the test machine.
@@ -357,12 +363,10 @@ describe("registerExtension — session_start", () => {
       params: expect.objectContaining({ sid: "pi-folder-session", cwd: "/repo/packages/app", agent: "pi" }),
     });
     expect(execFileMock.mock.calls.some(([command]) => command === bin)).toBe(false);
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ read only (inline)");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "Probe | ○ read (inline)");
   });
 
-  it("says a session switched off is off, in the footer", async () => {
-    // Probe off: the footer names the state, as the status line's `off` does
-    // (it read "read only (inline)", as for `read`).
+  it("draws no footer for a session switched off, as the status line draws none", async () => {
     installProbeCli();
     initializeOnce((_command, _args, _options, callback) => {
       callback(
@@ -385,13 +389,14 @@ describe("registerExtension — session_start", () => {
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ off");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", undefined);
+    expect(ctx.setStatus).not.toHaveBeenCalledWith("probe-tracking", expect.any(String));
   });
 
   it.each([
-    { state: "off", tracking: false, footer: "○ off · new chats off" },
-    { state: "on", tracking: true, footer: "● on (inline) · new chats off" },
-  ])("says what the agent turned down on this computer after the footer's $state (fixes-1107b PR B)",
+    { state: "off", tracking: false, footer: undefined },
+    { state: "on", tracking: true, footer: "Probe | ● on (inline) | new chats off" },
+  ])("says what the agent turned down on this computer as the footer's note in $state (fixes-1107b PR B)",
     async ({ state, tracking, footer }) => {
       installProbeCli();
       initializeOnce((_command, _args, _options, callback) => {
@@ -434,7 +439,7 @@ describe("registerExtension — session_start", () => {
       { reason: "startup" },
       ctx,
     )).resolves.toBeUndefined();
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● on (inline)");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "Probe | ● on (inline)");
     expect(daemonSpawns()).toHaveLength(0);
   });
 
@@ -479,35 +484,34 @@ describe("registerExtension — session_start", () => {
   });
 });
 
-describe("trackingStatusText", () => {
+describe("renderFooter", () => {
   it("shows on (inline) when capture is live", () => {
-    expect(trackingStatusText(true, { running: true, reason: "running" })).toBe("● on (inline)");
+    expect(renderFooter({ tracking: true, capture: { running: true, reason: "running" } })).toBe("Probe | ● on (inline)");
   });
 
   it("names the reason when tracking is on but capture is not", () => {
-    expect(trackingStatusText(true, { running: false, reason: "not paired" })).toBe(
-      "◐ on (inline) · not capturing session transcript: not paired",
+    expect(renderFooter({ tracking: true, capture: { running: false, reason: "not paired" } })).toBe(
+      "Probe | ● on (inline) | session transcript not recorded: not paired",
     );
   });
 
   it("says nothing about capture when tracking is off", () => {
-    expect(trackingStatusText(false, { running: false, reason: "killswitch" })).toBe(
-      "○ read only (inline)",
-    );
+    expect(renderFooter({ tracking: false, capture: { running: false, reason: "killswitch" } })).toBe("Probe | ○ read (inline)");
   });
 
   it("falls back to the plain state when the CLI returned no capture block", () => {
-    expect(trackingStatusText(true, undefined)).toBe("● on (inline)");
+    expect(renderFooter({ tracking: true })).toBe("Probe | ● on (inline)");
   });
 
   it("says `on (inline)` while the researcher has Probe inline, even over a cached `read`", () => {
-    expect(trackingStatusText(true, { running: true, reason: "running" }, undefined, true)).toBe("● on (inline)");
-    expect(trackingStatusText(false, { running: true, reason: "running" }, undefined, true)).toBe("● on (inline)");
+    const running = { running: true, reason: "running" };
+    expect(renderFooter({ tracking: true, capture: running, inline: true })).toBe("Probe | ● on (inline)");
+    expect(renderFooter({ tracking: false, capture: running, inline: true })).toBe("Probe | ● on (inline)");
   });
 });
 
 describe("registerExtension — the footer's third state", () => {
-  it("renders `tracked, not capturing session transcript` from the CLI's own capture block", async () => {
+  it("renders `session transcript not recorded` from the CLI's own capture block", async () => {
     installProbeCli();
     initializeOnce((_command, _args, _options, callback) => {
       callback(
@@ -537,7 +541,7 @@ describe("registerExtension — the footer's third state", () => {
 
     expect(ctx.setStatus).toHaveBeenCalledWith(
       "probe-tracking",
-      "◐ on (inline) · not capturing session transcript: not paired",
+      "Probe | ● on (inline) | session transcript not recorded: not paired",
     );
   });
 
@@ -594,7 +598,7 @@ describe("registerExtension — the footer's third state", () => {
       await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
 
       expect(reads.calls(sessionId)).toBe(3);
-      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● on (inline)");
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
       await handlers.get("agent_settled")!({}, ctx);
       expect(reads.calls(sessionId), "a turn's end reads nothing").toBe(3);
     } finally {
@@ -665,14 +669,14 @@ describe("registerExtension — the footer's third state", () => {
       const switched = handlers.get("session_start")!({ reason: "new" }, ctx2);
       await vi.advanceTimersByTimeAsync(2_500);
       await switched;
-      expect(ctx2.setStatus).toHaveBeenLastCalledWith("probe-tracking", "○ off");
+      expect(ctx2.setStatus).toHaveBeenLastCalledWith("probe-tracking", undefined);
       const drawn = ctx1.setStatus.mock.calls.length;
 
       reads.release();
       await vi.advanceTimersByTimeAsync(0);
       expect(ctx1.setStatus.mock.calls.length, "the old session's footer is not redrawn").toBe(drawn);
       await handlers.get("agent_settled")!({}, ctx2);
-      expect(ctx2.setStatus, "the new session's state is its own").toHaveBeenLastCalledWith("probe-tracking", "○ off");
+      expect(ctx2.setStatus, "the new session's state is its own").toHaveBeenLastCalledWith("probe-tracking", undefined);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(reads.calls(first), "and the looks stop").toBe(3);
     } finally {
@@ -715,7 +719,7 @@ describe("registerExtension — the footer's third state", () => {
     // An older probe CLI has no `capture` key at all, and a broken one may
     // have a bad one. Neither is a reason to blank the footer: tracking is
     // still known, and that is what gets rendered.
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● on (inline)");
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "Probe | ● on (inline)");
   });
 
   it("re-reads the footer after the spawn attempt, so a refused spawn is visible", async () => {
@@ -744,6 +748,286 @@ describe("registerExtension — the footer's third state", () => {
 
     rmSync(pidFile(sessionId), { force: true });
     rmSync(shutdownSentinelFile(sessionId), { force: true });
+  });
+});
+
+describe("registerExtension — the footer when pi cannot say, and by the clock", () => {
+  const RUNNING = { running: true, pid: null, reason: "running" };
+  const NOT_RECORDING = { running: false, pid: null, reason: "not recording" };
+  const EPOCH_MS = 1_700_000_000_000;
+
+  /** `probe session initialize`'s JSON for `sid`, with `extra` over a recording session's. */
+  function reply(sid: string, extra: Record<string, unknown> = {}): string {
+    return JSON.stringify({ session_id: sid, tracking: true, signal: "on", seeded: true, source: "machine", ...extra });
+  }
+
+  function answerOnce(sid: string, extra: Record<string, unknown> = {}): void {
+    initializeOnce((_command, _args, _options, callback) => callback(null, reply(sid, extra), ""));
+  }
+
+  function failOnce(): void {
+    initializeOnce((_command, _args, _options, callback) => callback(new Error("no service"), "", ""));
+  }
+
+  function writeConfig(content: Record<string, unknown>): void {
+    writeFileSync(process.env.PROBE_CONFIG_PATH!, JSON.stringify(content));
+  }
+
+  /** The Probe service's `<sid>.worker` stamp (`session_marker.write_worker_stamp`). */
+  function writeWorkerStamp(sid: string, state: string, atMs: number): void {
+    const dir = join(process.env.XDG_STATE_HOME!, "probe", "sessions");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${sid}.worker`), JSON.stringify({ state, at: atMs / 1000 }) + "\n");
+  }
+
+  /** A session start under fake timers, settled (the socket lookup's wait included). */
+  async function startSession(handlers: Map<string, Handler>, ctx: unknown, reason = "startup"): Promise<void> {
+    const started = handlers.get("session_start")!({ reason }, ctx);
+    await vi.advanceTimersByTimeAsync(2_500);
+    await started;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    initializeQueue.length = 0;
+  });
+
+  it("shows `status unavailable`, never no footer, when the state cannot be read on a machine Probe is set up on", async () => {
+    writeConfig({ token: "probe_pat_x" });
+    failOnce();
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: uniqueSessionId("unreadable-state"), sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", STATUS_UNAVAILABLE_FOOTER);
+    expect(STATUS_UNAVAILABLE_FOOTER).toBe("Probe | ● status unavailable");
+  });
+
+  it("reads the state again at the next prompt when the first read failed, so the footer is not stuck", async () => {
+    writeConfig({ token: "probe_pat_x" });
+    const sid = uniqueSessionId("first-read-fails");
+    failOnce();
+    answerOnce(sid, { state: "on" });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", STATUS_UNAVAILABLE_FOOTER);
+    await handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
+    // A reading in hand is not read again at every prompt.
+    const asked = serviceCalls.filter((call) => call.method === "session.initialize" && call.params.sid === sid).length;
+    await handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, ctx);
+    expect(serviceCalls.filter((call) => call.method === "session.initialize" && call.params.sid === sid)).toHaveLength(asked);
+  });
+
+  it.each([
+    { name: "a daemon session with capture down", extra: { state: "daemon", profile: "daemon", capture: NOT_RECORDING } },
+    { name: "an off session", extra: { state: "off", tracking: false, signal: "off" } },
+  ])("says `signed out` alone when the agent signed the person out, in $name", async ({ extra }) => {
+    const sid = uniqueSessionId("signed-out");
+    const signedOut = [{ scope: "sign_in", state: "signed_out", status: "Probe: signed out" }];
+    answerOnce(sid, { ...extra, configured: "ok", recording_lowered: signedOut });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", SIGNED_OUT_FOOTER);
+    expect(SIGNED_OUT_FOOTER).toBe("Probe | ● signed out");
+  });
+
+  it("draws the footer, with no sign-out note, when pi's own environment holds a Probe token", async () => {
+    // The status line's caller with a token is signed in: its line carries no sign-out either.
+    process.env.PROBE_TOKEN = "probe_pat_from_pi";
+    const sid = uniqueSessionId("signed-out-env-token");
+    answerOnce(sid, { state: "on", configured: "ok",
+      recording_lowered: [{ scope: "sign_in", state: "signed_out", status: "Probe: signed out" }] });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
+  });
+
+  it("draws nothing when the state cannot be read and Probe is not set up here (no config, no token)", async () => {
+    failOnce();
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: uniqueSessionId("not-set-up"), sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", undefined);
+  });
+
+  it("shows `status unavailable` when a later read fails: the last reading is not kept outside the rechecks", async () => {
+    writeConfig({ token: "probe_pat_x" });
+    const sid = uniqueSessionId("status-fails");
+    answerOnce(sid, { state: "on" });
+    failOnce();
+    const { api, handlers, commands } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
+    await captureStderr(() => commands.get("probe-status")!.handler("", ctx));
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", STATUS_UNAVAILABLE_FOOTER);
+  });
+
+  it.each([
+    { configured: "missing", footer: undefined },
+    { configured: "unreadable", footer: "Probe | ● status unavailable" },
+    { configured: "ok", footer: "Probe | ● on (inline)" },
+    // An older CLI sends no `configured`: the footer renders from the rest of its reply.
+    { configured: undefined, footer: "Probe | ● on (inline)" },
+  ])("reads `configured: $configured` from the CLI as $footer", async ({ configured, footer }) => {
+    const sid = uniqueSessionId("configured");
+    answerOnce(sid, { state: "on", configured });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", footer);
+  });
+
+  it("draws the footer when the CLI says `missing` but pi's own environment holds a Probe token", async () => {
+    // The CLI child the service runs never sees pi's environment's token.
+    process.env.PROBE_TOKEN = "probe_pat_from_pi";
+    const sid = uniqueSessionId("missing-env-token");
+    answerOnce(sid, { state: "on", configured: "missing" });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
+  });
+
+  it("keeps the last reading through a failed recheck, then says `status unavailable` by the clock alone", async () => {
+    pair();
+    vi.useFakeTimers();
+    vi.setSystemTime(EPOCH_MS);
+    const sid = uniqueSessionId("kept-reading");
+    const notRecorded = "Probe | ● on (inline) | session transcript not recorded: not recording";
+    let readBackAt = 0;
+    answerOnce(sid, { state: "on", capture: NOT_RECORDING }); // the start's read
+    initializeOnce((_command, _args, _options, callback) => {
+      readBackAt = Date.now(); // the read-back the rechecks start from
+      callback(null, reply(sid, { state: "on", capture: NOT_RECORDING }), "");
+    });
+    failOnce(); // the 3 s look
+    failOnce(); // the 15 s look
+    let lastLookAsked = false;
+    initializeOnce(() => {
+      lastLookAsked = true; // the 60 s look never answers: only the clock can change the footer
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: sid, sessionFile: join(tmp, `${sid}.jsonl`), hasUI: true });
+    await startSession(handlers, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", notRecorded);
+
+    await vi.advanceTimersByTimeAsync(readBackAt + 60_000 - 1 - Date.now());
+    expect(ctx.setStatus, "kept through two failed looks").toHaveBeenLastCalledWith("probe-tracking", notRecorded);
+    expect(lastLookAsked).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", STATUS_UNAVAILABLE_FOOTER);
+
+    // The next prompt reads it again: a kept reading past its time is not left on `status unavailable`.
+    answerOnce(sid, { state: "on", capture: RUNNING });
+    const prompted = handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, ctx);
+    await vi.advanceTimersByTimeAsync(2_500);
+    await prompted;
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
+    rmSync(shutdownSentinelFile(sid), { force: true });
+  });
+
+  describe("a daemon with no lease yet", () => {
+    /** A `daemon` session, its companion key held unless `keyHeld` is false; `stamp`: the service's worker stamp. */
+    async function startDaemonSession(label: string, stamp?: { state: string; atMs: number }, keyHeld = true) {
+      vi.useFakeTimers();
+      vi.setSystemTime(EPOCH_MS);
+      writeConfig({ token: "probe_pat_x", ...(keyHeld ? { companion_token: "probe_companion_x" } : {}) });
+      const sid = uniqueSessionId(label);
+      if (stamp) writeWorkerStamp(sid, stamp.state, stamp.atMs);
+      answerOnce(sid, { state: "daemon", profile: "daemon", capture: RUNNING });
+      const { api, handlers } = fakeExtensionAPI();
+      await registerExtension(api as never, tmp);
+      const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+      await startSession(handlers, ctx);
+      return { sid, ctx, handlers };
+    }
+
+    it("is starting (no note) while the service's stamp says so, then `daemon not recording` with no event", async () => {
+      const { ctx } = await startDaemonSession("starting", { state: "starting", atMs: EPOCH_MS });
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (daemon)");
+      const drawn = ctx.setStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(EPOCH_MS + DAEMON_START_GRACE_MS - Date.now());
+      expect(ctx.setStatus.mock.calls.length, "the window's last moment still counts as starting").toBe(drawn);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (daemon) | daemon not recording");
+    });
+
+    it.each([
+      { name: "the service gave up", stamp: { state: "gave_up", atMs: EPOCH_MS } },
+      { name: "a crash loop", stamp: { state: "crash_loop", atMs: EPOCH_MS } },
+      { name: "a worker that exited", stamp: { state: "exited", atMs: EPOCH_MS } },
+      { name: "a stamp past its window", stamp: { state: "starting", atMs: EPOCH_MS - DAEMON_START_GRACE_MS - 1 } },
+    ])("says `daemon not recording` at once after $name", async ({ stamp }) => {
+      const { ctx } = await startDaemonSession("not-starting", stamp);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (daemon) | daemon not recording");
+    });
+
+    it("is starting with no end when there is no stamp yet and the key is held (`is_worker_starting`'s None)", async () => {
+      // An older service writes none, and a new one before its first spawn: the status line's rule, a held key.
+      const { ctx } = await startDaemonSession("no-stamp", undefined);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (daemon)");
+      const drawn = ctx.setStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(DAEMON_START_GRACE_MS * 5);
+      expect(ctx.setStatus.mock.calls.length, "no window, so no redraw").toBe(drawn);
+    });
+
+    it.each([
+      { name: "no stamp", stamp: undefined },
+      { name: "a starting stamp", stamp: { state: "starting", atMs: EPOCH_MS } },
+    ])("says `daemon not recording` with $name when the companion key is not held: it can never start", async ({ stamp }) => {
+      const { ctx } = await startDaemonSession("no-key", stamp, false);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (daemon) | daemon not recording");
+    });
+
+    it("never redraws the previous session's footer after a session change", async () => {
+      const { ctx, handlers } = await startDaemonSession("starting-then-switch", { state: "starting", atMs: EPOCH_MS });
+      const next = uniqueSessionId("switched-to");
+      answerOnce(next, { state: "on" });
+      const ctx2 = fakeContext({ sessionId: next, sessionFile: undefined, hasUI: true });
+      await startSession(handlers, ctx2, "new");
+      const drawn = ctx.setStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(DAEMON_START_GRACE_MS + 1_000);
+      expect(ctx.setStatus.mock.calls.length).toBe(drawn);
+      expect(ctx2.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (inline)");
+    });
+
+    it("never redraws once this version is deactivated", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(EPOCH_MS);
+      writeConfig({ token: "probe_pat_x", companion_token: "probe_companion_x" });
+      const sid = uniqueSessionId("starting-deactivated");
+      writeWorkerStamp(sid, "starting", EPOCH_MS);
+      answerOnce(sid, { state: "daemon", profile: "daemon", capture: RUNNING });
+      const candidate = prepareExtension({
+        api: { sendMessage: vi.fn(), getActiveTools: () => [], setActiveTools: vi.fn(), declarationsChanged: vi.fn() },
+        shared: emptySharedState(),
+        installRoot: tmp,
+        resourceRoot: tmp,
+      });
+      candidate.activate();
+      const ctx = fakeContext({ sessionId: sid, sessionFile: undefined, hasUI: true });
+      const started = candidate.declarations.events.session_start!({ reason: "startup" }, ctx as never);
+      await vi.advanceTimersByTimeAsync(2_500);
+      await started;
+      expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "Probe | ● on (daemon)");
+      candidate.deactivate();
+      const drawn = ctx.setStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(DAEMON_START_GRACE_MS + 1_000);
+      expect(ctx.setStatus.mock.calls.length).toBe(drawn);
+    });
   });
 });
 

@@ -5,7 +5,7 @@ Reads the status-line payload on stdin, hands it to this machine's Probe service
 (`statusline.render`, drawn by `probe.service.jobs.statusline_render`), prints the ONE line
 it answers, exits 0. When no service answers it asks for one (`probe.service.client ensure`,
 detached, at most every ENSURE_EVERY_S) and, under Claude Code, waits for it (START_WAIT_S); still
-no answer, it prints exactly `Probe: service down` (T39). Nothing here reads Probe's state or
+no answer, it prints `  Probe | ● service down`. Nothing here reads Probe's state or
 decides what to show.
 
 CONTRACT — this runs on a RENDER PATH, once per status-line update:
@@ -52,8 +52,22 @@ import time
 
 #: The whole exchange (connect, hello, render), at most: inside Kimi's 300 ms.
 TIMEOUT_S = 0.25
-#: What the command prints when no service answers (T39, decided string).
-SERVICE_DOWN = "Probe: service down"
+#: What the command prints when no service answers: the status line's failure shape, red dot unless NO_COLOR.
+SERVICE_DOWN = "  Probe | ● service down"
+SERVICE_DOWN_COLOR = "  Probe | \033[31m●\033[0m service down"
+#: What it prints when a service answered but the reply was unusable (an error, no text, not JSON): the service is
+#: up, so this is never "service down", never asks for a start and never waits.
+UNAVAILABLE = "  Probe | ● status unavailable"
+UNAVAILABLE_COLOR = "  Probe | \033[31m●\033[0m status unavailable"
+#: The last time no service answered, for `probe statusline show`: `{"error", "socket", "at"}`.
+LASTFAIL_NAME = "statusline.lastfail"
+
+
+class _Unusable:
+    """A reply arrived and could not be used."""
+
+
+UNUSABLE = _Unusable()
 #: The variables the service's renderer reads (`statusline_render.py`): the prefix, colour, the home
 #: folder, and the caller's own Probe credential and config file (D11: they travel with the request;
 #: the service never reads its own environment's); by suffix, every agent's session or thread
@@ -102,8 +116,8 @@ def render_env(environ) -> dict:
             if (k in RENDER_ENV or k.endswith(RENDER_ENV_SUFFIX)) and len(v) <= 4096 and "\0" not in v}
 
 
-def ask_service(paths, raw: str, deadline: float, hold=None) -> "str | None":
-    """`statusline.render`'s line ("" when Probe draws nothing for this caller), or None: a reply
+def ask_service(paths, raw: str, deadline: float, hold=None) -> "str | _Unusable":
+    """`statusline.render`'s line ("" when Probe draws nothing for this caller), or UNUSABLE: a reply
     with no line, or one this cannot read. OSError: no answer (Unanswered once the socket took the
     connection). `hold`, asked once when nothing has come by `deadline`, says how much longer to wait
     (Hold.until)."""
@@ -128,13 +142,13 @@ def ask_service(paths, raw: str, deadline: float, hold=None) -> "str | None":
                     try:
                         message = json.loads(line.decode("utf-8"))
                     except ValueError:  # not JSON or not UTF-8: a reply all the same, with no line
-                        return None
+                        return UNUSABLE
                     if isinstance(message, dict) and message.get("id") == 2:
                         result = message.get("result")
                         text = result.get("text") if isinstance(result, dict) else None
-                        return text if isinstance(text, str) else None
+                        return text if isinstance(text, str) else UNUSABLE
                 if len(buffer) > 1 << 20:
-                    return None
+                    return UNUSABLE
                 sock.settimeout(max(deadline - time.monotonic(), 0.01))
                 try:
                     if unsent:  # a request past the socket's buffer waits for a service that reads
@@ -292,6 +306,30 @@ def wait_for_service(paths, raw: str, started: float, asked_at: "float | None", 
     return None
 
 
+def _note_failure(paths, failure) -> None:
+    """Leave the last "service down" cause beside the service's stamps for `probe statusline show`. Never raises."""
+    if paths is None:
+        return
+    try:
+        error = type(failure).__name__ if failure is not None else "no answer"
+        if isinstance(failure, OSError) and failure.errno:
+            import errno as _errno  # noqa: PLC0415
+
+            error = _errno.errorcode.get(failure.errno, error)
+        record = {"error": error, "socket": str(paths.socket_path()), "at": time.time()}
+        path = os.path.join(str(paths.service_dir()), LASTFAIL_NAME)
+        temp = f"{path}.{os.getpid()}.tmp"  # two draws at once never share a temp file
+        try:
+            with open(temp, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(record) + "\n")
+            os.replace(temp, path)
+        finally:
+            if os.path.lexists(temp):  # a full disk is when the service is down: leave no temp per draw
+                os.unlink(temp)
+    except Exception:  # noqa: BLE001 -- a render path may never traceback
+        pass
+
+
 def main() -> int:
     started = time.monotonic()
     try:
@@ -312,6 +350,9 @@ def main() -> int:
         failure = exc
     except Exception:  # noqa: BLE001 -- a render path may never traceback
         out = None
+    color = not os.environ.get("NO_COLOR")
+    if out is UNUSABLE:  # a service answered: never "down", never a start, never a wait
+        out = UNAVAILABLE_COLOR if color else UNAVAILABLE
     if out is None and paths is not None:
         try:
             asked_at = start_service(paths)
@@ -319,8 +360,11 @@ def main() -> int:
                 out = wait_for_service(paths, raw, started, asked_at, failure, hold)
         except Exception:  # noqa: BLE001
             out = None
+        if out is UNUSABLE:
+            out = UNAVAILABLE_COLOR if color else UNAVAILABLE
     if out is None:
-        out = SERVICE_DOWN
+        _note_failure(paths, failure)
+        out = SERVICE_DOWN_COLOR if color else SERVICE_DOWN
     if out:
         # No newline: the caller joins segments, and a newline would become a row.
         sys.stdout.write(out.replace("\n", " "))

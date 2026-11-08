@@ -31,9 +31,12 @@ import { newAskerState, QuestionAsker, type ApprovalsDeps, type AskerState } fro
 import { PiTool, resolveLikePi, sessionInlineReadOnly, sessionIsInline } from "./guard.js";
 import { forgetInlineShown } from "./inlineNotice.js";
 import {
+  CLAIM_RECHECK_MS,
   ClaimRecheck,
   finishHostedSession,
+  getStartingEndMs,
   HOSTED_FINISH_WAIT_S,
+  loadWorkerStamp,
   pruneStaleShutdownSentinels,
   recheckUntilClaimed,
   stopDaemon,
@@ -47,7 +50,7 @@ import {
   mcpToolDeclarations,
   type McpTransport,
 } from "./mcpBridge.js";
-import { approvalsDir, extensionLogFile, probeStateDir, pythonMissingFile } from "./core/paths.js";
+import { approvalsDir, extensionLogFile, MCP_TOKEN_ENV, probeConfigPath, probeStateDir, pythonMissingFile } from "./core/paths.js";
 import { hostedServicePid } from "./core/hosted.js";
 import { Mailbox } from "./core/reads.js";
 import { ledgerFor, notifyLevel } from "./core/serverNotices.js";
@@ -62,6 +65,7 @@ import { parseSwitchIntent, switchAppliedNotice } from "./core/trackingSwitch.js
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
 import {
   companionKeyHeld,
+  DaemonReason,
   daemonStatus,
   DaemonStatus,
   type DaemonNoticeDeps,
@@ -70,13 +74,15 @@ import {
 import { daemonSkillPaths, isProbeMcpTool, leanSkills, readDaemonSkills, researcherDaemonNotice, withoutPackageSkills } from "./profile.js";
 import { trackingOff } from "./trackingSetting.js";
 import {
+  Configured,
   initializeTrackingState,
-  loweredSuffix,
   ProbeState,
   Recorder,
-  trackingStatusText,
-  autoFooter,
+  renderFooter,
+  SIGNED_OUT_FOOTER,
+  STATUS_UNAVAILABLE_FOOTER,
   type CaptureReading,
+  type ConfiguredValue,
   type ProbeStateValue,
   type RecorderValue,
   type TrackingExecFileFn,
@@ -152,8 +158,19 @@ export interface SessionState {
      */
     state: ProbeStateValue | undefined;
     /** The last tracking reading, so a turn in `daemon` can redraw the footer
-     * when the daemon's lease changes without spawning the CLI again. */
-    tracking: { tracking: boolean; capture?: CaptureReading; lowered?: string } | undefined;
+     * when the daemon's lease changes without spawning the CLI again. `readAtMs`: when it was read;
+     * `keptUntilMs`: a refresh failed and it is kept until then (`refreshTrackingStatus`). */
+    tracking:
+      | {
+          tracking: boolean;
+          capture?: CaptureReading;
+          lowered?: string;
+          signedOut?: boolean;
+          configured?: ConfiguredValue;
+          readAtMs?: number;
+          keptUntilMs?: number;
+        }
+      | undefined;
     /**
      * Who records, as the CLI last reported it, and for WHICH session.
      *
@@ -287,33 +304,135 @@ function trackingOffFor(s: SessionState, sessionId: string | undefined): boolean
   return sessionId !== undefined && s.probe.trackingOff?.sessionId === sessionId && s.probe.trackingOff.off;
 }
 
-/** The footer for this session: in `daemon`, it reads the lease file; an auto chat's is tagged or hidden. */
-function footerText(s: SessionState, sessionId: string, daemonLive?: boolean): string | undefined {
-  // An off auto chat's footer stays when the agent lowered a setting: that line is the warning.
-  const isQuietOff = probeIsOff(s) && !loweredSuffix(s.probe.tracking?.lowered);
-  return autoFooter(manualFooterText(s, sessionId, daemonLive), isAutoChat(s, sessionId), isQuietOff);
+/** The footer pi shows (undefined: none, Probe off or not set up) and when to draw it again with no event (null: never). */
+interface Footer {
+  text: string | undefined;
+  redrawAtMs: number | null;
 }
 
-function manualFooterText(s: SessionState, sessionId: string, daemonLive?: boolean): string | undefined {
+/** What draws the footer: an event's context, or the one a redraw kept. */
+type FooterContext = { hasUI: boolean; ui: { setStatus: (key: string, value: string | undefined) => void } };
+
+/** A refresh that fails keeps the last reading this long after it was read, then the footer says unavailable: the
+ * claim rechecks' whole window. */
+const KEEP_FAILED_READ_MS = CLAIM_RECHECK_MS.reduce((total, ms) => total + ms, 0);
+
+/** A Probe token in pi's own environment (the CLI child the service runs never sees it). */
+function hasProbeTokenInEnv(): boolean {
+  return Boolean(process.env.PROBE_TOKEN || process.env[MCP_TOKEN_ENV]);
+}
+
+/** The earliest of the given times, or null. */
+function getEarliest(...times: (number | null)[]): number | null {
+  const known = times.filter((time): time is number => time !== null);
+  return known.length ? Math.min(...known) : null;
+}
+
+/**
+ * The footer for this session: the status line's words (`trackingState.ts`). In `daemon` it reads the lease and the
+ * worker stamp: a worker with no lease yet is STARTING (no note) while the companion key is held, for
+ * DAEMON_START_GRACE_MS after the service asked for it (no stamp: no end). pi's own failures (no reading, a kept one
+ * past its time, an unreadable config) read `status unavailable`, never hidden: hidden is Probe off, or not set up.
+ */
+function getFooter(s: SessionState, sessionId: string, lease?: { status: DaemonStatusValue; reason: string | null }): Footer {
   const cached = s.probe.tracking;
-  if (!cached) return undefined;
-  const live =
-    s.probe.state !== ProbeState.Daemon
-      ? undefined
-      : (daemonLive ?? daemonStatus(sessionId, realDaemonNoticeDeps()).status === DaemonStatus.Live);
+  const now = Date.now();
+  const unavailable: Footer = { text: STATUS_UNAVAILABLE_FOOTER, redrawAtMs: null };
+  const hidden: Footer = { text: undefined, redrawAtMs: null };
+  if (!cached) return hasProbeTokenInEnv() || fs.existsSync(probeConfigPath(process.env)) ? unavailable : hidden;
+  if (cached.keptUntilMs !== undefined && now >= cached.keptUntilMs) return unavailable;
+  if (cached.configured === Configured.Unreadable) return unavailable;
+  const kept = cached.keptUntilMs ?? null;
+  // The agent signed the person out: the status alone, before off or any note (`render_signed_out`). A token in
+  // pi's own environment still signs it in, as the caller's does for the status line.
+  if (cached.signedOut && !hasProbeTokenInEnv()) return { text: SIGNED_OUT_FOOTER, redrawAtMs: kept };
+  if (cached.configured === Configured.Missing && !hasProbeTokenInEnv()) return hidden;
   // `on (inline)`: the researcher set Probe inline (`/probe inline`).
   const inline = inDaemonProfile(s, sessionId) && sessionIsInline(sessionId);
-  // What the agent turned down on this computer, after the label (`· new chats off`, fixes-1107b PR B).
-  const lowered = loweredSuffix(cached.lowered);
-  if (inline && sessionInlineReadOnly(sessionId)) return "○ read only (inline)" + lowered;
-  // Probe off: no Probe calls, and the Probe service holds the session
-  // without capturing it. The status line's word for it.
-  if (probeIsOff(s)) return "○ off" + lowered;
-  if (lowered) {
-    // The label alone, as the status line draws it: the capture suffix gives way.
-    return trackingStatusText(cached.tracking, undefined, live, inline, inDaemonProfile(s, sessionId) && !inline) + lowered;
+  if (inline && sessionInlineReadOnly(sessionId)) {
+    return {
+      text: renderFooter({ tracking: false, lowered: cached.lowered, isAuto: isAutoChat(s, sessionId) }),
+      redrawAtMs: kept,
+    };
   }
-  return trackingStatusText(cached.tracking, cached.capture, live, inline, inDaemonProfile(s, sessionId) && !inline);
+  // Probe off: no Probe calls, and the Probe service holds the session without capturing it. No footer, as the
+  // status line draws none.
+  if (probeIsOff(s)) return { text: undefined, redrawAtMs: kept };
+  let daemonLive: boolean | undefined;
+  let startingEndMs: number | null = null;
+  if (s.probe.state === ProbeState.Daemon) {
+    const deps = realDaemonNoticeDeps();
+    const { status, reason } = lease ?? daemonStatus(sessionId, deps);
+    if (status === DaemonStatus.Live) {
+      daemonLive = true;
+    } else if (reason !== DaemonReason.NotStarted) {
+      daemonLive = false;
+    } else {
+      // No lease yet: STARTING while the key is held and the stamp says so (`is_worker_starting`). No stamp (an
+      // older service, or none written yet) is starting with no end: no redraw time.
+      const stamp = loadWorkerStamp(sessionId, deps);
+      const endMs = stamp ? getStartingEndMs(stamp, now) : null;
+      daemonLive = (stamp === null || endMs !== null) && companionKeyHeld(deps);
+      startingEndMs = daemonLive ? endMs : null;
+    }
+  }
+  const text = renderFooter({
+    tracking: cached.tracking,
+    capture: cached.capture,
+    daemonLive,
+    inline,
+    daemonReads: inDaemonProfile(s, sessionId) && !inline,
+    lowered: cached.lowered,
+    isAuto: isAutoChat(s, sessionId),
+  });
+  // The window's last moment still counts as starting (`is_worker_starting`): redraw just past it.
+  return { text, redrawAtMs: getEarliest(kept, startingEndMs === null ? null : startingEndMs + 1) };
+}
+
+/**
+ * pi redraws its footer only on events: this redraws it when what it shows runs out by the clock alone (a starting
+ * daemon's window, a kept reading). One pending redraw per version, re-armed by every draw; cancelled on a session
+ * change and at deactivate.
+ */
+class FooterClock {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly redraw: (ctx: FooterContext, sessionId: string) => void) {}
+
+  schedule(ctx: FooterContext, sessionId: string, atMs: number | null): void {
+    this.cancel();
+    if (atMs === null) return;
+    const timer = setTimeout(() => {
+      this.timer = null;
+      this.redraw(ctx, sessionId);
+    }, Math.max(0, atMs - Date.now()));
+    timer.unref?.();
+    this.timer = timer;
+  }
+
+  cancel(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+  }
+}
+
+/** Draw this session's footer and arm its redraw. Throws what `setStatus` throws: each caller logs it its own way. */
+function renderTrackingFooter(
+  s: SessionState,
+  clock: FooterClock,
+  ctx: FooterContext,
+  sessionId: string,
+  lease?: { status: DaemonStatusValue; reason: string | null },
+): void {
+  const footer = getFooter(s, sessionId, lease);
+  ctx.ui.setStatus("probe-tracking", footer.text);
+  clock.schedule(ctx, sessionId, footer.redrawAtMs);
+}
+
+/** No reading to draw the footer from: none (a failed read), or one kept past its time. */
+function isTrackingStale(s: SessionState): boolean {
+  const cached = s.probe.tracking;
+  return cached === undefined || (cached.keptUntilMs !== undefined && Date.now() >= cached.keptUntilMs);
 }
 
 /** Has the researcher switched Probe off for this session? */
@@ -512,10 +631,11 @@ function realDaemonDeps(): DaemonDeps {
  * another session is the old one's: never committed over the new one's (its
  * switch, profile and footer). `keepOnFailure`: a
  * read that fails leaves the last reading, not an unknown one (a re-read after
- * the start, `recheckUntilClaimed`). True when a reading was committed.
+ * the start, `recheckUntilClaimed`), for KEEP_FAILED_READ_MS after it was read. True when a reading was committed.
  */
 async function refreshTrackingStatus(
   s: SessionState,
+  clock: FooterClock,
   ctx: {
     hasUI: boolean;
     ui: {
@@ -534,26 +654,38 @@ async function refreshTrackingStatus(
     log: logLine,
   });
   if (s.current.sessionId !== null && s.current.sessionId !== sessionId) return false;
-  if (!state && opts.keepOnFailure) return false;
   if (!state) {
-    // Unknown, not the last value seen: see SessionState.probe.state's docstring.
-    s.probe.state = undefined;
-    s.probe.tracking = undefined;
+    const last = s.probe.tracking;
+    if (opts.keepOnFailure && last) {
+      last.readAtMs ??= Date.now(); // a reading an older version committed: kept from now
+      last.keptUntilMs = last.readAtMs + KEEP_FAILED_READ_MS;
+    } else {
+      // Unknown, not the last value seen: see SessionState.probe.state's docstring.
+      s.probe.state = undefined;
+      s.probe.tracking = undefined;
+    }
     if (ctx.hasUI) {
       try {
-        // Never leave a previous authoritative-looking value visible when
-        // the current state could not be read back.
-        ctx.ui.setStatus("probe-tracking", undefined);
+        // Never leave a previous authoritative-looking value visible when the current state could not be read
+        // back, and never hide the footer either (that reads as off): `status unavailable`.
+        renderTrackingFooter(s, clock, ctx, sessionId);
       } catch (err) {
         logLine(
-          `tracking footer clear failed: ${err instanceof Error ? err.message : String(err)}`,
+          `tracking footer redraw failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
     return false;
   }
   s.probe.state = state.state;
-  s.probe.tracking = { tracking: state.tracking, capture: state.capture, lowered: state.lowered };
+  s.probe.tracking = {
+    tracking: state.tracking,
+    capture: state.capture,
+    lowered: state.lowered,
+    signedOut: state.signedOut,
+    configured: state.configured,
+    readAtMs: Date.now(),
+  };
   if (state.retiredConfigNotice) {
     // The researcher's, once (the CLI marked it given): never the agent's prompt.
     logLine(state.retiredConfigNotice);
@@ -569,7 +701,7 @@ async function refreshTrackingStatus(
   s.probe.auto = { sessionId, auto: state.auto };
   if (ctx.hasUI) {
     try {
-      ctx.ui.setStatus("probe-tracking", footerText(s, sessionId));
+      renderTrackingFooter(s, clock, ctx, sessionId);
     } catch (err) {
       logLine(
         `tracking footer refresh failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -615,11 +747,13 @@ function deactivateProbeTools(api: ShimApi): void {
  */
 function tellResearcherAboutDaemon(
   s: SessionState,
+  clock: FooterClock,
   ctx: { hasUI: boolean; ui: { notify: (msg: string, level?: "info" | "warning" | "error") => void; setStatus: (key: string, value: string | undefined) => void } },
   sessionId: string,
 ): void {
   const deps = realDaemonNoticeDeps();
-  const { status, reason } = daemonStatus(sessionId, deps);
+  const lease = daemonStatus(sessionId, deps);
+  const { status, reason } = lease;
   const previous = s.probe.daemonHealth;
   const health = previous?.sessionId === sessionId ? previous : { sessionId, status: null, prompts: 0 };
   const { notice, next } = researcherDaemonNotice(health.status, status, reason, health.prompts === 0, () =>
@@ -629,7 +763,7 @@ function tellResearcherAboutDaemon(
   if (notice) logLine(notice);
   if (!ctx.hasUI) return;
   try {
-    ctx.ui.setStatus("probe-tracking", footerText(s, sessionId, status === DaemonStatus.Live));
+    renderTrackingFooter(s, clock, ctx, sessionId, lease);
     if (notice) ctx.ui.notify(notice, "warning");
   } catch (err) {
     logLine(`daemon status notice failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -674,6 +808,15 @@ export function prepareExtension(env: ImplEnv): Candidate {
     },
   });
   let active = false;
+  // The footer's own redraws (a starting daemon's window, a kept reading): this version's, never another's.
+  const footerClock = new FooterClock((ctx, sessionId) => {
+    if (!active || s.current.sessionId !== sessionId) return;
+    try {
+      if (ctx.hasUI) renderTrackingFooter(s, footerClock, ctx, sessionId);
+    } catch (err) {
+      logLine(`tracking footer redraw failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
 
   const tapRuntimeDeps = (): TapRuntimeDeps => ({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir: resourceRoot });
 
@@ -798,12 +941,12 @@ export function prepareExtension(env: ImplEnv): Candidate {
    */
   async function rereadCapture(ctx: any, sessionId: string): Promise<void> {
     s.capture.spawned.add(sessionId);
-    await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+    await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd);
     const current = () => s.current.sessionId === sessionId && s.capture.spawned.has(sessionId);
     recheckUntilClaimed(s.probe.tracking?.capture, {
       reread: async () => {
         if (!current()) return ClaimRecheck.Stop;
-        const read = await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd, { keepOnFailure: true });
+        const read = await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd, { keepOnFailure: true });
         if (!current()) return ClaimRecheck.Stop;
         return read ? s.probe.tracking?.capture : undefined;
       },
@@ -834,6 +977,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     const sessionId = ctx.sessionManager.getSessionId();
     const transcriptPath = ctx.sessionManager.getSessionFile();
     s.current.sessionId = sessionId ?? null;
+    footerClock.cancel(); // the previous session's (or context's) redraw; this start draws and arms its own
 
     // The service's socket first: everything below asks it. Asked for once found; this event
     // waits for it, bounded.
@@ -846,7 +990,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     // return, then renders that same answer in Pi's persistent footer. Reloads
     // are safe: the hidden initializer uses set-if-absent and returns the
     // existing signal rather than resolving the folder again.
-    await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+    await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd);
     // A resumed session's agent hears again that Probe is inline (`/probe inline`).
     if (sessionId && event.reason === "resume") forgetInlineShown(sessionId);
 
@@ -967,6 +1111,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
   };
 
   const onSessionShutdown: EventHandler = async (event, ctx) => {
+    footerClock.cancel();
     pauseReadsPoller();
     s.reads.poller = null;
     if (event.reason === ShutdownReason.Reload) {
@@ -1059,7 +1204,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     showNotices(ctx, effects);
     // The service's routes told the agent about the daemon this turn.
     s.probe.lastTurnInDaemon = s.probe.state === ProbeState.Daemon;
-    if (s.probe.state === ProbeState.Daemon && inDaemonProfile(s, sessionId)) tellResearcherAboutDaemon(s, ctx, sessionId);
+    if (s.probe.state === ProbeState.Daemon && inDaemonProfile(s, sessionId)) tellResearcherAboutDaemon(s, footerClock, ctx, sessionId);
     try {
       if (mailboxFor(sessionId).served() || heldQuestionsBoardExists()) startReadsPoller(ctx);
     } catch (err) {
@@ -1095,7 +1240,11 @@ export function prepareExtension(env: ImplEnv): Candidate {
     // moves an off switch from its own shell, so an off reading is read back too.
     if (sessionId && ctx && ((s.probe.state !== ProbeState.Full && inDaemonProfile(s, sessionId) && sessionIsInline(sessionId))
       || (probeIsOff(s) && isAutoChat(s, sessionId)))) {
-      await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+      await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd);
+    } else if (sessionId && ctx && isTrackingStale(s)) {
+      // A footer left on `status unavailable` (a failed read, or a kept one past its time) is read again here,
+      // since nothing else would; in the background, so a service that is down never holds up the prompt.
+      void refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd).catch(() => undefined);
     }
     forwarder.beginTurn(sessionId);
     if (trackingOffFor(s, sessionId)) {
@@ -1203,8 +1352,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
       // Redraw the footer: it was drawn at the prompt, before a daemon that
       // starts with the session's first tool call could go live, and a turn
       // the daemon's answer starts has no prompt to redraw it.
-      const footer = sid && ctx?.hasUI ? footerText(s, sid) : undefined;
-      if (footer !== undefined) ctx.ui.setStatus("probe-tracking", footer);
+      if (sid && ctx?.hasUI) renderTrackingFooter(s, footerClock, ctx, sid);
     } catch (err) {
       logLine(`reads at settle: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1276,7 +1424,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
       applied = ranToEnd(forwarded);
       logLine(`tracking switch: the Probe service ${applied ? "ran it" : `did not (${forwarded?.outcome ?? "no session"})`}`);
       if (!applied) return { action: "continue" };
-      await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+      await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd);
     }
     // Transform, never "handled": the researcher asked for the skill, and the
     // model still needs the manual — not least to READ THE STATE BACK and say
@@ -1300,7 +1448,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
       // service what its recorder does), so this line, the footer and `probe
       // doctor` agree; a reading that cannot be had leaves the marker's.
       if (sessionId) {
-        await refreshTrackingStatus(s, ctx, sessionId, ctx.cwd);
+        await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd);
       }
       const report = buildStatusReport(sessionId, {
         existsSync: fs.existsSync,
@@ -1392,6 +1540,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     deactivate() {
       active = false;
       pauseReadsPoller();
+      footerClock.cancel();
     },
     status() {
       const id = s.current.sessionId;

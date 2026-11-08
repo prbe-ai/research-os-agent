@@ -83,14 +83,30 @@ export interface TrackingState {
    * What the agent turned down on this computer and is down still, as the status
    * line words it (`recording_lowered[0].status`, e.g. "Probe: new chats off";
    * fixes-1107b PR B). Absent when nothing is, or from a CLI that predates it.
+   * Never the sign-out (`signedOut`), as `get_lowered_status_word` skips it.
    */
   lowered?: string;
+  /** The agent signed the person out (a `sign_in` lowering): the footer is `Probe | ● signed out`. */
+  signedOut?: boolean;
   /**
    * The main agent sets this chat's switch (probe auto mode: the machine is in auto and the
    * researcher has not typed `/probe` here). False from a CLI that predates it.
    */
   auto: boolean;
+  /**
+   * Is Probe set up on this machine (`configured`): absent from a CLI that predates it, which renders
+   * from the rest of the reply. `missing` hides the footer; `unreadable` is `status unavailable`.
+   */
+  configured?: ConfiguredValue;
 }
+
+/** `probe session initialize`'s `configured`; mirrors `initialize.Configured`. */
+export const Configured = {
+  Ok: "ok",
+  Missing: "missing",
+  Unreadable: "unreadable",
+} as const;
+export type ConfiguredValue = (typeof Configured)[keyof typeof Configured];
 
 export interface TrackingExecOptions {
   env: PathEnv;
@@ -213,7 +229,9 @@ export async function initializeTrackingState(
           ? value.retired_config_notice
           : undefined,
       lowered: parseLowered(value.recording_lowered),
+      signedOut: isSignedOut(value.recording_lowered),
       auto: value.auto === true,
+      configured: parseConfigured(value.configured),
     };
   } catch (err) {
     deps.log(
@@ -284,77 +302,141 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
   return { running, reason };
 }
 
+/** `configured`, read leniently: an unknown word is absent (render from the rest), never a guess. */
+function parseConfigured(raw: unknown): ConfiguredValue | undefined {
+  return Object.values(Configured).find((value) => value === raw);
+}
+
 /**
- * The footer, in pi's idiom: only the five states the status line shows (PR32,
- * Richard 2026-11-06), never the old `tracking` word.
- *
- * Capture is never mentioned when nothing records: it may still be running,
- * and read only is the researcher's decision, not a capture report.
+ * THE FOOTER: the status line's words (`session_marker`, pinned by `test_pi_core_parity.py`), in pi's idiom:
+ * `Probe | ● on (daemon) | <note>`. No colour in pi, so the glyph says it (● records, ○ reads); no title (E1).
  */
-/** The footer's word for a recording session; mirrors `session_marker._recording_labels`. */
+export const STATUS_PREFIX_LABEL = "Probe";
+export const STATUS_DIVIDER = " | ";
+export const RECORDING_DOT = "●";
+export const READ_DOT = "○";
+
+/** The footer's words for a recording session (`get_state_words`). */
 export const RecordingLabel = {
   Daemon: "on (daemon)",
-  DaemonDegraded: "on (daemon degraded)",
   Inline: "on (inline)",
 } as const;
 
-/** The footer's word for a read-only session; mirrors `session_marker`'s `read-only` displays. */
+/** The footer's words for a read session (`get_state_words`). */
 export const ReadLabel = {
-  Daemon: "read only (daemon)",
-  Inline: "read only (inline)",
+  Daemon: "read (daemon)",
+  Inline: "read (inline)",
 } as const;
 
-/** The newest lowering's status words (`recording_lowered[].status`), read leniently: anything else is none. */
+/** `session_marker.NOTE_*`: the one note a footer carries, most serious first. */
+export const FooterNote = {
+  TranscriptNotRecorded: "session transcript not recorded",
+  DaemonNotRecording: "daemon not recording",
+  TranscriptsOff: "transcripts off",
+  StatusUnavailable: "status unavailable",
+  SignedOut: "signed out",
+} as const;
+
+/** The lowering a sign-out by the agent records (`session_marker.SCOPE_SIGN_IN`). */
+export const SCOPE_SIGN_IN = "sign_in";
+
+/** Capture's reason when transcripts were turned off on purpose (`session_marker._CHOSEN_OFF_REASON`). */
+export const CHOSEN_OFF_REASON = "turned off";
+
+/** A lowering's status words start with this (`session_marker.STATUS_PREFIX`); the footer drops it. */
+export const LOWERED_PREFIX = "Probe: ";
+
+/** `Probe | <dot> <words>`, then ` | <note>` when there is one. */
+function joinFooter(dot: string, words: string, note?: string): string {
+  return STATUS_PREFIX_LABEL + STATUS_DIVIDER + `${dot} ${words}` + (note ? STATUS_DIVIDER + note : "");
+}
+
+/** pi could not read the state: never hidden, which would read as off. */
+export const STATUS_UNAVAILABLE_FOOTER = joinFooter(RECORDING_DOT, FooterNote.StatusUnavailable);
+
+/** The agent signed the person out (`session_marker.render_signed_out`): the status alone, even in an off chat. */
+export const SIGNED_OUT_FOOTER = joinFooter(RECORDING_DOT, FooterNote.SignedOut);
+
+/** A `recording_lowered[]` entry's scope, or undefined. */
+function getLoweredScope(entry: unknown): unknown {
+  return entry && typeof entry === "object" ? (entry as { scope?: unknown }).scope : undefined;
+}
+
+/**
+ * The newest lowering's status words (`recording_lowered[].status`), read leniently: anything else is none. The
+ * sign-out is skipped (`get_lowered_status_word`): it is the whole footer, never a note.
+ */
 export function parseLowered(value: unknown): string | undefined {
   if (!Array.isArray(value)) return undefined;
   for (const entry of value) {
+    if (getLoweredScope(entry) === SCOPE_SIGN_IN) continue;
     const status = entry && typeof entry === "object" ? (entry as { status?: unknown }).status : undefined;
     if (typeof status === "string" && status && !/[\r\n]/.test(status)) return status;
   }
   return undefined;
 }
 
-/** The footer's ` · new chats off` for `lowered` (its words less "Probe: "), else "". */
-export function loweredSuffix(lowered?: string): string {
+/** Did the agent sign the person out: a `sign_in` lowering still in effect. */
+export function isSignedOut(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => getLoweredScope(entry) === SCOPE_SIGN_IN);
+}
+
+/** A lowering's words as the footer's note: less `Probe: `, else "". */
+export function getLoweredNote(lowered?: string): string {
   if (!lowered) return "";
-  return ` · ${lowered.startsWith("Probe: ") ? lowered.slice("Probe: ".length) : lowered}`;
+  return lowered.startsWith(LOWERED_PREFIX) ? lowered.slice(LOWERED_PREFIX.length) : lowered;
+}
+
+/** What the footer is drawn from (`renderFooter`). */
+export interface FooterReading {
+  /** The CLI's two-valued answer: true records, false reads. */
+  tracking: boolean;
+  capture?: CaptureReading;
+  /**
+   * Undefined outside the `daemon` state (the agent records: `on (inline)`). Inside it: does the daemon hold a
+   * live lease, or is it still starting (`getStartingEndMs`)? False is `daemon not recording`.
+   */
+  daemonLive?: boolean;
+  /** The researcher set Probe inline (`/probe inline`): the agent records, whatever a cached read says. */
+  inline?: boolean;
+  /** A read session whose reader is the daemon. */
+  daemonReads?: boolean;
+  /** The newest machine-wide lowering's status words (`recording_lowered[0].status`). */
+  lowered?: string;
+  /** The main agent sets this chat's switch (probe auto mode): the words say `auto` (`on (daemon, auto)`). */
+  isAuto?: boolean;
 }
 
 /**
- * `daemonLive` is undefined outside the `daemon` state, where the agent records:
- * `on (inline)`. Inside it the footer names the switch's position: `on (daemon)`
- * while the daemon holds a live lease, `on (daemon degraded)` while the agent has
- * recording back. With capture down the suffix already explains a daemon that
- * cannot run (it is capture's child), so that line keeps the shorter label.
- * `daemonReads`: a read-only session whose reader is the daemon's.
+ * The one note, in the status line's order (`session_marker._pick_note`): capture down (with its reason: pi has no
+ * title), a daemon not recording, a lowering, transcripts turned off on purpose. A read session shows a lowering only.
  */
-/**
- * The footer in an auto chat (probe auto mode: the main agent sets the switch): hidden while off,
- * else its label says `auto` (`on (daemon, auto)`). Unchanged in a manual chat.
- */
-export function autoFooter(text: string | undefined, isAuto: boolean, isOff: boolean): string | undefined {
-  if (!isAuto || text === undefined) return text;
-  if (isOff) return undefined;
-  return text.includes(")") ? text.replace(")", ", auto)") : `${text} (auto)`;
+function pickFooterNote(reading: FooterReading, recording: boolean): string {
+  const lowered = getLoweredNote(reading.lowered);
+  if (!recording) return lowered;
+  const { capture } = reading;
+  const chosenOff = capture !== undefined && !capture.running && capture.reason === CHOSEN_OFF_REASON;
+  if (capture !== undefined && !capture.running && !chosenOff) {
+    return `${FooterNote.TranscriptNotRecorded}: ${capture.reason.replace(/[\r\n]+/g, " ")}`;
+  }
+  if (!reading.inline && reading.daemonLive === false && !chosenOff) return FooterNote.DaemonNotRecording;
+  if (lowered) return lowered;
+  return chosenOff ? FooterNote.TranscriptsOff : "";
 }
 
-export function trackingStatusText(
-  tracking: boolean,
-  capture?: CaptureReading,
-  daemonLive?: boolean,
-  inline = false,
-  daemonReads = false,
-): string {
-  // An inline session records (the agent does) even while a cached reading from
-  // before `/probe inline` still says `read`.
-  if (!tracking && !inline) return `○ ${daemonReads ? ReadLabel.Daemon : ReadLabel.Inline}`;
-  const captureDown = capture !== undefined && !capture.running;
-  const label =
-    inline || daemonLive === undefined
-      ? RecordingLabel.Inline
-      : daemonLive || captureDown
-        ? RecordingLabel.Daemon
-        : RecordingLabel.DaemonDegraded;
-  if (!capture || capture.running) return `● ${label}`;
-  return `◐ ${label} · not capturing session transcript: ${capture.reason}`;
+/** `words` with auto mode inside its parentheses (`session_marker.get_state_words(..., is_auto=True)`). */
+function addAutoTag(words: string, reading: FooterReading): string {
+  return reading.isAuto ? words.replace(/\)$/, ", auto)") : words;
+}
+
+/** The footer for a session Probe is not off for: `Probe | ● on (daemon)`, `Probe | ○ read (inline) | runs only`. */
+export function renderFooter(reading: FooterReading): string {
+  // An inline session records (the agent does) even while a cached reading from before `/probe inline` says `read`.
+  const recording = reading.tracking || Boolean(reading.inline);
+  const note = pickFooterNote(reading, recording);
+  if (!recording) {
+    return joinFooter(READ_DOT, addAutoTag(reading.daemonReads ? ReadLabel.Daemon : ReadLabel.Inline, reading), note);
+  }
+  const words = reading.inline || reading.daemonLive === undefined ? RecordingLabel.Inline : RecordingLabel.Daemon;
+  return joinFooter(RECORDING_DOT, addAutoTag(words, reading), note);
 }
