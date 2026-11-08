@@ -60,6 +60,10 @@ class StageMixin:
             if gate.blocked:
                 return None
             skip = gate.gaps
+            carried = capture_gate.normalized(state.get(CARRIED_GAPS_STATE) or [])
+            if carried:
+                # An account switch: what this computer sent another team of this chat stays there.
+                skip = capture_gate.normalized([*skip, *carried])
             historic = bool(state.get("snapshot_path") and not state.get("historical_complete"))
             if historical_only and state.get("historical_complete"):
                 return None
@@ -387,6 +391,7 @@ def _get_inherited_end(state: dict, path: Path, read_inherited_end) -> int:
     return state[INHERITED_END_STATE]
 
 
+from .ensure import CARRIED_GAPS_STATE  # noqa: E402 -- pieces need each other; the front door loads this one first
 from .errors import (  # noqa: E402 -- pieces need each other; the front door loads this one first
     DeliveryPending,
     ReconciliationRequired,

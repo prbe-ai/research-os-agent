@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import uuid
 from pathlib import Path
@@ -14,6 +15,10 @@ from ..pinned import open_transcript
 # Raw history can be much larger than its sanitized pending delivery. Its
 # immutable disk copy needs space for the source, not the upload queue limit.
 SNAPSHOT_FREE_RESERVE_BYTES = 100 * 1024 * 1024
+#: Where a session's state keeps the byte ranges of this chat that this computer already sent to ANOTHER team
+#: (an account switch, fixes-1107b T7): `[[from, to], ...]`. `stage` reads lines starting in them past as
+#: nothing, as it does an off stretch, so they stay in that team.
+CARRIED_GAPS_STATE = "carried_gaps"
 
 
 class EnsureMixin:
@@ -88,6 +93,47 @@ class EnsureMixin:
                 and state.get("historical_hash") == state["prefix_sha256"]):
             state["historical_complete"] = True
         return True
+
+    def _update_carried_gaps(self, state: dict, path: Path) -> None:
+        """Mark, from the session's cursor, what this computer's journals for OTHER teams on the same server
+        and agent already sent of this chat (their confirmed cursor, where the transcript up to it is
+        unchanged). A batch waiting there is not counted: if that account never signs in again, those lines
+        go on with the chat rather than to nobody. Nothing pending here; one that cannot be read carries nothing."""
+        session_id, start = state["session_id"], state["source_byte_end"]
+        if self.pending(session_id):
+            return
+        gaps = state.get(CARRIED_GAPS_STATE) or []
+        for end, digest in sorted(self._load_other_team_ends(session_id), reverse=True):
+            if end <= start or any(gap[0] <= start and gap[1] >= end for gap in gaps):
+                return  # the furthest is behind the cursor or already carried
+            try:
+                if prefix_hash(path, end) == digest:
+                    state[CARRIED_GAPS_STATE] = [*gaps, [start, end]]
+                    return
+            except ReconciliationRequired:  # the transcript is shorter there: rewritten
+                continue
+
+    def _load_other_team_ends(self, session_id: str) -> list[tuple[int, str]]:
+        """`(confirmed cursor, prefix hash there)` of this chat in each journal on this computer for another
+        team on the same server and agent."""
+        from .journal import DESTINATION_NAME
+
+        ends = []
+        for named in self.directory.parent.glob(f"*/{DESTINATION_NAME}"):
+            if named.parent == self.directory:
+                continue
+            try:
+                destination = json.loads(named.read_text(encoding="utf-8"))
+                if not isinstance(destination, dict) or destination.get("customer_id") == self.customer_id or (
+                    str(destination.get("base_url") or "").rstrip("/"), destination.get("source")
+                ) != (self.base_url, self.source):
+                    continue
+                found = _load_sent_end(named.parent / "state.sqlite3", session_id)
+            except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+                continue
+            if found is not None:
+                ends.append(found)
+        return ends
 
     def ensure(
         self,
@@ -179,6 +225,10 @@ class EnsureMixin:
                     # The frozen history a rebuilt session already had
                     # (`_rebuild_from_server`): the same pin, the same copy.
                     state.update(carried_history, historical_complete=False)
+                elif not historical and not remote.get("stream"):
+                    # A live chat this computer was sending to another team: its earlier lines stay
+                    # there. Imports (`historical`) send a chat whole, as asked.
+                    self._update_carried_gaps(state, path)
                 _record_terms(state, remote)
                 self._validate_source(state, path)
             else:
@@ -249,6 +299,9 @@ class EnsureMixin:
                         }
                     )
                 state["path"] = str(path)
+                if not historical:
+                    # Signed in to this team again (A, B, A): what went to the other one meanwhile stays there.
+                    self._update_carried_gaps(state, path)
             if not historical:
                 state["live_enabled"] = True
                 state["finalize_requested"] = False
@@ -384,6 +437,26 @@ class EnsureMixin:
             _validate_history(state, expected_history)
             self._save(state)
             return state
+def _load_sent_end(db_path: Path, session_id: str) -> tuple[int, str] | None:
+    """One journal's confirmed cursor for `session_id` and the prefix hash there, or None. Each state table
+    is asked on its own: a journal last opened by a tap before protocol 3 has no fragment table."""
+    if not db_path.is_file():
+        return None
+    connection = sqlite3.connect(db_path, timeout=1)
+    try:
+        for table in (_FRAGMENT_SESSIONS, "sessions"):
+            try:
+                row = connection.execute(f"SELECT state FROM {table} WHERE session_id=?", (session_id,)).fetchone()
+            except sqlite3.OperationalError:  # no such table
+                continue
+            if row:
+                state = json.loads(row[0])
+                return int(state["source_byte_end"]), str(state["prefix_sha256"])
+    finally:
+        connection.close()
+    return None
+
+
 from .errors import (  # noqa: E402 -- pieces need each other; the front door loads this one first
     DeliveryPending,
     ReconciliationRequired,
@@ -399,3 +472,4 @@ from .stream_protocol import (  # noqa: E402 -- pieces need each other; the fron
     _stream_protocol,
     negotiate,
 )
+from .stream_protocols.fragments import _FRAGMENT_SESSIONS  # noqa: E402 -- pieces need each other; the front door loads this one first
