@@ -5,6 +5,7 @@
 ## 0.468.0
 
 - **An off chat draws no status line again.** Claude Code's status line and pi's footer show nothing while Probe is off for the chat (auto chats and the agent's lowerings included), instead of `● off`. In Claude Code's fullscreen view (`"tui": "fullscreen"`) Claude Code itself keeps the empty row; in its default view the row goes. `probe statusline show` says `(hidden: Probe is off for this chat)`.
+- **Eight producers on one node deliver every write, and in-flight attempts stay listed (rl-data W23).** A finishing run gave its queued writes up as "no Probe service here took them" while the service was only busy (all 8 of its drain slots taken) or its new drain was still starting on a loaded node; a service that answers a drain ask with a drain or a full house now counts as a sender, and the wait keeps asking. Every attempt part (a `run.samples.heartbeat`, or an error or end sent through `run.samples.log`, as the Miles adapter's sandbox reports do) repeats its start's `task_key` and `scenario`, so the server, which reads an attempt from its newest part, keeps listing it as in flight. The SDK scrubber keeps `first_token`/`last_token` (token positions) as it keeps `eos_token`.
 
 ## 0.467.0
 
