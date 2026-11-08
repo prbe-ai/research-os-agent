@@ -1297,6 +1297,8 @@ READ_VERBS = frozenset(
         # `note_audit` hook shows.
         "checkout",
         "audit-advisory",
+        # `probe checkpoint best` prints the best save by a named metric.
+        "best",
         # Print what is already recorded: `artifact tree|pin-impact`,
         # `experiment|paper edges`, `run metrics|series`, `views data|preview`
         # (a preview evaluates a spec without saving it).
@@ -1396,14 +1398,17 @@ def is_help_flag(word: str, args: "list[str]") -> bool:
 #: `docs` reads Probe's own docs, not the team's record: a read so that `off`
 #: refuses it as it refuses `paper find`.
 READ_GROUPS = frozenset(
-    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance", "docs"}
+    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance", "docs", "samples"}
 )
 
 #: Commands inside a `READ_GROUPS` group that record rather than print:
 #: `metrics backfill` stores a derived curve, `shared add` uploads into the
-#: team's Shared folder, `shared share|unshare` move a file into or out of it.
+#: team's Shared folder, `shared share|unshare` move a file into or out of it,
+#: `samples export` writes a file and can register it as a dataset.
 #: Read as reads, `read` let them through.
-READ_GROUP_WRITES = frozenset({"metrics backfill", "shared add", "shared share", "shared unshare"})
+READ_GROUP_WRITES = frozenset(
+    {"metrics backfill", "shared add", "shared share", "shared unshare", "samples export"}
+)
 
 #: ...and the ones that remove: cleanup, never refused, as `REMOVAL_VERBS` is in
 #: a write group. Read as reads, `off` refused them.
