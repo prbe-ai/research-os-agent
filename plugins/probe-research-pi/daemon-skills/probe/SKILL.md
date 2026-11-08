@@ -8,10 +8,14 @@ This skill only changes the state of Probe for this session. The Probe daemon
 records this session and reads the team's work for you; you record nothing
 yourself.
 
-Typing `/probe …` moves the switch itself, before you read this; you never move it.
-To see where it landed, run `probe session status`.
+Typing `/probe …` moves the switch itself, before you read this. Run
+`probe session status` first: if their `/probe` already moved it, do nothing more.
+You move this chat's switch only when the researcher asks you to, never on your
+own: `npx -y probe-research session state <on|read|off|inline> --directed`
+(`--directed` says they asked; a refusal without it is the reminder).
 When the researcher asks to change what new chats start as, run
-`probe session default <on|read|off>` and say it applies to new chats only.
+`npx -y probe-research session default <on|read|off>` (add `--directed` for `read`
+or `off`, once they said yes) and say it applies to new chats only.
 
 ```
 /probe on      on (daemon): the daemon records and reads     /probe          advance one step
@@ -20,11 +24,14 @@ When the researcher asks to change what new chats start as, run
 /probe inline  on (inline): no daemon; you read and write Probe yourself
 ```
 
-`/probe inline` is typed by the researcher only. The daemon stops, and you read
-and write Probe yourself, recording by the two skills the notice names; any
-other `/probe` move hands Probe back to the daemon. A session another program
+`/probe inline` is the researcher's: you go inline only when they ask
+(`npx -y probe-research session state inline --directed`). The daemon stops, and
+you read and write Probe yourself, recording by the two skills the notice names;
+any other `/probe` move hands Probe back to the daemon. A session another program
 launched cannot start inline (no environment variable sets it): once it has
-started, the researcher runs `probe session state inline --session <id>` in a terminal.
+started, the researcher asks the agent in that session. A session with no person
+in it (a worker, `claude -p`) is moved from a terminal with
+`probe session state inline --session <id>`.
 
 If the team's free daemon allowance runs out, Probe automatically hands this
 session to inline mode and tells you why. Record and read by the inline notice;

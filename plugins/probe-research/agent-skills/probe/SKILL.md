@@ -24,6 +24,12 @@ Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
 press leaves it for `read`. Whether the Probe daemon records is set in
 `probe wizard`, not by this switch: `/probe daemon` changes nothing.
 
+Typing `/probe …` moves the switch itself. You move this chat's switch only when
+the researcher asks you to, never on your own: run `probe session status` first
+(their `/probe` may have moved it already), then
+`npx -y probe-research session state <on|read|off> --directed` (`--directed` says
+they asked; a refusal without it is the reminder).
+
 FYI:
 
 - Moving the switch never deletes anything and never backfills anything. An
@@ -59,14 +65,14 @@ beats it.
 **Machine-wide Defaults**
 
 Set by the wizard (`npx probe-research`). When the researcher asks to change
-what new chats start as, run `probe session default <on|read|off>` and say it
-applies to new chats only. `probe session status` reports it as
-`machine_default_state`.
+what new chats start as, run `npx -y probe-research session default <on|read|off>`
+(add `--directed` for `read` or `off`, once they said yes) and say it applies to
+new chats only. `probe session status` reports it as `machine_default_state`.
 
 **Session transcripts, machine-wide**
 
 When the researcher wants this machine's sessions kept out of Probe while Probe
-itself stays on (tracking, search, the MCP), run `probe capture off`; `probe
-capture on` turns them back on (its approval link is the researcher's to
-click). Never `probe wizard --no-capture` for this. Off is a choice, not a
+itself stays on (tracking, search, the MCP), run `probe capture off --directed`
+once they said yes; `probe capture on` turns them back on (its approval link is
+the researcher's to click). Never `probe wizard --no-capture` for this. Off is a choice, not a
 fault: `probe status` says who turned it off and when.

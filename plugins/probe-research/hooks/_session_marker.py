@@ -1611,11 +1611,8 @@ def daemon_allows_agent(matched: str) -> bool:
 #: offline run's "deliver it with `probe sync`"), `artifact download`
 #: (`instrument-code`: a checkpoint back, bytes `probe ask` cannot hand over) --
 #: and this machine's diagnostics: `daemon status` (is the daemon `probe ask`
-#: waits on alive), `whoami` and `context list` (which team the runs land in),
-#: `wandb discover` and `wandb key status` (local scans ahead of a `--directed`
-#: W&B import).
-#: And Probe's own upkeep: keeping this machine's Probe updated, running and
-#: delivering (`update`, `status`, `service`, `outbox drain|retry|watch`,
+#: waits on alive), `whoami` and `context list` (which team the runs land in).
+#: And this machine's delivery (`service check-now`, `outbox drain|retry|watch`,
 #: `flush`, `token list`), local files (`draft edit`, `file preview`), and
 #: team-note and managed-block upkeep. A daemon-profile agent could not run `probe update
 #: --check` (2026-10-21) while nothing it ran touched the team's records.
@@ -1637,24 +1634,18 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `session owed` reads the session's own owed ledger (notes parity N3); the
 #: plugin's end-of-turn hook runs it, and the agent may too. `session home show`
 #: prints where this session's runs go, as `session status` does. `cli search`
-#: searches this CLI's own commands, on this computer. `example status|keep|delete`
-#: read, keep and remove the live example the agent started (`example start|conclude`
-#: are in `DAEMON_AGENT_WRITES`; agent-prompt install D18). `import folders|review|status`
-#: review past work on this computer (D51, D74): `import start|resume` need `--directed`.
+#: searches this CLI's own commands, on this computer.
+#: Probe's own upkeep the person asks for (install, update, uninstall, imports,
+#: the example, W&B, the new-chat default, the service) is `PROBE_UPKEEP`, read
+#: with its flags, not here by name (fixes-1107b T2).
 DAEMON_PROFILE_ALLOWED = frozenset(
-    {"ask", "session status", "session send", "run expect", "doctor", "paper find",
+    {"ask", "session status", "session send", "run expect", "paper find",
      "docs", "cli search", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
-     "daemon status", "whoami", "context list", "wandb discover", "wandb key status",
-     "update", "status", "flush", "service status", "service start", "service stop", "service check-now",
+     "daemon status", "context list", "flush", "service check-now",
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
-     "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "wandb login", "draft edit",
-     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
-     "example status", "example keep", "example delete", "import folders", "import review", "import status",
-     # The person's uninstall, run in the chat they asked in (PR33b): Probe's own upkeep, never a write of records.
-     "uninstall",
-     # What NEW chats start as, set when the person asks (D102): a machine setting, not this chat's switch.
-     "session default"}
+     "access-group list", "notes sync", "agent-rules refresh", "draft edit",
+     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
@@ -1689,35 +1680,64 @@ DAEMON_PROFILE_PLAIN_FLAGS = {
     "setup": frozenset({"--action", "--yes", "-y", "--json", "--no-browser"}),
 }
 
-#: The researcher's switch for this chat, typed into a shell. In the daemon
-#: profile the agent never moves it (`probe session state inline` included):
-#: not under `off`, and not while Probe is inline. The researcher moves it
-#: with `/probe`, which reaches the hooks, not a shell. `session default` is not
-#: on it (D102): it sets what NEW chats start as, which the agent sets when the
-#: person asks, as the install pages' `--session-default` already did.
+#: The researcher's switch for this chat, typed into a shell. The agent moves it
+#: only when the person asked, with `--directed`, and only by `session state
+#: <target>` (fixes-1107b T3): `toggle`, `track` and `untrack` flip it, so a
+#: retried one undoes itself, and an agent never runs them. The researcher's own
+#: `/probe` reaches the hooks, not a shell. `session default` is not on it
+#: (D102): it sets what NEW chats start as (`read|off` need `--directed`, UC2).
 RESEARCHER_SWITCH = frozenset(
     {"session state", "session toggle", "session track", "session untrack"}
 )
 
-#: Where the default for new chats is set, said in each switch refusal: `/probe` reaches only this chat.
-SWITCH_DEFAULT_HINT = "`/probe` moves only this chat; `probe session default on|read|off` sets what new chats start as."
+#: The one switch command an agent may run, with `--directed` (T3): it sets, never flips.
+SWITCH_SET = "session state"
 
-#: What the guard answers an agent that types one of `RESEARCHER_SWITCH`.
+#: How an agent spells this chat's switch and the new-chat default (the npx
+#: spelling: the launcher's floor picks a CLI that strips `--directed`).
+SWITCH_COMMAND = "npx -y probe-research session state <on|read|off|inline> --directed"
+
+#: Where the default for new chats is set, said in each switch refusal: `/probe` reaches only this chat.
+SWITCH_DEFAULT_HINT = (
+    "`/probe` moves only this chat; `npx -y probe-research session default on|read|off` sets what new chats "
+    "start as (`read` and `off` with `--directed`, once the person said yes)."
+)
+
+#: What the guard and the CLI answer an agent that moves this chat's switch
+#: without `--directed` (T3).
 INLINE_SWITCH_DENY = (
-    "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only "
-    "the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`). "
+    "`{matched}` moves the researcher's Probe switch, so it was refused before it ran. Move it only when the "
+    "person asked for exactly this: then run `" + SWITCH_COMMAND + "`. Never move it on your own; the person "
+    "can also type `/probe on`, `/probe read`, `/probe off` or `/probe inline`. "
     + SWITCH_DEFAULT_HINT
 )
 
-#: What the guard answers an agent the daemon records for that types one of
-#: `RESEARCHER_SWITCH`. Kimi runs a typed `/probe on` through a hook whose output
+#: What the guard answers an agent the daemon records for that moves the switch
+#: without `--directed`. Kimi runs a typed `/probe on` through a hook whose output
 #: never reaches the model, so the agent reads the skill, goes looking for the
-#: command itself, and lands here: the answer is that the move already happened,
-#: never `DAEMON_PROFILE_DENY`'s pointer to `/probe inline`.
+#: command itself, and lands here: the answer is that a typed move already
+#: happened, never `DAEMON_PROFILE_DENY`'s pointer to `/probe inline`.
 RESEARCHER_SWITCH_DENY = (
-    "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only "
-    "the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`), and "
-    "a `/probe` they typed has already moved it. `probe session status` prints where it landed. "
+    "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: a `/probe` they typed "
+    "has already moved it, and `probe session status` prints where it landed. If they asked you to move it, "
+    "run `" + SWITCH_COMMAND + "`; never move it on your own. "
+    + SWITCH_DEFAULT_HINT
+)
+
+#: The agent's own Skill-tool call of the switch (Claude Code's `Skill`, the older `SlashCommand`) that
+#: would lower this chat's recording or flip it (T3): the person's typed `/probe` is a prompt, never a
+#: tool call, so this one is the model's. `{matched}` the call, `{target}` the state it asked for.
+SKILL_SWITCH_DENY = (
+    "`{matched}` is your own call of the Probe switch, and it would make this chat record less (or flip it), "
+    "so it was refused before it ran: only the person moves it that way. Ask the person first; if they say "
+    "yes, run `npx -y probe-research session state {target} --directed`. "
+    + SWITCH_DEFAULT_HINT
+)
+
+#: `toggle`, `track` and `untrack` from an agent, `--directed` or not (T3).
+SWITCH_FLIP_DENY = (
+    "`{matched}` flips this chat's Probe switch, so a retry would undo itself: it was refused before it ran. "
+    "When the person asks, set it with `" + SWITCH_COMMAND + "`. "
     + SWITCH_DEFAULT_HINT
 )
 
@@ -1752,17 +1772,23 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
 
     A write carrying `--directed` is allowed, as the CLI's gate allows it in the
     `daemon` state (`write_gate.refusal`). A read is not (reads go through
-    `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`), and neither is the
-    researcher's switch (`RESEARCHER_SWITCH`). Probe's own upkeep runs
-    (`DAEMON_PROFILE_ALLOWED`); the wizard runs only plainly
-    (`DAEMON_PROFILE_PLAIN_FLAGS`). Anything else -- a word the guard cannot
-    read included -- is refused.
+    `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`). The researcher's
+    switch runs only as `session state <target> --directed` (`switch_refusal`).
+    Probe's own upkeep runs with its own flags (`upkeep_command`), and what
+    records less only with `--directed` (`records_less`); the agent's own
+    commands are `DAEMON_PROFILE_ALLOWED`. Anything else -- a word the guard
+    cannot read included -- is refused.
     """
     words = command_words(args)
     if not words:
         return (True, "probe")
     head = words[0]
     two = " ".join(words[:2])
+    if two in RESEARCHER_SWITCH:
+        return (switch_refusal(args) is None, "probe " + two)
+    upkeep = upkeep_command(args)
+    if upkeep is not None:
+        return (not records_less(args) or carries_directed(args), "probe " + upkeep)
     if head in DAEMON_PROFILE_PLAIN_FLAGS:
         return (_runs_plainly(args, head), "probe " + head)
     for key in (" ".join(words[:3]), two, head):
@@ -1771,7 +1797,7 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
         if key in DAEMON_PROFILE_RUN_READS:
             return (not _flag_writes(args, DAEMON_PROFILE_RUN_READ_WRITES.get(key, frozenset())), "probe " + key)
     kind, matched = classify_probe_args(args)
-    if kind == "write" and carries_directed(args) and two not in RESEARCHER_SWITCH:
+    if kind == "write" and carries_directed(args):
         return (True, matched)
     return (daemon_allows_agent(matched), matched)
 
@@ -1815,11 +1841,442 @@ def _flag_writes(args: "list[str]", flags: "frozenset[str]") -> bool:
 
 
 def daemon_profile_deny(args: "list[str]", matched: str) -> str:
-    """The refusal for args `daemon_profile_allows` refused: a write is told
-    that `--directed` runs it (`DAEMON_PROFILE_DENY_WRITE`)."""
+    """The refusal for args `daemon_profile_allows` refused: the switch is told
+    how the agent sets it (`switch_refusal`), upkeep that records less to ask
+    first (`DIRECTED_REQUIRED_DENY`), upkeep with a flag it may not pass which
+    one (`UPKEEP_FLAG_DENY`, never `/probe inline`), a write that `--directed`
+    runs it (`DAEMON_PROFILE_DENY_WRITE`)."""
+    switch = switch_refusal(args, RESEARCHER_SWITCH_DENY)
+    if switch is not None:
+        return switch
+    key, offender = _check_upkeep(args)
+    if key is not None and offender is None and records_less(args) and not carries_directed(args):
+        return DIRECTED_REQUIRED_DENY.format(matched=records_less(args))
+    if key is not None and offender is not None:
+        return UPKEEP_FLAG_DENY.format(matched="probe " + key, offender=offender)
     kind, _matched = classify_probe_args(args)
     deny = DAEMON_PROFILE_DENY_WRITE if kind == "write" else DAEMON_PROFILE_DENY
     return deny.format(matched=matched)
+
+
+# ---------------------------------------------------------------------------
+# PROBE'S OWN UPKEEP, WHAT RECORDS LESS, AND THIS CHAT'S SWITCH (fixes-1107b
+# T2, T3). Upkeep is Probe managing itself for the person who asked (install,
+# settings, sign-in, update, uninstall, imports): it runs in every chat state,
+# but only with the flags listed here. What records less runs from an agent
+# only with `--directed`, after the person said yes (gate UC2).
+# ---------------------------------------------------------------------------
+
+#: Each upkeep command's flags: (the ones an agent may pass, the ones it may
+#: not). Every option and argument `cli_spec.json` gives the command is in one
+#: of the two (`test_daemon_profile.py` sorts them); `tools/vendor.py
+#: sync-probe-upkeep` writes the allowed ones, with their value counts, into
+#: `PROBE_UPKEEP` below and `npm/upkeep.json`. Refused for agents (the plan's
+#: deny set): another server or a raw credential, capture or tracking off by
+#: flag, another update channel or context, retired or unknown options.
+#: `uninstall --discard-unsent|--force` stay: uninstall.md asks first, and an
+#: uninstall needs `--directed` anyway.
+UPKEEP_FLAG_RULES = {
+    "install": ("--agent --tracking --capture --auto-update --agent-rules --yes -y --profile --json",
+                "--no-tracking --no-capture --no-auto-update --no-agent-rules <auth_code>"),
+    "wizard": ("--agent --tracking --capture --auto-update --agent-rules --action --yes -y --no-browser "
+               "--who-records --reinstall --pending --recommended --session-default --attempt --profile --json",
+               "--no-tracking --no-capture --no-auto-update --no-agent-rules --channel --uninstall --folder "
+               "--experimental --token --base-url --context --ingest-token --hmac-secret --endpoint-only "
+               "<auth_code>"),
+    "login": ("--device", "--base-url --token --ingest-token --hmac-secret --endpoint-only --context"),
+    "logout": ("", ""),
+    "whoami": ("", ""),
+    "doctor": ("--fix --send --bundle --out --json", ""),
+    "repair": ("--json", ""),
+    "update": ("--check --yes -y --plugin", "--no-plugin --channel"),
+    "status": ("--json --refresh --timeout --repaste-choice --past-work-choice --demo-choice", ""),
+    "uninstall": ("--yes -y --json --backup-unsent --discard-unsent --force", "--offline"),
+    "import review": ("--sessions --folder --workspace --agent --wandb-project --wandb-folder --wandb-key --json",
+                      ""),
+    "import folders": ("--json", ""),
+    "import status": ("--json", ""),
+    "example status": ("--json", ""),
+    "example keep": ("--json", ""),
+    "example delete": ("--json", ""),
+    "wandb login": ("", ""),
+    "wandb discover": ("<root>", ""),
+    "wandb key set": ("--key", ""),
+    "wandb key status": ("", ""),
+    "session default": ("<value>", "--folder"),
+    "service start": ("--min-version --json", ""),
+    "service stop": ("", ""),
+    "service status": ("--json", ""),
+    "capture on": ("--agent --yes -y --json --no-browser", ""),
+    "capture off": ("--agent --yes -y --json", ""),
+}
+#: Commands that are another's old name, with its flags: `setup` is the wizard's.
+UPKEEP_ALIASES = {"setup": "wizard"}
+
+#: The wizard actions that are upkeep (`--action`; the launcher maps `install`,
+#: `update` and `sign-in --wait` onto configure, update and login --pending;
+#: root `install`, `update`, `login`, `logout`, `uninstall` and `doctor` are the
+#: same upkeep). `import-research` (a picker no agent can drive) is not.
+UPKEEP_WIZARD_ACTIONS = ("configure", "diagnose", "login", "logout", "recorder", "uninstall", "update")
+
+#: Where `PROBE_UPKEEP` keeps how many positional arguments a command takes.
+UPKEEP_ARGUMENTS = "<arguments>"
+
+#: The plan's deny set: never an allowed upkeep flag (a test holds it).
+AGENT_DENIED_FLAGS = frozenset(
+    {"--no-capture", "--no-tracking", "--channel", "--context", "--uninstall", "--token", "--ingest-token",
+     "--hmac-secret", "--endpoint-only", "--base-url"}
+)
+
+# BEGIN PROBE_UPKEEP (generated by `make sync-probe-upkeep` from cli_spec.json; edit UPKEEP_FLAG_RULES)
+PROBE_UPKEEP = {
+    "capture off": {"--agent": 1, "--json": 0, "--yes": 0, "-y": 0},
+    "capture on": {"--agent": 1, "--json": 0, "--no-browser": 0, "--yes": 0, "-y": 0},
+    "doctor": {"--bundle": 0, "--fix": 0, "--json": 0, "--out": 1, "--send": 0},
+    "example delete": {"--json": 0},
+    "example keep": {"--json": 0},
+    "example status": {"--json": 0},
+    "import folders": {"--json": 0},
+    "import review": {"--agent": 1, "--folder": 1, "--json": 0, "--sessions": 1, "--wandb-folder": 1, "--wandb-key": 1, "--wandb-project": 1, "--workspace": 1},
+    "import status": {"--json": 0},
+    "install": {"--agent": 1, "--agent-rules": 0, "--auto-update": 0, "--capture": 0, "--json": 0, "--profile": 1, "--tracking": 0, "--yes": 0, "-y": 0},
+    "login": {"--device": 0},
+    "logout": {},
+    "repair": {"--json": 0},
+    "service start": {"--json": 0, "--min-version": 1},
+    "service status": {"--json": 0},
+    "service stop": {},
+    "session default": {"<arguments>": 1},
+    "setup": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
+    "status": {"--demo-choice": 1, "--json": 0, "--past-work-choice": 1, "--refresh": 0, "--repaste-choice": 1, "--timeout": 1},
+    "uninstall": {"--backup-unsent": 0, "--discard-unsent": 0, "--force": 0, "--json": 0, "--yes": 0, "-y": 0},
+    "update": {"--check": 0, "--plugin": 0, "--yes": 0, "-y": 0},
+    "wandb discover": {"<arguments>": 1},
+    "wandb key set": {"--key": 1},
+    "wandb key status": {},
+    "wandb login": {},
+    "whoami": {},
+    "wizard": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
+}
+# END PROBE_UPKEEP
+
+#: What records less, run from an agent (gate UC2): the commands, the wizard
+#: actions, the flags whatever their value, and the flags with the values that
+#: lower it. Raising (`session default on`, `--profile full`) is not on it.
+RECORDS_LESS_COMMANDS = frozenset({"uninstall", "logout", "service stop", "capture off"})
+RECORDS_LESS_WIZARD_ACTIONS = frozenset({"logout", "uninstall"})
+RECORDS_LESS_FLAGS = frozenset({"--who-records", "--no-capture", "--no-tracking", "--uninstall"})
+#: `--profile runs` (Runs only); `--session-default` and `session default` lower at `read` or `off`.
+RECORDS_LESS_PROFILE = "runs"
+#: The commands those flags are read on.
+RECORDS_LESS_FLAG_HEADS = frozenset({"install", "wizard", "setup"})
+
+#: Writes `--directed` admits in every chat state, `read` and `off` included
+#: (D51 as amended by T2): bringing in past work the person consented to.
+DIRECTED_IN_EVERY_STATE = frozenset({"import start", "import resume"})
+
+#: Gate UC2's refusal (`directed_required`): the agent asks, and adds the flag only on a yes.
+DIRECTED_REQUIRED_DENY = (
+    "`{matched}` makes Probe record less, so it was refused before it ran: from an agent it runs only with "
+    "`--directed`. Ask the person first, saying what stops; add `--directed` only if they say yes, never on "
+    "your own."
+)
+
+
+#: Upkeep with a word an agent may not pass (`upkeep_offender`), in every profile: never `/probe inline`.
+UPKEEP_FLAG_DENY = (
+    "`{matched}` is Probe's own upkeep, but `{offender}` keeps it from running from an agent, so it was "
+    "refused before it ran. Run it with its usual flags only (`{matched} --help` lists them). Another server, "
+    "a raw credential, or capture or tracking off by flag never comes from a chat: tell the person, and do "
+    "not run it another way."
+)
+
+
+def _upkeep_key(words: "list[str]") -> "str | None":
+    """The `PROBE_UPKEEP` key these command words (`command_words`) start with, longest first."""
+    for size in (3, 2, 1):
+        key = " ".join(words[:size])
+        if len(words) >= size and key in PROBE_UPKEEP:
+            return key
+    return None
+
+
+def get_wizard_actions(args: "list[str]") -> "list[str]":
+    """Every `--action` value in these args (`--action x`, `--action=x`)."""
+    actions = []
+    for i, arg in enumerate(args):
+        name, eq, value = arg.partition("=")
+        if name == "--action":
+            actions.append(value if eq else (args[i + 1] if i + 1 < len(args) else ""))
+    return actions
+
+
+def upkeep_command(args: "list[str]") -> "str | None":
+    """The `PROBE_UPKEEP` command these args (after `probe`) run, or None.
+
+    Only plainly: the command's words first (after any `--directed`), then
+    nothing but its own flags (with their values) and arguments; the wizard
+    only for an upkeep action, every `--action` one (click runs the last).
+    A root option, a `--`, a word the shell still expands or any other flag
+    makes it no upkeep, so it is judged as before (`upkeep_offender` names it).
+    """
+    key, offender = _check_upkeep(args)
+    return key if offender is None else None
+
+
+def upkeep_offender(args: "list[str]") -> "str | None":
+    """For args naming an upkeep command that `upkeep_command` still refuses,
+    the word that made it no upkeep (`--token`, `--action recorder`); else None."""
+    return _check_upkeep(args)[1]
+
+
+def _check_upkeep(args: "list[str]") -> "tuple[str | None, str | None]":
+    """`(key, offender)`: the upkeep command these args name (None: none) and
+    the first word that keeps it from running as upkeep (None: it runs)."""
+    own = [arg for arg in args if arg != DIRECTED_FLAG]
+    key = _upkeep_key(command_words(own)) if PROBE_UPKEEP else None
+    if key is None:
+        return (None, None)
+    for arg in own:
+        if arg == "--" or not _SHELL_EXPANSION_CHARS.isdisjoint(arg):
+            return (key, arg)
+    if own[: len(key.split())] != key.split():
+        return (key, own[0])  # a root option before it (`--base-url`), or one between its words
+    if key in ("wizard", "setup"):
+        actions = get_wizard_actions(own)
+        if not actions:
+            return (key, "no --action")
+        for action in actions:
+            if action not in UPKEEP_WIZARD_ACTIONS:
+                return (key, ("--action " + action).strip())
+    flags = PROBE_UPKEEP[key]
+    arguments = 0
+    rest = own[len(key.split()):]
+    i = 0
+    while i < len(rest):
+        name, eq, _value = rest[i].partition("=")
+        if not name.startswith("-"):
+            arguments += 1
+            if arguments > flags.get(UPKEEP_ARGUMENTS, 0):
+                return (key, rest[i])
+        elif name not in flags or (eq and not flags[name]):
+            return (key, name)
+        elif not eq:
+            if i + flags[name] >= len(rest):
+                return (key, name)  # a value it takes is missing
+            i += flags[name]
+        i += 1
+    return (key, None)
+
+
+def _flag_values(args: "list[str]", flag: str) -> "list[str]":
+    """Every value given to `flag` (`--flag v`, `--flag=v`)."""
+    values = []
+    for i, arg in enumerate(args):
+        name, eq, value = arg.partition("=")
+        if name == flag:
+            values.append(value if eq else (args[i + 1] if i + 1 < len(args) else ""))
+    return values
+
+
+def records_less(args: "list[str]") -> "str | None":
+    """What these args (after `probe`) run that makes Probe record less
+    (`RECORDS_LESS_*`), spelled for a refusal (`probe wizard --action logout`,
+    `probe install --profile runs`), else None. A word the shell still expands
+    on one of those commands may be any of them, so it counts."""
+    words = command_words(args)
+    if not words:
+        return None
+    head, two = words[0], " ".join(words[:2])
+    for key in (two, head):
+        if key in RECORDS_LESS_COMMANDS:
+            return "probe " + key
+    if two == "session default" and len(words) > 2:
+        return "probe session default " + words[2] if _lowers_default(words[2]) else None
+    if head not in RECORDS_LESS_FLAG_HEADS:
+        return None
+    matched = "probe " + head
+    for action in get_wizard_actions(args) if head != "install" else ():
+        if action in RECORDS_LESS_WIZARD_ACTIONS:
+            return matched + " --action " + action
+    if any(not _SHELL_EXPANSION_CHARS.isdisjoint(arg) for arg in args):
+        return matched
+    for arg in args:
+        if arg.split("=", 1)[0] in RECORDS_LESS_FLAGS:
+            return matched + " " + arg.split("=", 1)[0]
+    if any(value.strip().lower() == RECORDS_LESS_PROFILE for value in _flag_values(args, "--profile")):
+        return matched + " --profile " + RECORDS_LESS_PROFILE
+    for value in _flag_values(args, "--session-default"):
+        if _lowers_default(value):
+            return matched + " --session-default " + value
+    return None
+
+
+def _lowers_default(value: str) -> bool:
+    """Does this new-chat default (`read`, `off`, a spelling of either) record less than `on`?"""
+    return normalize_state(value) in (STATE_READ_ONLY, STATE_OFF)
+
+
+def directed_in_every_state(args: "list[str]") -> bool:
+    """Is this a write `--directed` admits in every state (`DIRECTED_IN_EVERY_STATE`), carrying it?"""
+    return " ".join(command_words(args)[:2]) in DIRECTED_IN_EVERY_STATE and carries_directed(args)
+
+
+def get_switch_target(args: "list[str]") -> "str | None":
+    """The target `session state <target>` names (None: it only prints the state).
+    `--session <id>` and `--directed` are not targets."""
+    rest = [arg for arg in args if arg != DIRECTED_FLAG]
+    words = command_words(rest)
+    if " ".join(words[:2]) != SWITCH_SET:
+        return None
+    after = rest[rest.index(words[1]) + 1:]
+    i = 0
+    while i < len(after):
+        if after[i] == "--session":
+            i += 2
+            continue
+        if not after[i].startswith("-"):
+            return after[i]
+        i += 1
+    return None
+
+
+def get_switch_session(args: "list[str]") -> "str | None":
+    """The session `--session <id>` names in a switch command, else None."""
+    values = _flag_values(args, "--session")
+    return values[-1] if values else None
+
+
+def switch_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY) -> "str | None":
+    """What an agent's move of this chat's switch is refused with, or None (T3).
+
+    `session state <target> --directed` runs (the person asked); without the
+    flag it is refused with `deny`; `session state` alone only prints it.
+    `toggle`, `track` and `untrack` flip it, so they never run from an agent.
+    """
+    matched = moves_switch(args)
+    if matched is None:
+        return None
+    if matched != "probe " + SWITCH_SET:
+        return SWITCH_FLIP_DENY.format(matched=matched)
+    if get_switch_target(args) is None or carries_directed(args):
+        return None
+    return deny.format(matched=matched)
+
+
+#: Commands that save a server or a credential (`server_override`, T2): `install`,
+#: `login`, `repair`, `context use`, the wizard's configure and login (and its
+#: menu), and any `--context`. Every other command keeps its `--base-url`, so
+#: local and staging stacks keep working.
+SERVER_SAVING = frozenset({"install", "login", "repair", "context use"})
+SERVER_SAVING_ACTIONS = frozenset({"configure", "login"})
+#: Flags that hand Probe a raw credential.
+CREDENTIAL_FLAGS = frozenset({"--token", "--ingest-token", "--hmac-secret", "--endpoint-only"})
+#: The variable the CLI and the launcher read the server from first.
+BASE_URL_ENV = "PROBE_BASE_URL"
+#: Probe's own server, where a saved sign-in names none (`settings.DEFAULT_BASE_URL`).
+DEFAULT_SERVER = "https://api.research.prbe.ai"
+#: `PROBE_BASE_URL=<value>` written before a command on its line.
+_BASE_URL_ASSIGNMENT = re.compile(r"(?:^|[\s;&|(])" + BASE_URL_ENV + r"=(\"[^\"]*\"|'[^']*'|[^\s;&|)]*)")
+
+SERVER_OVERRIDE_DENY = (
+    "`{matched}` would point Probe on this computer {what}, so it was refused before it ran: from a chat, "
+    "Probe keeps the server and account it is signed in to ({saved}). Tell the person what was refused and "
+    "why; do not run it another way."
+)
+
+
+def saves_server(args: "list[str]") -> "str | None":
+    """`probe <command>` when these args (after `probe`) save a server or a credential (`SERVER_SAVING`), else None."""
+    words = command_words(args)
+    if not words:
+        return None
+    for key in (" ".join(words[:2]), words[0]):
+        if key in SERVER_SAVING:
+            return "probe " + key
+    own = args[: args.index("--")] if "--" in args else args
+    if words[0] in ("wizard", "setup"):
+        actions = get_wizard_actions(own)
+        if not actions or SERVER_SAVING_ACTIONS & set(actions):
+            return "probe " + words[0]
+    if any(arg.split("=", 1)[0] == "--context" for arg in own):
+        return "probe " + words[0]
+    return None
+
+
+def normalize_server(url: "str | None") -> str:
+    """A server URL as two compare (`settings.normalize_endpoint`, restated: the hooks
+    cannot import it): no trailing slash, scheme and host lower case, https's `:443` dropped."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    text = (url or "").strip().rstrip("/")
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text
+    if not parts.scheme or not parts.netloc:
+        return text
+    userinfo, at, hostport = parts.netloc.rpartition("@")
+    hostport = hostport.lower()
+    if parts.scheme.lower() == "https" and hostport.endswith(":443"):
+        hostport = hostport[: -len(":443")]
+    return urlunsplit((parts.scheme.lower(), userinfo + at + hostport, parts.path.rstrip("/"), parts.query,
+                       parts.fragment))
+
+
+def saved_server(config: "dict | None" = None) -> "str | None":
+    """The server this computer is signed in to (the current account's, holding a
+    key), normalized; None when no sign-in is saved. The key itself is never read out."""
+    data = _read_config() if config is None else config
+    contexts = data.get("contexts")
+    row = contexts.get(data.get("current_context") or "default") if isinstance(contexts, dict) else data
+    if not isinstance(row, dict) or not row.get("token"):
+        return None
+    url = row.get("base_url")
+    return normalize_server(url if isinstance(url, str) and url.strip() else DEFAULT_SERVER)
+
+
+def spelled_server_override(command: str, args: "list[str]") -> "str | None":
+    """The hook's `server_override` for a line it can read (T2): a command that saves
+    a server, run with `PROBE_BASE_URL=<another server>` written before it, on a
+    computer signed in. The CLI's write gate checks the real environment."""
+    matched = saves_server(args)
+    if matched is None:
+        return None
+    values = [value.strip("\"'").strip() for value in _BASE_URL_ASSIGNMENT.findall(command)]
+    values = [value for value in values if value]  # an empty one is no server (the CLI reads it as unset)
+    saved = saved_server() if values else None
+    for value in values:
+        if saved is not None and normalize_server(value) != saved:
+            return SERVER_OVERRIDE_DENY.format(
+                matched=matched, what="at %s (`%s`)" % (show_server(value), BASE_URL_ENV), saved=show_server(saved))
+    return None
+
+
+def show_server(url: str) -> str:
+    """A server URL as a refusal names it: without a `user:password@` part (never a secret)."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return "(a URL that does not parse)"
+    if "@" not in parts.netloc:
+        return url.strip()
+    return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
+
+
+def agent_refusal(args: "list[str]", deny: str = INLINE_SWITCH_DENY) -> "str | None":
+    """What every chat state refuses an agent before anything else (T2, T3): its
+    move of this chat's switch (`switch_refusal`), and what records less without
+    `--directed` (`DIRECTED_REQUIRED_DENY`). None when neither applies."""
+    switch = switch_refusal(args, deny)
+    if switch is not None:
+        return switch
+    lowering = records_less(args)
+    if lowering and not carries_directed(args):
+        return DIRECTED_REQUIRED_DENY.format(matched=lowering)
+    return None
 
 
 #: The refusals, shared by the guard hook and the CLI gate. Placeholders:
