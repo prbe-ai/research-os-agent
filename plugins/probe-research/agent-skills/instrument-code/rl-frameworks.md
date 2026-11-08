@@ -185,8 +185,8 @@ trainer.train()
 ```
 
 - Covers `GRPOTrainer`, `RLOOTrainer`, the experimental `AsyncGRPOTrainer`, and distillation
-  (`DistillationTrainer`, `ServerDistillationTrainer`, `GKDTrainer`, `AsyncDistillationTrainer`); `SFTTrainer`
-  with `track(trainer, record_sft=True)` records each example once. `GOLDTrainer` is not recorded yet.
+  (`DistillationTrainer`, `ServerDistillationTrainer`, `GKDTrainer`, the experimental `GOLDTrainer`,
+  `AsyncDistillationTrainer`); `SFTTrainer` with `track(trainer, record_sft=True)` records each example once.
 - **Distillation.** Name a teacher that is a Probe checkpoint: `track(trainer,
   teacher="checkpoint:<run>@step<N>")`, and the student run derives from it. GKD records teacher-written
   sequences only with `seq_kd=True`.
