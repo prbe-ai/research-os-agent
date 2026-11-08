@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.456.0
+
 - **Panes: write a live visual for a project or experiment (run compare + panes T11, T12).** A pane is your own HTML/JS plus a recipe of the data it reads (runs, curves, per-task samples, files); Probe redraws it from the runs in view each time it opens. From a script or notebook: `probe.Client().save_pane(scope, slug, html, recipe)`, with `get_pane`, `list_panes`, `delete_pane` and `read_pane_data` (a saved pane's data, or an unsaved recipe's). From a shell: `probe pane push|data|get|list|rm`; a refused push prints the page rule it broke. The new `write-pane` skill (full profile) says when a pane helps and how to write one, and `instrument-code` now says how to record per-task eval results (one rollout span per task, scores in `attributes`, outputs linked with `--span`). Pane writes are the coding agent's: the Probe daemon never writes one, and a daemon-recorded chat pushes only with `--directed`. Needs a server with panes; an older one says so.
 
 ## 0.455.0
