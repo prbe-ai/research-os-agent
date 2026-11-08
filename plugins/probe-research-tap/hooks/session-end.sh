@@ -8,8 +8,8 @@
 # the delivery died with it. Nothing here signals a recorder (service-only task 15):
 # no `tap watch` records a session any more.
 #
-# ONE hooks.json ENTRY: this script with `--wait`, under a 20s timeout (Codex clamps
-# it to 3s). Without the flag it touches the sentinel and returns at once.
+# ONE ENTRY per agent: this script with `--wait`, under 20s in hooks.json (Claude Code)
+# and 3s, Codex's cap, in hooks/codex.json. Without the flag it touches the sentinel and returns at once.
 #
 # CLAUDE CODE'S EXIT BUDGET IS NOT THE ENTRY'S TIMEOUT. At exit Claude Code
 # bounds the whole SessionEnd phase at CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,

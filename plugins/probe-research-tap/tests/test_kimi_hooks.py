@@ -218,9 +218,9 @@ _KIMI_HOOK_KEYS = {"event", "matcher", "command", "timeout"}
 
 
 def test_the_kimi_manifest_runs_the_same_scripts_on_the_same_events() -> None:
-    """Parity with hooks/hooks.json, which Kimi never reads (and whose bytes
-    Codex trusts by hash): one Kimi entry per hooks.json entry, same script,
-    same flags, same timeout."""
+    """Parity with hooks/hooks.json, which Kimi never reads (nor does Codex: it
+    reads hooks/codex.json, the same entries): one Kimi entry per hooks.json
+    entry, same script, same flags, same timeout."""
     shared = json.loads((TAP / "hooks" / "hooks.json").read_text())["hooks"]
     expected = sorted(
         (event, hook["command"].rsplit("/hooks/", 1)[1].rstrip("'"), hook["timeout"])

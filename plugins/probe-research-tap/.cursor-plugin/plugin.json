@@ -1,6 +1,6 @@
 {
   "name": "probe-research-tap",
-  "version": "0.10.69",
+  "version": "0.10.70",
   "description": "Probe Research capture for Cursor. The Probe service runs it; Cursor loads nothing from it.",
   "author": {
     "name": "Probe",

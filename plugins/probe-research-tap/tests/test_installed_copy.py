@@ -6,17 +6,18 @@ entry runs a script from the folder the session started with
 An update installs a new folder beside it; until now the open session kept
 running the old scripts (#3338's Python picker never reached one). So:
 
-  * hooks.json's entries are FROZEN (pinned here): Codex trusts each by a hash
-    of the whole entry and silently skips a changed one until the person
-    approves it again, so changing one would switch capture off for every
-    Codex user. What may change lives behind them, in the scripts;
+  * the entries (hooks.json, and Codex's own hooks/codex.json) are FROZEN
+    (pinned here): Codex trusts each by a hash of the whole entry and silently
+    skips a changed one until the person approves it again, so changing one
+    would switch capture off for every Codex user. What may change lives
+    behind them, in the scripts;
   * every script an entry runs first hands the event to the INSTALLED copy's
     same script (`hooks/installed-tap.sh`), resolved as the Probe plugin's
     dispatcher resolves its own (`dispatch.installed_root`): Claude Code's
     install ledger, the newest version folder in Codex's cache, the folder
     Kimi's plugin list records; anything unexpected runs the event where it is.
 
-These drive the REAL entry commands (hooks.json, and the tap's Kimi manifest)
+These drive the REAL entry commands (hooks.json, codex.json, the tap's Kimi manifest)
 against version folders laid out as each agent keeps them. Each copy's scripts
 carry one extra line right after their `set` line, past the hand-over, that
 writes which copy ran the event (and with what root, arguments and payload) and
@@ -40,6 +41,7 @@ import pytest
 TAP = Path(__file__).resolve().parent.parent
 HOOKS = TAP / "hooks"
 CLAUDE_ENTRIES = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+CODEX_ENTRIES = json.loads((HOOKS / "codex.json").read_text(encoding="utf-8"))["hooks"]
 KIMI_ENTRIES = json.loads((TAP / ".kimi-plugin" / "plugin.json").read_text(encoding="utf-8"))["hooks"]
 SCRIPT = {"SessionStart": "session-start.sh", "UserPromptSubmit": "ensure-daemon.sh",
           "SessionEnd": "session-end.sh", "Stop": "turn-end.sh"}
@@ -53,27 +55,32 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="the hooks are POSIX 
 
 # --- the frozen entries -----------------------------------------------------------
 
-#: One hash per hooks.json entry. Changing one switches that hook off for every
+#: One hash per entry. Changing a codex.json one switches that hook off for every
 #: Codex user until they approve it again in /hooks, with nothing in their
-#: session saying so. Change the script it runs instead.
+#: session saying so; codex.json mirrors hooks.json (test_codex_research_os_contract).
+#: Change the script it runs instead.
 PINNED = {
     "SessionStart": "137dfa32ac77abd6",
     "UserPromptSubmit": "b2e19d419b3e38de",
     "SessionEnd": "7d33e4db9ee10730",
     "Stop": "8472c9fc0adc9bf4",
 }
+#: Codex's SessionEnd is hooks.json's at Codex's 3s cap (tap 0.10.70: the 20s drew a load warning).
+PINNED_CODEX = {**PINNED, "SessionEnd": "2c484bfd06e0ec09"}
 
 
 def _entry_hash(event: str, matcher, hook: dict) -> str:
     return hashlib.sha256(json.dumps([event, matcher, hook], sort_keys=True).encode()).hexdigest()[:16]
 
 
-def test_the_entries_are_frozen():
+@pytest.mark.parametrize(("entries", "pinned"), [(CLAUDE_ENTRIES, PINNED), (CODEX_ENTRIES, PINNED_CODEX)],
+                         ids=["hooks.json", "codex.json"])
+def test_the_entries_are_frozen(entries, pinned):
     actual = {
         event: _entry_hash(event, group.get("matcher"), hook)
-        for event, groups in CLAUDE_ENTRIES.items() for group in groups for hook in group["hooks"]
+        for event, groups in entries.items() for group in groups for hook in group["hooks"]
     }
-    assert actual == PINNED, "hooks/hooks.json changed: every Codex user would have to approve the tap's hooks again"
+    assert actual == pinned, "the tap's entries changed: every Codex user would have to approve its hooks again"
 
 
 def test_every_entry_script_hands_over_before_it_reads_anything():
@@ -201,7 +208,7 @@ class Box:
             (entry,) = [e for e in entries if e["event"] == event]
             command = entry["command"]
         else:
-            command = CLAUDE_ENTRIES[event][0]["hooks"][0]["command"]
+            command = (CODEX_ENTRIES if "PLUGIN_ROOT" in env else CLAUDE_ENTRIES)[event][0]["hooks"][0]["command"]
         return subprocess.run(command, shell=True, executable="/bin/bash", input=payload, text=True,
                               capture_output=True, env=env, timeout=30, cwd=str(self.tmp))
 
