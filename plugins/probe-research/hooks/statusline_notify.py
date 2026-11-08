@@ -21,6 +21,10 @@ finishing — which in a normal session is three or four lines total.
 OPT-IN, exactly like the segment. The wizard's status-line step under Codex sets the
 flag this reads; nothing here runs for anyone who did not ask for it.
 
+ONE LINE IS ALWAYS ON (fixes-1107b PR B): what the agent changed from this chat that
+records less (or moved this chat's switch at all), told to the person once, where the
+harness shows a person-only line (Claude Code, Codex, pi; `lowered_lines`).
+
 CONTRACT:
   * THIS HOOK PRINTS, unlike its sibling `statusline_refresh.py`, and printing is
     its entire purpose — but only the one JSON object, and only when something
@@ -76,9 +80,39 @@ def notice(marker, session_id: str) -> str | None:
     return text
 
 
+def lowered_lines(marker, session_id: str) -> "list[str]":
+    """What the agent changed from this chat that the person must hear (fixes-1107b PR B), each
+    once: its move of this chat's switch, and a machine setting it turned down from here. ALWAYS
+    ON, unlike the opt-in notice below: it is how the person learns their agent recorded less."""
+    lines = []
+    move = marker.load_agent_move(session_id)
+    if move is not None and not move["told"]:
+        text = marker.get_agent_move_notice(move["state"])
+        if text:
+            lines.append(text)
+        marker.mark_agent_move_told(session_id)
+    for entry in marker.take_untold(marker.TOLD_IN_CHAT, session=session_id):
+        if entry.get("notice"):
+            lines.append(entry["notice"])
+    return lines
+
+
+#: `server_notices.ATTENDED_ENV`: a `claude -p` run says "0" (its `systemMessage` goes to a script).
+ATTENDED_ENV = "CLAUDE_CODE_SESSION_ATTENDED"
+
+
+def is_person_watching() -> bool:
+    """Would a person see this hook's `systemMessage` (`server_notices.is_person_watching`: not
+    Kimi Code, the Cursor app or a `claude -p` run)? Where not, nothing is spent unseen."""
+    if os.environ.get(ATTENDED_ENV) == "0":
+        return False
+    try:
+        return _load("_hook_harness").current().shows_person_line()
+    except Exception:  # noqa: BLE001 - unknown reads as watched, as there
+        return True
+
+
 def main(argv: list[str] | None = None) -> int:
-    if disabled():
-        return 0
     try:
         payload = json.load(sys.stdin)
     except (ValueError, OSError):
@@ -89,27 +123,31 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(session_id, str) or not session_id:
         return 0
 
+    lines: list = []
     try:
         marker = _load("_session_marker")
-        if not marker.notify_enabled() or not marker.valid_session_id(session_id):
+        if not marker.valid_session_id(session_id):
             return 0
-        signal = marker.tracking_signal(session_id)
-        if signal is not None:
-            tracking = marker.is_tracking(signal)
-        else:
-            cwd = payload.get("cwd")
-            cwd = cwd if isinstance(cwd, str) and cwd else None
-            tracking, _source = marker.resolve_tracking_default(cwd)
-        if not tracking:
-            return 0  # not tracking here: nothing to announce
-        text = notice(marker, session_id)
+        if is_person_watching():
+            lines = lowered_lines(marker, session_id)
+        if not disabled() and marker.notify_enabled():
+            signal = marker.tracking_signal(session_id)
+            if signal is not None:
+                tracking = marker.is_tracking(signal)
+            else:
+                cwd = payload.get("cwd")
+                cwd = cwd if isinstance(cwd, str) and cwd else None
+                tracking, _source = marker.resolve_tracking_default(cwd)
+            text = notice(marker, session_id) if tracking else None  # not tracking: nothing to announce
+            if text:
+                lines.append(text)
     except BaseException:  # noqa: BLE001 - a hook that cannot speak stays silent
-        return 0
+        pass
 
-    if text:
+    if lines:
         # `systemMessage` is the one field both agents render from a hook; the
         # wire shape is shared (HookUniversalOutputWire on the Codex side).
-        sys.stdout.write(json.dumps({"systemMessage": text}) + "\n")
+        sys.stdout.write(json.dumps({"systemMessage": "\n".join(lines)}) + "\n")
     return 0
 
 

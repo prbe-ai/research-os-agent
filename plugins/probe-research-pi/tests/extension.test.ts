@@ -388,6 +388,32 @@ describe("registerExtension — session_start", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ off");
   });
 
+  it.each([
+    { state: "off", tracking: false, footer: "○ off · new chats off" },
+    { state: "on", tracking: true, footer: "● on (inline) · new chats off" },
+  ])("says what the agent turned down on this computer after the footer's $state (fixes-1107b PR B)",
+    async ({ state, tracking, footer }) => {
+      installProbeCli();
+      initializeOnce((_command, _args, _options, callback) => {
+        callback(
+          null,
+          JSON.stringify({
+            session_id: "pi-lowered-session", tracking, signal: tracking ? "on" : "off", state,
+            seeded: false, source: "session", capture: { running: true, reason: "running" },
+            recording_lowered: [{ scope: "default", state: "off", status: "Probe: new chats off" }],
+          }),
+          "",
+        );
+      });
+      const { api, handlers } = fakeExtensionAPI();
+      await registerExtension(api as never, tmp);
+      const ctx = fakeContext({ sessionId: "pi-lowered-session", sessionFile: undefined, cwd: "/repo", hasUI: true });
+
+      await handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+      expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", footer);
+    });
+
   it("continues session startup when the footer renderer throws", async () => {
     pair();
     installProbeCli();

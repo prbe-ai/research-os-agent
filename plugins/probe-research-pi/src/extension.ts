@@ -71,6 +71,7 @@ import { daemonSkillPaths, isProbeMcpTool, leanSkills, readDaemonSkills, researc
 import { trackingOff } from "./trackingSetting.js";
 import {
   initializeTrackingState,
+  loweredSuffix,
   ProbeState,
   Recorder,
   trackingStatusText,
@@ -151,7 +152,7 @@ export interface SessionState {
     state: ProbeStateValue | undefined;
     /** The last tracking reading, so a turn in `daemon` can redraw the footer
      * when the daemon's lease changes without spawning the CLI again. */
-    tracking: { tracking: boolean; capture?: CaptureReading } | undefined;
+    tracking: { tracking: boolean; capture?: CaptureReading; lowered?: string } | undefined;
     /**
      * Who records, as the CLI last reported it, and for WHICH session.
      *
@@ -289,10 +290,16 @@ function footerText(s: SessionState, sessionId: string, daemonLive?: boolean): s
       : (daemonLive ?? daemonStatus(sessionId, realDaemonNoticeDeps()).status === DaemonStatus.Live);
   // `on (inline)`: the researcher set Probe inline (`/probe inline`).
   const inline = inDaemonProfile(s, sessionId) && sessionIsInline(sessionId);
-  if (inline && sessionInlineReadOnly(sessionId)) return "○ read only (inline)";
+  // What the agent turned down on this computer, after the label (`· new chats off`, fixes-1107b PR B).
+  const lowered = loweredSuffix(cached.lowered);
+  if (inline && sessionInlineReadOnly(sessionId)) return "○ read only (inline)" + lowered;
   // Probe off: no Probe calls, and the Probe service holds the session
   // without capturing it. The status line's word for it.
-  if (probeIsOff(s)) return "○ off";
+  if (probeIsOff(s)) return "○ off" + lowered;
+  if (lowered) {
+    // The label alone, as the status line draws it: the capture suffix gives way.
+    return trackingStatusText(cached.tracking, undefined, live, inline, inDaemonProfile(s, sessionId) && !inline) + lowered;
+  }
   return trackingStatusText(cached.tracking, cached.capture, live, inline, inDaemonProfile(s, sessionId) && !inline);
 }
 
@@ -528,7 +535,7 @@ async function refreshTrackingStatus(
     return false;
   }
   s.probe.state = state.state;
-  s.probe.tracking = { tracking: state.tracking, capture: state.capture };
+  s.probe.tracking = { tracking: state.tracking, capture: state.capture, lowered: state.lowered };
   if (state.retiredConfigNotice) {
     // The researcher's, once (the CLI marked it given): never the agent's prompt.
     logLine(state.retiredConfigNotice);

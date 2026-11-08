@@ -152,6 +152,9 @@ _LABEL_NO_CAPTURE = " " + _SEPARATOR + " not capturing session transcript: "
 #: a choice, so it renders as a plain note with the full dot, never as a fault.
 _CHOSEN_OFF_REASON = "turned off"
 _LABEL_TRANSCRIPTS_OFF = " " + _SEPARATOR + " transcripts off"
+#: Before a machine-wide lowering's words (`render`'s `lowered`), and their bound.
+_LABEL_SEPARATOR = " " + _SEPARATOR + " "
+_MAX_LOWERED_CHARS = 24
 
 #: The longest word in `probe.cli.capture_state.REASONS` (`interpreter too old`).
 #: A literal, because nothing of ours may be imported on the render path;
@@ -2921,6 +2924,7 @@ def _set_session_state_locked(session_id: str, state: str, now: "float | None", 
         _remove_inline_marker(session_id)
     if explicit:
         _publish_atomically(state_source_path(session_id), SOURCE_EXPLICIT + "\n")
+        _save_kept_out(session_id, state)
     elif was_default:
         # Rewritten AFTER the state, so the source is not older than it.
         _publish_atomically(state_source_path(session_id), SOURCE_DEFAULT + "\n")
@@ -3026,7 +3030,7 @@ def forget_session_switch(session_id: str) -> bool:
     with _StateLock(session_id):
         is_gone = True
         for path in (state_path(session_id), tracking_signal_path(session_id), _legacy_off_path(session_id),
-                     state_source_path(session_id), profile_path(session_id)):
+                     state_source_path(session_id), profile_path(session_id), get_moved_by_path(session_id)):
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -3107,12 +3111,14 @@ def state_source_label(session_id: str) -> str:
     return state_source(session_id)
 
 
-def state_source(session_id: str) -> str:
+def state_source(session_id: str, sessions: "Path | None" = None) -> str:
     """`default` when the session's state is provably a seeded default, else
-    `explicit` (see the block above)."""
+    `explicit` (see the block above). `sessions`: another sessions folder (a
+    registrant's), this process's when None."""
     if not valid_session_id(session_id):
         return SOURCE_EXPLICIT
-    path = state_source_path(session_id)
+    folder = sessions_dir() if sessions is None else sessions
+    path = folder / (session_id + STATE_SOURCE_SUFFIX)
     try:
         raw = path.read_text(encoding="utf-8").strip()
         claimed = path.stat().st_mtime
@@ -3121,7 +3127,7 @@ def state_source(session_id: str) -> str:
     if raw != SOURCE_DEFAULT:
         return SOURCE_EXPLICIT
     try:
-        moved = state_path(session_id).stat().st_mtime
+        moved = (folder / (session_id + ".state")).stat().st_mtime
     except OSError:
         return SOURCE_DEFAULT  # the seed claimed the source and is about to publish
     return SOURCE_EXPLICIT if moved > claimed + _SOURCE_SLACK_S else SOURCE_DEFAULT
@@ -3149,6 +3155,116 @@ def _drop_source(session_id: str) -> None:
         state_source_path(session_id).unlink()
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# THE AGENT MOVED IT, AND THE CHATS KEPT OUT (fixes-1107b T2/T3, PR B)
+# ---------------------------------------------------------------------------
+#
+#     <sid>.moved-by            {"by": "agent", "at": <epoch>, "state": <stored state> | "inline", "told": bool}
+#     <state>/probe/kept-out/<sid>    `off` | `read-only`
+#
+# `moved-by`: the agent moved this chat's switch (`session state <target> --directed`, after the
+# person asked). It stands only while the switch is where the agent put it and nothing wrote it
+# since (a typed `/probe`, pi, an older client: a `.state` newer than it). The Stop hook tells the
+# person once (`told`).
+# `kept-out`: a chat someone switched to read or off on purpose (any explicit move: a typed
+# `/probe` too); a move back on lets it in again. Outside the session files, so Runs only
+# (`forget_session_switch`) and `prune` never drop it: the past-work import and the missed-chats
+# offer skip these chats (`service.sessions.capture_gate.is_kept_out`).
+
+MOVED_BY_SUFFIX = ".moved-by"
+MOVED_BY_AGENT = "agent"
+#: `moved-by`'s state for `session state inline` (stored `full` plus the inline marker).
+MOVED_TO_INLINE = "inline"
+KEPT_OUT_DIRNAME = "kept-out"
+
+
+def get_moved_by_path(session_id: str) -> Path:
+    return sessions_dir() / (session_id + MOVED_BY_SUFFIX)
+
+
+def save_agent_move(session_id: str, state: str, now: "float | None" = None) -> bool:
+    """Record that the agent moved this chat to `state` (a stored state, or MOVED_TO_INLINE) just now."""
+    if not valid_session_id(session_id) or state not in STATES + (MOVED_TO_INLINE,):
+        return False
+    stamp = {"by": MOVED_BY_AGENT, "at": time.time() if now is None else now, "state": state, "told": False}
+    return _publish_atomically(get_moved_by_path(session_id), json.dumps(stamp) + "\n")
+
+
+def load_agent_move(session_id: str) -> "dict | None":
+    """`{"state", "at", "told"}` while the agent's move still stands, else None."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        stamp = json.loads(get_moved_by_path(session_id).read_text(encoding="utf-8"))
+        moved = state_path(session_id).stat().st_mtime
+    except (OSError, ValueError):
+        return None
+    at = _finite(stamp.get("at")) if isinstance(stamp, dict) else None
+    if at is None or stamp.get("by") != MOVED_BY_AGENT or moved > at + _SOURCE_SLACK_S:
+        return None
+    current = session_state(session_id)
+    target = stamp.get("state")
+    stands = is_inline(session_id, current) if target == MOVED_TO_INLINE else current == target
+    if not stands:
+        return None
+    return {"state": target, "at": at, "told": stamp.get("told") is True}
+
+
+def mark_agent_move_told(session_id: str) -> None:
+    """The person was told of the agent's move (`load_agent_move`'s `told`). Best effort."""
+    try:
+        stamp = json.loads(get_moved_by_path(session_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(stamp, dict):
+        stamp["told"] = True
+        _publish_atomically(get_moved_by_path(session_id), json.dumps(stamp) + "\n")
+
+
+def get_kept_out_dir(root: "Path | None" = None) -> Path:
+    """Where the kept-out chats are listed: beside `sessions/` in `root` (a sessions folder's
+    parent; this process's Probe state folder when None)."""
+    return (state_dir() if root is None else root) / KEPT_OUT_DIRNAME
+
+
+def _save_kept_out(session_id: str, state: str) -> None:
+    """An explicit move: read or off keeps the chat out, anything else lets it in. Best effort."""
+    path = get_kept_out_dir() / session_id
+    if state in (STATE_READ_ONLY, STATE_OFF):
+        _publish_atomically(path, state + "\n")
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def is_kept_out(session_id: str, sessions: "Path | None" = None) -> bool:
+    """Was this chat switched to read or off on purpose? Listed kept out, or its own `.state`
+    reads read-only or off from an explicit move (an older client's records no source: explicit).
+    A default it started at (new chats off) keeps nothing out. `sessions`: a registrant's
+    sessions folder (this process's when None); the list is beside it."""
+    if not valid_session_id(session_id):
+        return False
+    folder = sessions_dir() if sessions is None else sessions
+    if (get_kept_out_dir(folder.parent) / session_id).is_file():
+        return True
+    try:
+        state = (folder / (session_id + ".state")).read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return False
+    return state in (STATE_READ_ONLY, STATE_OFF) and state_source(session_id, folder) != SOURCE_DEFAULT
+
+
+def load_kept_out_chats(root: "Path | None" = None) -> "set[str]":
+    """Every chat kept out on this computer (`get_kept_out_dir`); empty when none or unreadable."""
+    try:
+        names = os.listdir(get_kept_out_dir(root))
+    except OSError:
+        return set()
+    return {name for name in names if valid_session_id(name)}
 
 
 # ---------------------------------------------------------------------------
@@ -3365,6 +3481,7 @@ def switch_to_inline(session_id: str, now: "float | None" = None) -> bool:
         if not _set_state_unlocked(session_id, STATE_FULL):
             _remove_inline_marker(session_id)
             return False
+        _save_kept_out(session_id, STATE_FULL)
     return True
 
 
@@ -3947,6 +4064,268 @@ def write_notified(session_id: str, key: str) -> None:
             pass
 
 
+
+
+# ---------------------------------------------------------------------------
+# WHAT RECORDS LESS NOW, AND WHO LOWERED IT (fixes-1107b T2, PR B)
+# ---------------------------------------------------------------------------
+#
+#     <state>/probe/recording-lowered.json    {"lowered": [ENTRY, ...]}
+#     ENTRY = {"scope", "state", "by", "since", "at", "session", "until", "told", "offered"}
+#
+# The agent's CLI adds an entry when it lowers a machine setting for the person (new chats
+# read/off, Runs only, sign out: `record_lowering`). Whether it is lowered NOW is read from the
+# setting itself (`_is_in_effect`), so the person's own move back (the app, the wizard, a
+# typed command, an older client) ends it with no call here. A closed entry is the stretch
+# the missed-chats offer covers (`take_missed_offers`). This chat's switch is `load_agent_move`.
+
+LOWERED_FILENAME = "recording-lowered.json"
+SCOPE_CHAT = "chat"
+SCOPE_DEFAULT = "default"
+SCOPE_PROFILE = "profile"
+SCOPE_SIGN_IN = "sign_in"
+MACHINE_SCOPES = (SCOPE_DEFAULT, SCOPE_PROFILE, SCOPE_SIGN_IN)
+#: The lowered `state` of Runs only and of a sign-out (a default's is its stored state).
+LOWERED_RUNS_ONLY = "runs"
+LOWERED_SIGNED_OUT = "signed_out"
+#: Where each entry was told: the chat that made the change (its Stop hook), a session's start.
+TOLD_IN_CHAT = "chat"
+TOLD_AT_START = "start"
+#: Entries kept at most, and how long a closed one stays (Claude Code deletes chats after 30 days).
+MAX_LOWERED = 20
+LOWERED_KEEP_S = 45 * 86400
+#: settings.json, beside the config file (`probe.foundation.settings_file.FILE_NAME`).
+SETTINGS_FILENAME = "settings.json"
+
+#: The person's lines: start with "Probe:", never "me", end with the undo (design review).
+NOTICE_CHAT = {
+    STATE_OFF: 'Probe: off for this chat. Say "turn Probe back on" or type `/probe on`.',
+    STATE_READ_ONLY: 'Probe: read-only for this chat. Say "turn Probe back on" or type `/probe on`.',
+}
+NOTICE_CHAT_ON = "Probe: on for this chat; your agent turned it on."
+NOTICE_CHAT_INLINE = "Probe: your agent now reads and writes Probe itself in this chat. Type `/probe on` to undo."
+NOTICE_DEFAULT = {
+    STATE_OFF: 'Probe: new chats start off. This chat is unchanged. Say "turn new chats back on".',
+    STATE_READ_ONLY: 'Probe: new chats start read-only. This chat is unchanged. Say "turn new chats back on".',
+}
+NOTICE_RUNS_ONLY = 'Probe: chats are no longer recorded on this computer; runs still are. Say "record my chats again".'
+NOTICE_SIGNED_OUT = ('Probe: signed out here; nothing is recorded until you sign in again. '
+                     'Say "sign me back in to Probe".')
+NOTICE_AGENT_REMOVED = 'Probe: removed from {agent}; its chats are no longer recorded. Say "add Probe back to {agent}".'
+NOTICE_UNINSTALLED = "Probe: removed from this computer. Your team's data on research.prbe.ai stays."
+#: The current state, for a status line, pi's footer and `probe status` (never who or when).
+STATUS_WORDS = {
+    (SCOPE_CHAT, STATE_OFF): "Probe: off (this chat)",
+    (SCOPE_CHAT, STATE_READ_ONLY): "Probe: read (this chat)",
+    (SCOPE_DEFAULT, STATE_OFF): "Probe: new chats off",
+    (SCOPE_DEFAULT, STATE_READ_ONLY): "Probe: new chats read",
+    (SCOPE_PROFILE, LOWERED_RUNS_ONLY): "Probe: runs only",
+    (SCOPE_SIGN_IN, LOWERED_SIGNED_OUT): "Probe: signed out",
+}
+STATUS_PREFIX = "Probe: "
+
+
+def get_lowered_notice(scope: str, state: str) -> "str | None":
+    """The person's line for `scope` lowered to `state`, or None."""
+    if scope == SCOPE_CHAT:
+        return NOTICE_CHAT.get(state)
+    if scope == SCOPE_DEFAULT:
+        return NOTICE_DEFAULT.get(state)
+    return {SCOPE_PROFILE: NOTICE_RUNS_ONLY, SCOPE_SIGN_IN: NOTICE_SIGNED_OUT}.get(scope)
+
+
+def get_agent_move_notice(state: str) -> "str | None":
+    """The person's line for the agent's move of this chat to `state` (`load_agent_move`)."""
+    if state == MOVED_TO_INLINE:
+        return NOTICE_CHAT_INLINE
+    if state in RECORDING_STATES:
+        return NOTICE_CHAT_ON
+    return NOTICE_CHAT.get(state)
+
+
+def get_lowered_path() -> Path:
+    return state_dir() / LOWERED_FILENAME
+
+
+def _make_lowered_lock() -> "_StateLock":
+    return _StateLock("", get_lowered_path().with_name(LOWERED_FILENAME + ".lock"))
+
+
+def _to_iso(at: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at))
+
+
+def _load_lowered() -> list:
+    try:
+        data = json.loads(get_lowered_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    entries = data.get("lowered") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict) and entry.get("scope") in MACHINE_SCOPES
+            and isinstance(entry.get("state"), str) and _finite(entry.get("since")) is not None]
+
+
+def _save_lowered(entries: list, now: float) -> None:
+    kept = [entry for entry in entries
+            if entry.get("until") is None or now - (_finite(entry.get("until")) or 0) < LOWERED_KEEP_S]
+    _publish_atomically(get_lowered_path(), json.dumps({"lowered": kept[-MAX_LOWERED:]}) + "\n")
+
+
+def _load_setting_value(key: str) -> object:
+    """A setting's newest `value` in settings.json (beside the config), or None."""
+    try:
+        data = json.loads((config_path().parent / SETTINGS_FILENAME).read_text(encoding="utf-8"))
+        return data["settings"][key]["value"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _load_live_value(scope: str, config: dict) -> "str | None":
+    """`scope`'s setting as it is now (a stored state, `runs`/`full`, `signed_out`/`signed_in`);
+    None when it cannot be read (no config, an unreadable settings.json): never a guess."""
+    if scope == SCOPE_DEFAULT:
+        return (_stored_state(config.get(DEFAULTS_KEY)) or DEFAULT_STATE) if config else None
+    if scope == SCOPE_PROFILE:
+        value = _load_setting_value(SCOPE_PROFILE)
+        return value if isinstance(value, str) else None
+    if scope == SCOPE_SIGN_IN:
+        return "signed_in" if configured(config, environ={}) else LOWERED_SIGNED_OUT
+    return None
+
+
+def _is_in_effect(entry: dict, config: dict) -> "bool | None":
+    """Is `entry`'s setting still where the agent put it (its notice stands)? None: cannot tell."""
+    value = _load_live_value(entry.get("scope"), config)
+    return None if value is None else value == entry.get("state")
+
+
+def _is_back_up(entry: dict, config: dict) -> "bool | None":
+    """Does `entry`'s setting record again (its stretch ends)? Moved elsewhere but still down (the
+    person turned new chats from read to off) is not back up. None: cannot tell."""
+    value = _load_live_value(entry.get("scope"), config)
+    if value is None:
+        return None
+    if entry.get("scope") == SCOPE_DEFAULT:
+        return value in RECORDING_STATES
+    return value != entry.get("state")
+
+
+def _to_public(entry: dict) -> dict:
+    """An entry as `probe status --json` shows it (`recording_lowered`)."""
+    scope, state = entry["scope"], entry["state"]
+    return {"scope": scope, "state": STATE_LABELS.get(state, state), "by": entry.get("by") or MOVED_BY_AGENT,
+            "at": _to_iso(_finite(entry.get("at")) or entry["since"]),
+            "notice": get_lowered_notice(scope, state), "status": STATUS_WORDS.get((scope, state))}
+
+
+def get_this_chat_lowered(session_id: str) -> "dict | None":
+    """This chat's switch, lowered by its agent and still there (`recording_lowered`'s chat entry)."""
+    move = load_agent_move(session_id)
+    if move is None or move["state"] not in NOTICE_CHAT:
+        return None
+    return {"scope": SCOPE_CHAT, "state": STATE_LABELS[move["state"]], "by": MOVED_BY_AGENT,
+            "at": _to_iso(move["at"]), "notice": NOTICE_CHAT[move["state"]],
+            "status": STATUS_WORDS[(SCOPE_CHAT, move["state"])]}
+
+
+def record_lowering(scope: str, state: str, *, session: "str | None" = None, now: "float | None" = None) -> None:
+    """The agent just lowered `scope` to `state` for the person: one open entry per scope, its
+    stretch starting at the first lowering still open. Best effort."""
+    if scope not in MACHINE_SCOPES:
+        return
+    at = time.time() if now is None else now
+    with _make_lowered_lock():
+        entries = _load_lowered()
+        still = next((entry for entry in entries if entry["scope"] == scope and entry.get("until") is None), None)
+        entries = [entry for entry in entries if entry is not still]
+        entries.append({"scope": scope, "state": state, "by": MOVED_BY_AGENT,
+                        "since": still["since"] if still else at, "at": at,
+                        "session": session if valid_session_id(session or "") else None,
+                        "until": None, "told": [], "offered": False})
+        _save_lowered(entries, at)
+
+
+def record_raise(scope: str, now: "float | None" = None) -> None:
+    """`scope` is back where it was: its open entry closes now. Best effort."""
+    at = time.time() if now is None else now
+    with _make_lowered_lock():
+        entries = _load_lowered()
+        if any(entry["scope"] == scope and entry.get("until") is None for entry in entries):
+            for entry in entries:
+                if entry["scope"] == scope and entry.get("until") is None:
+                    entry["until"] = at
+            _save_lowered(entries, at)
+
+
+def _settle(entries: list, config: dict, now: float) -> bool:
+    """Close every open entry whose setting records again; True when one did."""
+    has_moved = False
+    for entry in entries:
+        if entry.get("until") is None and _is_back_up(entry, config) is True:
+            entry["until"] = now
+            has_moved = True
+    return has_moved
+
+
+def load_lowered_now(config: "dict | None" = None) -> list:
+    """What the agent lowered for the person and is lowered still, newest first (`_to_public`)."""
+    data = _read_config() if config is None else config
+    return [_to_public(entry) for entry in reversed(_load_lowered())
+            if entry.get("until") is None and _is_in_effect(entry, data) is not False]
+
+
+def take_untold(mark: str, *, session: "str | None" = None, config: "dict | None" = None) -> list:
+    """The lowerings still in effect not yet told at `mark`, marked told now. TOLD_IN_CHAT: only
+    the ones `session` made."""
+    data = _read_config() if config is None else config
+    now = time.time()
+    with _make_lowered_lock():
+        entries = _load_lowered()
+        taken = []
+        for entry in entries:
+            told = entry.get("told") if isinstance(entry.get("told"), list) else []
+            if entry.get("until") is not None or mark in told or _is_in_effect(entry, data) is False:
+                continue
+            if mark == TOLD_IN_CHAT and (not session or entry.get("session") != session):
+                continue
+            entry["told"] = told + [mark]
+            taken.append(_to_public(entry))
+        if taken or _settle(entries, data, now):
+            _save_lowered(entries, now)
+        return taken
+
+
+def take_missed_offers(config: "dict | None" = None, now: "float | None" = None) -> list:
+    """The stretches that ended since they were last offered (`{"scope", "state", "from", "to"}`,
+    epoch seconds), each marked offered: a session start offers to bring their chats in."""
+    data = _read_config() if config is None else config
+    at = time.time() if now is None else now
+    with _make_lowered_lock():
+        entries = _load_lowered()
+        has_moved = _settle(entries, data, at)
+        offers = []
+        for entry in entries:
+            if entry.get("until") is None or entry.get("offered") is True:
+                continue
+            entry["offered"] = True
+            offers.append({"scope": entry["scope"], "state": entry["state"], "from": entry["since"],
+                           "to": _finite(entry["until"]) or at})
+        if offers or has_moved:
+            _save_lowered(entries, at)
+        return offers
+
+
+def load_missed_window(now: "float | None" = None) -> "tuple[float, float] | None":
+    """(from, to): the stretch the lowered settings left chats unrecorded in, every entry kept
+    (closed or still open) together; None when there is none."""
+    at = time.time() if now is None else now
+    entries = _load_lowered()
+    if not entries:
+        return None
+    return (min(entry["since"] for entry in entries),
+            max((_finite(entry.get("until")) or at) for entry in entries))
 #: Ships ON. Tracking is the default posture: a session is tracked unless
 #: somebody said otherwise, which is what stops tracking from depending on
 #: anyone remembering to ask for it.
@@ -4666,8 +5045,12 @@ def render(
     daemon_live: bool = False,
     daemon: bool = False,
     inline: bool = False,
+    lowered: str = "",
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
+
+    `lowered`: what the agent lowered on this computer and is lowered still (`STATUS_WORDS`, less
+    its `Probe: `), said after the label in place of the project (fixes-1107b PR B).
 
     Only the five states (`state_display`): in the `daemon` state the label is
     `on (daemon)` while the daemon holds a live lease (`daemon_live`), and
@@ -4724,7 +5107,7 @@ def render(
         if daemon and not inline and session_state == STATE_READ_ONLY:
             # The daemon still reads for this session; it records nothing.
             label = DAEMON_STATE_DISPLAY[STATE_READ_ONLY]
-        return _INDENT + _paint(_DOT, hue, color) + " " + label
+        return _INDENT + _paint(_DOT, hue, color) + " " + label + _render_lowered_clause(lowered)
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact
     # about a session that is recording, and naming it for one that is not would
@@ -4736,6 +5119,8 @@ def render(
         reason = ""
     head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
     label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason, inline)
+    if lowered:
+        return head + label_bare + _render_lowered_clause(lowered)
 
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
@@ -4785,6 +5170,27 @@ def render(
     return head + label_bare + _no_capture_clause(reason, label_bare)
 
 
+
+
+def _render_lowered_clause(lowered: str) -> str:
+    """` · new chats off`: one machine-wide lowering, its words bounded (never a newline)."""
+    if not lowered:
+        return ""
+    words = lowered[len(STATUS_PREFIX):] if lowered.startswith(STATUS_PREFIX) else lowered
+    return _LABEL_SEPARATOR + _elide(words.replace("\n", " "), _MAX_LOWERED_CHARS)
+
+
+def render_signed_out(*, should_paint: bool = True) -> str:
+    """The segment where nothing is signed in because the agent signed the person out (PR B)."""
+    return _INDENT + _paint(_DOT, _RED, should_paint) + " " + STATUS_WORDS[(SCOPE_SIGN_IN, LOWERED_SIGNED_OUT)]
+
+
+def get_lowered_status_word(config: "dict | None" = None) -> str:
+    """The newest machine-wide lowering's status words (`load_lowered_now`), else ""."""
+    for entry in load_lowered_now(config):
+        if entry["scope"] != SCOPE_SIGN_IN and entry.get("status"):
+            return entry["status"]
+    return ""
 # ---------------------------------------------------------------------------
 # WHICH SESSION RUNS THIS PROCESS, for a harness that does not say.
 #

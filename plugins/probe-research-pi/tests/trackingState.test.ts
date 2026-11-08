@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   initializeTrackingState,
+  loweredSuffix,
+  parseLowered,
   parseProfile,
   Recorder,
   SESSION_INITIALIZE,
@@ -71,6 +73,30 @@ describe("initializeTrackingState", () => {
     const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
     expect(state?.tracking).toBe(true);
     expect(state?.retiredConfigNotice).toBe(read);
+  });
+
+  it.each([
+    { sent: [{ scope: "default", status: "Probe: new chats off" }], read: "Probe: new chats off" },
+    { sent: [{ scope: "profile", status: null }, { scope: "sign_in", status: "Probe: signed out" }], read: "Probe: signed out" },
+    { sent: [{ status: "Probe: a\nb" }], read: undefined },
+    { sent: [], read: undefined },
+    { sent: "Probe: new chats off", read: undefined },
+    { sent: undefined, read: undefined },
+  ])("reads what the agent turned down ($sent) for the footer, leniently (fixes-1107b PR B)", async ({ sent, read }) => {
+    const answer = {
+      session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine",
+      recording_lowered: sent,
+    };
+    const state = await initializeTrackingState("pi-session-1", "/repo", deps(service(answer)));
+    expect(state?.tracking).toBe(true);
+    expect(state?.lowered).toBe(read);
+    expect(parseLowered(sent)).toBe(read);
+  });
+
+  it("puts it after the footer's label in the status line's words", () => {
+    expect(trackingStatusText(true) + loweredSuffix("Probe: new chats off")).toBe("● on (inline) · new chats off");
+    expect(loweredSuffix("Probe: runs only")).toBe(" · runs only");
+    expect(loweredSuffix(undefined)).toBe("");
   });
 
   it.each([

@@ -1073,7 +1073,8 @@ def _final(obj: dict) -> NoReturn:
     """
     notices = _server_notices()
     _SHOWING.claims.extend(notices.claims)
-    person_lines = [*notices.person_lines, *filter(None, [_retired_config_notice()])]
+    lowered_person, lowered_agent = _lowered_notices()
+    person_lines = [*notices.person_lines, *filter(None, [_retired_config_notice()]), *lowered_person]
     if person_lines:
         prior = obj.get("systemMessage")
         obj["systemMessage"] = "\n".join(([prior] if prior else []) + person_lines)
@@ -1083,17 +1084,62 @@ def _final(obj: dict) -> NoReturn:
         if notice:
             prior = obj.get("systemMessage")
             obj["systemMessage"] = f"{prior}\n{notice}" if prior else notice
-        context = [c for c in (_inline_reminder(), *notices.agent_lines) if c]
+        context = [c for c in (_inline_reminder(), *notices.agent_lines, *lowered_agent) if c]
         if context:
             obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(context)}
         _emit(obj)
-    for ctx in (_start_context(), *notices.agent_lines):
+    for ctx in (_start_context(), *notices.agent_lines, *lowered_agent):
         if not ctx:
             continue
         hso = obj.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
         prior = hso.get("additionalContext")
         hso["additionalContext"] = f"{prior}\n\n{ctx}" if prior else ctx
     _emit(obj)
+
+
+#: The missed-chats offer, for the agent (fixes-1107b PR B): the person decides, with fresh consent.
+MISSED_OFFER = (
+    "Probe: chats went unrecorded on this computer from {since} to {until} ({why}; the agent turned it "
+    "down, and it is back now). In your next reply, offer to bring them in: run `npx -y probe-research "
+    "import review --sessions missed --json`, say its `say` line, and ask with your question tool "
+    "(preselect nothing). Only on a yes: show its consent lines, then run `npx -y probe-research import "
+    "start <id> --directed --json`. Chats the person kept out are never in it."
+)
+MISSED_WHY = {
+    "default": "new chats did not record",
+    "profile": "the computer was on Runs only",
+    "sign_in": "the computer was signed out",
+}
+
+
+def _lowered_notices() -> "tuple[list[str], list[str]]":
+    """What the agent turned down on this computer (fixes-1107b PR B): the person's line once per
+    lowering still in effect (where a person sees one, `server_notices.is_person_watching`), and the
+    agent's missed-chats offer once a stretch has ended (not with Probe `off` here: its agent does
+    no Probe work; nor in a `claude -p` run: the offer waits for a chat that does). None on PreCompact."""
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        return [], []
+    person: list = []
+    agent: list = []
+    try:
+        if server_notices.is_person_watching():
+            taken = _session_marker.take_untold(_session_marker.TOLD_AT_START)
+            person = [entry["notice"] for entry in taken if entry.get("notice")]
+        # The offer waits for a chat with a person to answer it: not a `claude -p` run.
+        if _probe_state() != _session_marker.STATE_OFF and os.environ.get(server_notices.ATTENDED_ENV) != "0":
+            offers = _session_marker.take_missed_offers()
+            if offers:
+                agent = [MISSED_OFFER.format(
+                    since=_to_day(min(o["from"] for o in offers)), until=_to_day(max(o["to"] for o in offers)),
+                    why="; ".join(dict.fromkeys(MISSED_WHY.get(o["scope"], "recording was off") for o in offers)),
+                )]
+    except Exception:  # noqa: BLE001 -- a session start never fails on a notice
+        pass
+    return person, agent
+
+
+def _to_day(at: float) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(at))
 
 
 def _server_notices() -> "server_notices.Notices":

@@ -79,6 +79,12 @@ export interface TrackingState {
    * predates it. Given ONCE: the CLI marked it given when it returned it.
    */
   retiredConfigNotice?: string;
+  /**
+   * What the agent turned down on this computer and is down still, as the status
+   * line words it (`recording_lowered[0].status`, e.g. "Probe: new chats off";
+   * fixes-1107b PR B). Absent when nothing is, or from a CLI that predates it.
+   */
+  lowered?: string;
 }
 
 export interface TrackingExecOptions {
@@ -201,6 +207,7 @@ export async function initializeTrackingState(
         typeof value.retired_config_notice === "string" && value.retired_config_notice
           ? value.retired_config_notice
           : undefined,
+      lowered: parseLowered(value.recording_lowered),
     };
   } catch (err) {
     deps.log(
@@ -290,6 +297,22 @@ export const ReadLabel = {
   Daemon: "read only (daemon)",
   Inline: "read only (inline)",
 } as const;
+
+/** The newest lowering's status words (`recording_lowered[].status`), read leniently: anything else is none. */
+export function parseLowered(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const entry of value) {
+    const status = entry && typeof entry === "object" ? (entry as { status?: unknown }).status : undefined;
+    if (typeof status === "string" && status && !/[\r\n]/.test(status)) return status;
+  }
+  return undefined;
+}
+
+/** The footer's ` · new chats off` for `lowered` (its words less "Probe: "), else "". */
+export function loweredSuffix(lowered?: string): string {
+  if (!lowered) return "";
+  return ` · ${lowered.startsWith("Probe: ") ? lowered.slice("Probe: ".length) : lowered}`;
+}
 
 /**
  * `daemonLive` is undefined outside the `daemon` state, where the agent records:
