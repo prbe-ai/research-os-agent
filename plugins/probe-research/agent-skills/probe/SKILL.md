@@ -18,14 +18,14 @@ This skill only changes the state of Probe - it doesn't actually track any work.
 |---|---|---|---|
 | `on` | yes | yes | Default. Record work as it happens, per the `track-work` skill, and search the team's history for context worth injecting. |
 | `read` | yes | no | Create no projects, experiments or runs; write no notes, artifacts or visible entity Markdown. Keep searching and keep reporting what you find. If the researcher asks for something that would be recorded, say once that `/probe on` would record it — never as a reminder, never as a closing caveat. |
-| `off` | no | no | Make no Probe calls, reads included. This session's transcript is not captured (see FYI for what still uploads). Say you could not look; never report that no prior work exists. |
+| `off` | no | no | Make no Probe calls about the work, reads included; Probe's own upkeep the researcher asks for still runs. This session's transcript is not captured (see FYI for what still uploads). Say you could not look; never report that no prior work exists. |
 
 Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
 press leaves it for `read`. Whether the Probe daemon records is set in
 `probe wizard`, not by this switch: `/probe daemon` changes nothing.
 
 Typing `/probe …` moves the switch itself. You move this chat's switch only when
-the researcher asks you to, never on your own: run `probe session status` first
+the researcher asks you to, never on your own: run `npx -y probe-research session status` first
 (their `/probe` may have moved it already), then
 `npx -y probe-research session state <on|read|off> --directed` (`--directed` says
 they asked; a refusal without it is the reminder).
@@ -67,7 +67,7 @@ beats it.
 Set by the wizard (`npx probe-research`). When the researcher asks to change
 what new chats start as, run `npx -y probe-research session default <on|read|off>`
 (add `--directed` for `read` or `off`, once they said yes) and say it applies to
-new chats only. `probe session status` reports it as `machine_default_state`.
+new chats only. `npx -y probe-research session status` reports it as `machine_default_state`.
 
 **Session transcripts, machine-wide**
 

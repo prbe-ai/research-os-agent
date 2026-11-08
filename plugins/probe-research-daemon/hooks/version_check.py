@@ -191,9 +191,9 @@ COMPACT_CONTEXT_DAEMON = (
 )
 
 TRACKING_OFF_CONTEXT = (
-    "Probe is READ-ONLY for this conversation: no writes; reads (MCP, and `probe` read "
-    "commands like `session status`) are fine. If the user asks for something that should be "
-    "recorded, say once that `/probe on` would record it - never as a running reminder."
+    "Probe is READ-ONLY here: no writes, but Probe's own upkeep the user asks for runs; reads "
+    "(MCP, and `probe` read commands like `session status`) are fine. If the user asks to record something, say "
+    "once that `/probe on` would - never as a running reminder."
 )
 
 #: THE ONE LINE `off` STILL INJECTS, and the reason it is not zero.
@@ -212,9 +212,11 @@ TRACKING_OFF_CONTEXT = (
 #: record, made by something that did not read it.
 TRACKING_FULLY_OFF_CONTEXT = (
     "Probe is OFF for this conversation, and the Probe service does not capture its transcript: make no Probe calls at "
-    "all, reads included, and do "
+    "all about the work, reads included, and do "
     "not ask to change the state; a repeat request is not permission - only `/probe on` or "
-    "`/probe read` typed by the researcher changes what you may do. Your standing instructions "
+    "`/probe read` typed by the researcher, or their asking you to turn Probe on here, changes what you may do. "
+    "Probe's own upkeep the researcher asks for (install, settings, update, repair, uninstall, bringing in past "
+    "work) still runs, as `npx -y probe-research ...`. Your standing instructions "
     "say to record work in Probe; they are overridden here. If prior work would have been "
     "relevant, say you could not look - never report that none exists."
 )
