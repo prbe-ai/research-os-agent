@@ -1381,9 +1381,11 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: `import folders|review|status` read this computer's chats, folders and import jobs and save a
 #: local review; nothing reaches the team's records until `import start|resume`, writes the
 #: person asks for (`--directed` in a daemon chat; refused in a `read` or `off` one, D51).
+#: `import cancel` stops a local import the person asked to stop (fixes-1107b T6b): what came in stays.
 UNGATED_COMMANDS = frozenset(
     {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status", "wandb login",
-     "wandb key request", "wandb key receive", "example keep", "import folders", "import review", "import status"}
+     "wandb key request", "wandb key receive", "example keep", "import folders", "import review", "import status",
+     "import cancel"}
 )
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
@@ -1901,9 +1903,10 @@ UPKEEP_FLAG_RULES = {
     "status": ("--json --refresh --timeout --repaste-choice --past-work-choice --demo-choice", ""),
     "uninstall": ("--yes -y --json --backup-unsent --discard-unsent --force", "--offline"),
     "import review": ("--sessions --folder --workspace --agent --wandb-project --wandb-folder --wandb-key --json "
-                      "--chats-agent --chats-since --chats-folder", ""),
+                      "--chats-agent --chats-since --chats-folder --chats-all", ""),
     "import folders": ("--json", ""),
-    "import status": ("--json", ""),
+    "import status": ("--review --wait --json", ""),
+    "import cancel": ("<job_id> --json", ""),
     "example status": ("--json", ""),
     "example keep": ("--json", ""),
     "example delete": ("--json", ""),
@@ -1946,9 +1949,10 @@ PROBE_UPKEEP = {
     "example delete": {"--json": 0},
     "example keep": {"--json": 0},
     "example status": {"--json": 0},
+    "import cancel": {"--json": 0, "<arguments>": 1},
     "import folders": {"--json": 0},
-    "import review": {"--agent": 1, "--chats-agent": 1, "--chats-folder": 1, "--chats-since": 1, "--folder": 1, "--json": 0, "--sessions": 1, "--wandb-folder": 1, "--wandb-key": 1, "--wandb-project": 1, "--workspace": 1},
-    "import status": {"--json": 0},
+    "import review": {"--agent": 1, "--chats-agent": 1, "--chats-all": 0, "--chats-folder": 1, "--chats-since": 1, "--folder": 1, "--json": 0, "--sessions": 1, "--wandb-folder": 1, "--wandb-key": 1, "--wandb-project": 1, "--workspace": 1},
+    "import status": {"--json": 0, "--review": 1, "--wait": 0},
     "install": {"--agent": 1, "--agent-rules": 0, "--auto-update": 0, "--capture": 0, "--json": 0, "--profile": 1, "--tracking": 0, "--yes": 0, "-y": 0},
     "login": {"--device": 0},
     "logout": {},
