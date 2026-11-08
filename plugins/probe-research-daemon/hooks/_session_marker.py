@@ -1912,7 +1912,7 @@ UPKEEP_FLAG_RULES = {
     "wandb key receive": ("--request --wait --json", ""),
     "session default": ("<value>", "--folder"),
     "service start": ("--min-version --json", ""),
-    "service stop": ("", ""),
+    "service stop": ("--json", ""),
     "service status": ("--json", ""),
     "capture on": ("--agent --yes -y --json --no-browser", ""),
     "capture off": ("--agent --yes -y --json", ""),
@@ -1952,7 +1952,7 @@ PROBE_UPKEEP = {
     "repair": {"--json": 0},
     "service start": {"--json": 0, "--min-version": 1},
     "service status": {"--json": 0},
-    "service stop": {},
+    "service stop": {"--json": 0},
     "session default": {"<arguments>": 1},
     "setup": {"--action": 1, "--agent": 1, "--agent-rules": 0, "--attempt": 1, "--auto-update": 0, "--capture": 0, "--json": 0, "--no-browser": 0, "--pending": 0, "--profile": 1, "--recommended": 0, "--reinstall": 0, "--session-default": 1, "--tracking": 0, "--who-records": 1, "--yes": 0, "-y": 0},
     "status": {"--demo-choice": 1, "--json": 0, "--past-work-choice": 1, "--refresh": 0, "--repaste-choice": 1, "--timeout": 1},
@@ -2569,6 +2569,130 @@ def touches_hook_host(tool_name: object, tool_input: object, cwd: "str | None" =
     return None
 
 
+
+
+# ---------------------------------------------------------------------------
+# REFUSALS OF PROBE'S OWN UPKEEP, SPOOLED FOR THE SERVICE (fixes-1107b PR C)
+# ---------------------------------------------------------------------------
+#
+#     ~/.local/state/probe/refusals/<session>.<reason>.json   {"reason", "step", "source", "chat_agent", "at"}
+#
+# The CLI's write gate and the hooks' guard add one when they refuse an agent's
+# upkeep or install command (no network: a hook must answer at once); the Probe
+# service sends each as `agent_install.refused` and renames it `.sent`, so a
+# chat counts each reason once. Words only, never a value from the command.
+# Never under `$XDG_STATE_HOME`: the service starts without it (`paths.py`), so
+# that is the one folder writer and reader agree on. A chat with telemetry off
+# (`PROBE_TELEMETRY`, `analytics.core.telemetry_disabled`) keeps none.
+
+REFUSALS_DIRNAME = "refusals"
+#: Files kept at most (sent ones included); a fuller folder takes no more.
+MAX_REFUSALS = 200
+#: A sent one is kept this long (the once-per-chat rule), then dropped.
+REFUSAL_KEEP_S = 7 * 86400
+REFUSAL_SOURCES = ("cli", "hook")
+REFUSAL_WORD = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+#: `PROBE_TELEMETRY` values that turn Probe's product events off (`analytics.core.telemetry_disabled`'s).
+TELEMETRY_OFF_WORDS = frozenset({"off", "0", "false", "no", "disabled"})
+#: A refused command's `step`, by its first word (the launcher's steps, and these).
+REFUSAL_STEPS = {
+    "install": "install", "setup": "install", "wizard": "install", "login": "sign_in", "sign-in": "sign_in",
+    "logout": "sign_out", "repair": "repair", "update": "update", "uninstall": "uninstall", "status": "status",
+    "import": "import", "example": "example", "wandb": "wandb", "session": "session", "service": "service",
+    "capture": "capture",
+}
+#: The wizard's, by its `--action`.
+REFUSAL_ACTION_STEPS = {
+    "configure": "install", "recorder": "install", "login": "sign_in", "logout": "sign_out",
+    "uninstall": "uninstall", "update": "update", "diagnose": "repair",
+}
+
+
+def get_refusals_dir() -> Path:
+    """The default state folder's, never `$XDG_STATE_HOME`'s (the service reads it without one)."""
+    return _home() / ".local" / "state" / STATE_DIRNAME / REFUSALS_DIRNAME
+
+
+def get_refusal_step(args: "list[str]") -> str:
+    """The `step` of the refused `probe` args (after `probe`): `REFUSAL_STEPS`, else `other`."""
+    words = command_words([arg for arg in args if arg != DIRECTED_FLAG])
+    if not words:
+        return "other"
+    if words[0] in ("wizard", "setup"):
+        actions = get_wizard_actions(args)
+        return REFUSAL_ACTION_STEPS.get(actions[-1], "other") if actions else "install"
+    return REFUSAL_STEPS.get(words[0], "other")
+
+
+def is_upkeep_refusal(args: "list[str]") -> bool:
+    """Is this refused `probe` command Probe's own upkeep or install (what the spool counts)?"""
+    own = [arg for arg in args if arg != DIRECTED_FLAG]
+    return (_upkeep_key(command_words(own)) is not None or records_less(own) is not None
+            or moves_switch(own) is not None or saves_server(own) is not None)
+
+
+def save_refusal(session_id: str, reason: str, step: str, source: str,
+                  chat_agent: "str | None" = None) -> bool:
+    """Keep one refusal for the service to send (once per chat and reason). True when written. Never raises."""
+    if not valid_session_id(session_id) or source not in REFUSAL_SOURCES:
+        return False
+    if (os.environ.get("PROBE_TELEMETRY") or "").strip().lower() in TELEMETRY_OFF_WORDS:
+        return False  # this chat opted out: nothing about it is kept for later sending
+    if not REFUSAL_WORD.match(reason or "") or not REFUSAL_WORD.match(step or ""):
+        return False
+    agent = chat_agent if isinstance(chat_agent, str) and REFUSAL_WORD.match(chat_agent) else None
+    folder = get_refusals_dir()
+    name = "%s.%s" % (session_id, reason)
+    try:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        present = os.listdir(folder)
+        if name + ".json" in present or name + ".sent" in present or len(present) >= MAX_REFUSALS:
+            return False
+        handle = os.open(str(folder / (name + ".json")), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump({"reason": reason, "step": step, "source": source, "chat_agent": agent,
+                       "at": int(time.time())}, stream)
+    except OSError:
+        return False
+    return True
+
+
+def load_spooled_refusals(now: "float | None" = None) -> "list[tuple[Path, dict]]":
+    """The refusals not sent yet, oldest first; any past REFUSAL_KEEP_S (sent or never allowed out) is
+    dropped. Never raises."""
+    at = time.time() if now is None else now
+    found = []
+    try:
+        entries = list(os.scandir(get_refusals_dir()))
+    except OSError:
+        return []
+    for entry in entries:
+        path = Path(entry.path)
+        try:
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            if at - entry.stat(follow_symlinks=False).st_mtime > REFUSAL_KEEP_S:
+                path.unlink()
+                continue
+            if not entry.name.endswith(".json"):
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            found.append((path, data))
+    return sorted(found, key=lambda item: item[1].get("at") if isinstance(item[1].get("at"), int) else 0)
+
+
+def mark_refusal_sent(path: Path) -> None:
+    """Sent: kept as `.sent` (the once-per-chat rule) until REFUSAL_KEEP_S. Never raises."""
+    try:
+        os.replace(path, path.with_suffix(".sent"))
+    except OSError:
+        pass
 # ---------------------------------------------------------------------------
 # THE DAEMON'S WRITE LEASE.
 #

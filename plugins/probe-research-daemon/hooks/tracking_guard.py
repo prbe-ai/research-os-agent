@@ -2270,11 +2270,31 @@ def _agent_refused(payload: dict, deny: str) -> bool:
     for args in _probe_invocations(command):
         if _asks_help_plainly(args):
             continue
-        refused = _session_marker.agent_refusal(args, deny) or _session_marker.spelled_server_override(command, args)
+        refused = _session_marker.agent_refusal(args, deny)
+        reason = "directed_required"
+        if not refused:
+            refused, reason = _session_marker.spelled_server_override(command, args), "server_override"
         if refused:
+            _save_refusal(payload, args, reason)
             _refuse(refused)
             return True
     return False
+
+
+def _save_refusal(payload: dict, args: list, reason: str) -> None:
+    """Keep an upkeep or install refusal for the Probe service to count (`agent_install.refused`, PR C):
+    a file, never the network. Never raises."""
+    try:
+        if not _session_marker.is_upkeep_refusal(args):
+            return
+        try:
+            agent = _hook_harness().current().id
+        except Exception:  # noqa: BLE001 -- counted without its agent
+            agent = None
+        _session_marker.save_refusal(str(payload.get("session_id") or ""), reason,
+                                      _session_marker.get_refusal_step(args), "hook", agent)
+    except Exception:  # noqa: BLE001 -- counting never costs the refusal
+        pass
 
 
 def _deny(payload: dict, session_id: str, *, is_agent_checked: bool = False) -> None:
@@ -2426,6 +2446,7 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
             continue
         allowed, matched = _session_marker.daemon_profile_allows(args)
         if not allowed:
+            _save_refusal(payload, args, "daemon_chat")
             _refuse(_session_marker.daemon_profile_deny(args, matched))
             return
     if state == _session_marker.STATE_READ_ONLY:
