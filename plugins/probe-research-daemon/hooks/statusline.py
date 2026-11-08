@@ -5,7 +5,7 @@ Reads the status-line payload on stdin, hands it to this machine's Probe service
 (`statusline.render`, drawn by `probe.service.jobs.statusline_render`), prints the ONE line
 it answers, exits 0. When no service answers it asks for one (`probe.service.client ensure`,
 detached, at most every ENSURE_EVERY_S) and, under Claude Code, waits for it (START_WAIT_S); still
-no answer, it prints `  Probe | ● service down`. Nothing here reads Probe's state or
+no answer, it prints `  ● Probe service down`. Nothing here reads Probe's state or
 decides what to show.
 
 CONTRACT — this runs on a RENDER PATH, once per status-line update:
@@ -53,12 +53,12 @@ import time
 #: The whole exchange (connect, hello, render), at most: inside Kimi's 300 ms.
 TIMEOUT_S = 0.25
 #: What the command prints when no service answers: the status line's failure shape, red dot unless NO_COLOR.
-SERVICE_DOWN = "  Probe | ● service down"
-SERVICE_DOWN_COLOR = "  Probe | \033[31m●\033[0m service down"
+SERVICE_DOWN = "  ● Probe service down"
+SERVICE_DOWN_COLOR = "  \033[31m●\033[0m Probe service down"
 #: What it prints when a service answered but the reply was unusable (an error, no text, not JSON): the service is
 #: up, so this is never "service down", never asks for a start and never waits.
-UNAVAILABLE = "  Probe | ● status unavailable"
-UNAVAILABLE_COLOR = "  Probe | \033[31m●\033[0m status unavailable"
+UNAVAILABLE = "  ● Probe status unavailable"
+UNAVAILABLE_COLOR = "  \033[31m●\033[0m Probe status unavailable"
 #: The last time no service answered, for `probe statusline show`: `{"error", "socket", "at"}`.
 LASTFAIL_NAME = "statusline.lastfail"
 

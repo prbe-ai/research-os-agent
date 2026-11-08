@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The status line drops its `Probe |` prefix and says off again.** It now reads `● on (daemon) | BIRD SFT Fine Tuning` (pi's footer and the one-line notices the same). A failure names Probe in its words: `● Probe service down`, `● Probe status unavailable`, `● signed out of Probe`. An off chat draws `● off` again (`● off (auto)` in auto mode, with the agent's lowering after it), because Claude Code keeps the status line's row whatever it prints, so drawing nothing only left an empty gap. An agent-prompt install's Recommended now sets Manual (auto mode is opt-in), even on a computer that chose Auto before.
+
 ## 0.464.0
 
 - **Codex no longer shows a "warnings" badge for Probe's hooks (tap 0.10.70).** The capture plugin's session-end hook asked Codex for 20 s, the time Claude Code needs; Codex allows a session-end hook 3 s, so on every start it said "clamping SessionEnd hook timeout to 3s", even where that hook is switched off. Codex now reads the plugin's own `hooks/codex.json`: the same hooks, with the session-end one at 3 s. Nothing changes in what runs: Codex already stopped that hook at 3 s, the hook waits at most 2.6 s there, and the Probe service finishes the session's last upload whether or not the hook is still waiting. Claude Code keeps its 20 s. A Codex still on Probe's older hooks approves the renamed entries at the next Probe update, as after any plugin update.

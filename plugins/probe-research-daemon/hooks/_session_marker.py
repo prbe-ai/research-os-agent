@@ -101,14 +101,13 @@ DAEMON_HINT = ("ask your agent to set Who records to the daemon "
                "(`npx -y probe-research install --yes --json --who-records daemon --directed`)")
 
 _ELLIPSIS = "…"  # …
-#: The status line's one glyph. Its colour says the kind of state (green on, yellow read, red broken); the words
+#: The status line's one glyph. Its colour says the kind of state (green on, yellow read, red off or broken); the words
 #: say it too, so nothing is lost with colour off.
 _DOT = "●"  # ●
 _INDENT = "  "  # the segment is concatenated after a chained neighbour: keep a gap
 _GLYPH_WIDTH = 2  # the dot plus its trailing space
 
-#: The segment's fields, joined: `Probe | ● <state words> | <title> | <note>` (Richard 2026-11-07).
-STATUS_PREFIX_LABEL = "Probe"
+#: The segment's fields, joined: `● <state words> | <title> | <note>` (Richard 2026-11-07; no `Probe |` prefix, 11-08).
 STATUS_DIVIDER = " | "
 
 #: The one note a line carries, most serious first. Problems only, plus `transcripts off`, which is why a daemon chat
@@ -116,9 +115,9 @@ STATUS_DIVIDER = " | "
 NOTE_TRANSCRIPT_NOT_RECORDED = "session transcript not recorded"
 NOTE_DAEMON_NOT_RECORDING = "daemon not recording"
 NOTE_TRANSCRIPTS_OFF = "transcripts off"
-NOTE_STATUS_UNAVAILABLE = "status unavailable"
-NOTE_SERVICE_DOWN = "service down"
-NOTE_SIGNED_OUT = "signed out"
+NOTE_STATUS_UNAVAILABLE = "Probe status unavailable"
+NOTE_SERVICE_DOWN = "Probe service down"
+NOTE_SIGNED_OUT = "signed out of Probe"
 NOTE_NOTHING_FILED = "nothing filed yet"  # the notice's, when the chat has filed nothing
 
 #: The capture reason for transcripts turned off on purpose (`capture_state.TURNED_OFF_REASON`).
@@ -133,15 +132,15 @@ MAX_TITLE_LEN = 200
 MAX_TITLE_ROWS = 32
 
 #: The segment's ceiling in terminal columns, leading indent included: the widest line that must render whole,
-#: `  Probe | ● on (daemon) | <20-column title> | session transcript not recorded` (80). Derived, so it moves when
+#: `  ● on (daemon) | <20-column title> | session transcript not recorded` (72). Derived, so it moves when
 #: the words do; only words reachable today count (auto mode's `, auto` re-derives it).
 MAX_SEGMENT_CHARS = (
-    len(_INDENT) + len(STATUS_PREFIX_LABEL) + len(STATUS_DIVIDER) + _GLYPH_WIDTH + len("on (daemon)")
+    len(_INDENT) + _GLYPH_WIDTH + len("on (daemon)")
     + len(STATUS_DIVIDER) + TITLE_ROOM_WITH_NOTE + len(STATUS_DIVIDER) + len(NOTE_TRANSCRIPT_NOT_RECORDED)
 )
 #: The title's budget with no note: the same in every state, so it never moves when the state does.
 MAX_TITLE_CHARS = (
-    MAX_SEGMENT_CHARS - len(_INDENT) - len(STATUS_PREFIX_LABEL) - len(STATUS_DIVIDER) - _GLYPH_WIDTH
+    MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH
     - len("read (daemon)") - len(STATUS_DIVIDER)
 )
 #: Below this many columns a cut title names nothing: it is dropped (a guard against unbounded input).
@@ -4479,7 +4478,7 @@ def state_key(state: dict | None, *, live: bool = False, session_state: "str | N
 def message(
     state: dict | None, *, live: bool = False, tracking: bool = True, session_state: "str | None" = None
 ) -> str:
-    """One line for an agent with no status line, read by the person: `Probe | <words> | <title> | <note>`, the
+    """One line for an agent with no status line, read by the person: `<words> | <title> | <note>`, the
     status line's own words with no glyph and no width cap (the one place a capture reason and its fix fit).
 
     `tracking` defaults to True: `statusline_notify.py` reaches here only for a recording chat. `live` is accepted for
@@ -4487,7 +4486,7 @@ def message(
     """
     words = _get_notice_words(session_state)
     title = _get_line_title(state)
-    fields = [STATUS_PREFIX_LABEL, words, title or NOTE_NOTHING_FILED]
+    fields = [words, title or NOTE_NOTHING_FILED]
     reason = _capture_reason(state) if tracking else ""
     if reason == _CHOSEN_OFF_REASON:
         fields.append(NOTE_TRANSCRIPTS_OFF)
@@ -5468,8 +5467,8 @@ def configured(config: dict | None = None, environ=None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Rendering: `  Probe | ● <state words> | <title> | <note>` (Richard 2026-11-07). Off draws nothing; a failure line
-# is `  Probe | ● <failure>` with a red dot. One line, bounded by MAX_SEGMENT_CHARS terminal columns.
+# Rendering: `  ● <state words> | <title> | <note>` (Richard 2026-11-07; no `Probe |` prefix, 11-08). Off is
+# `  ● off` with a red dot (11-08); a failure line is `  ● <failure>` with a red dot (the failure names Probe). One line, bounded by MAX_SEGMENT_CHARS terminal columns.
 # ---------------------------------------------------------------------------
 
 
@@ -5544,11 +5543,11 @@ def _elide(text: str, limit: int = MAX_TITLE_CHARS) -> str:
 
 
 def get_state_words(session_state: "str | None", reader: Reader, *, is_auto: bool = False) -> str:
-    """The state as the status line says it: `on (daemon)`, `on (inline)`, `read (daemon)`, `read (inline)`, or `off`
-    (never drawn). `is_auto` puts the auto tag inside the parentheses (`on (daemon, auto)`). A word this copy does not
+    """The state as the status line says it: `on (daemon)`, `on (inline)`, `read (daemon)`, `read (inline)`, or `off`.
+    `is_auto` puts the auto tag inside the parentheses (`on (daemon, auto)`, `off (auto)`). A word this copy does not
     know raises, so a newer CLI's state renders as `status unavailable`, never as a guess."""
     if session_state == STATE_OFF:
-        return "off"
+        return "off (auto)" if is_auto else "off"
     if session_state in (STATE_DAEMON, STATE_FULL):
         who = "daemon" if session_state == STATE_DAEMON and reader is Reader.DAEMON else "inline"
         level = "on"
@@ -5600,8 +5599,8 @@ def _pick_note(*, recording: bool, reader: Reader, session_state: str, reason: s
 def _fit_fields(words: str, hue: str, title: str, note: str, reason: str, should_paint: bool, ceiling: int) -> str:
     """Lay the fields out under `ceiling` columns: the title yields first (cut, then dropped below
     `_MIN_TITLE_CHARS`), the note last. The capture reason rides on the note only when no title shows."""
-    head = _INDENT + STATUS_PREFIX_LABEL + STATUS_DIVIDER + _paint(_DOT, hue, should_paint) + " " + words
-    head_width = len(_INDENT) + len(STATUS_PREFIX_LABEL) + len(STATUS_DIVIDER) + _GLYPH_WIDTH + len(words)
+    head = _INDENT + _paint(_DOT, hue, should_paint) + " " + words
+    head_width = len(_INDENT) + _GLYPH_WIDTH + len(words)
     note_room = ceiling - head_width - len(STATUS_DIVIDER)
     if note:
         note = _elide(note, note_room)
@@ -5629,7 +5628,8 @@ def render(
     lowered: str = "",
     is_auto: bool = False,
 ) -> str:
-    """The status-line segment, or `""` when Probe is off for this chat or not set up.
+    """The status-line segment, or `""` when Probe is not set up. An off chat draws `● off` with a red dot: Claude
+    Code keeps the status line's row whatever it prints, so an empty one only leaves a gap (Richard, 2026-11-08).
 
     `daemon_live`: the daemon holds a live lease or is still starting (the caller decides; `is_worker_starting`).
     `daemon`: the daemon reads for this chat now (`is_daemon_mode`); `inline` (`is_inline`) wins over it.
@@ -5641,7 +5641,10 @@ def render(
     if session_state is None:  # a caller from before the five states
         session_state = STATE_FULL if tracking else STATE_READ_ONLY
     if session_state == STATE_OFF:
-        return ""
+        note, _reason = _pick_note(recording=False, reader=Reader.INLINE, session_state=STATE_OFF, reason="",
+                                   daemon_live=False, lowered=lowered)
+        words = get_state_words(STATE_OFF, Reader.INLINE, is_auto=is_auto)
+        return _fit_fields(words, _RED, "", note, "", color, MAX_SEGMENT_CHARS)
     recording = tracking and session_state != STATE_READ_ONLY
     shown = session_state if recording else STATE_READ_ONLY
     reader = _get_reader(shown, daemon, inline)
@@ -5653,8 +5656,8 @@ def render(
 
 
 def render_failure(note: str, *, should_paint: bool = True) -> str:
-    """A line for Probe itself being broken: `  Probe | ● <note>` with a red dot, the status alone."""
-    return (_INDENT + STATUS_PREFIX_LABEL + STATUS_DIVIDER + _paint(_DOT, _RED, should_paint) + " "
+    """A line for Probe itself being broken: `  ● <note>` with a red dot, the status alone (the note names Probe)."""
+    return (_INDENT + _paint(_DOT, _RED, should_paint) + " "
             + note.replace("\n", " "))
 
 

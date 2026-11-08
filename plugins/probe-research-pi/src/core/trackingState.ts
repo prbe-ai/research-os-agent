@@ -86,7 +86,7 @@ export interface TrackingState {
    * Never the sign-out (`signedOut`), as `get_lowered_status_word` skips it.
    */
   lowered?: string;
-  /** The agent signed the person out (a `sign_in` lowering): the footer is `Probe | ● signed out`. */
+  /** The agent signed the person out (a `sign_in` lowering): the footer is `● signed out of Probe`. */
   signedOut?: boolean;
   /**
    * The main agent sets this chat's switch (probe auto mode: the machine is in auto and the
@@ -309,9 +309,8 @@ function parseConfigured(raw: unknown): ConfiguredValue | undefined {
 
 /**
  * THE FOOTER: the status line's words (`session_marker`, pinned by `test_pi_core_parity.py`), in pi's idiom:
- * `Probe | ● on (daemon) | <note>`. No colour in pi, so the glyph says it (● records, ○ reads); no title (E1).
+ * `● on (daemon) | <note>` (no `Probe |` prefix, 2026-11-08). No colour in pi, so the glyph says it (● records, ○ reads); no title (E1).
  */
-export const STATUS_PREFIX_LABEL = "Probe";
 export const STATUS_DIVIDER = " | ";
 export const RECORDING_DOT = "●";
 export const READ_DOT = "○";
@@ -333,8 +332,8 @@ export const FooterNote = {
   TranscriptNotRecorded: "session transcript not recorded",
   DaemonNotRecording: "daemon not recording",
   TranscriptsOff: "transcripts off",
-  StatusUnavailable: "status unavailable",
-  SignedOut: "signed out",
+  StatusUnavailable: "Probe status unavailable",
+  SignedOut: "signed out of Probe",
 } as const;
 
 /** The lowering a sign-out by the agent records (`session_marker.SCOPE_SIGN_IN`). */
@@ -346,9 +345,9 @@ export const CHOSEN_OFF_REASON = "turned off";
 /** A lowering's status words start with this (`session_marker.STATUS_PREFIX`); the footer drops it. */
 export const LOWERED_PREFIX = "Probe: ";
 
-/** `Probe | <dot> <words>`, then ` | <note>` when there is one. */
+/** `<dot> <words>`, then ` | <note>` when there is one. */
 function joinFooter(dot: string, words: string, note?: string): string {
-  return STATUS_PREFIX_LABEL + STATUS_DIVIDER + `${dot} ${words}` + (note ? STATUS_DIVIDER + note : "");
+  return `${dot} ${words}` + (note ? STATUS_DIVIDER + note : "");
 }
 
 /** pi could not read the state: never hidden, which would read as off. */
@@ -429,7 +428,19 @@ function addAutoTag(words: string, reading: FooterReading): string {
   return reading.isAuto ? words.replace(/\)$/, ", auto)") : words;
 }
 
-/** The footer for a session Probe is not off for: `Probe | ● on (daemon)`, `Probe | ○ read (inline) | runs only`. */
+/** The footer word for a chat Probe is off for (`get_state_words`' `off`). */
+export const OFF_LABEL = "off";
+
+/**
+ * The footer for a chat Probe is off for: `○ off` (`○ off (auto)` in an auto chat), then a lowering note. Drawn,
+ * not hidden: the status line's row stays whatever it prints, so it says off (Richard, 2026-11-08).
+ */
+export function renderOffFooter(reading: Pick<FooterReading, "lowered" | "isAuto">): string {
+  const words = reading.isAuto ? `${OFF_LABEL} (auto)` : OFF_LABEL;
+  return joinFooter(READ_DOT, words, getLoweredNote(reading.lowered));
+}
+
+/** The footer for a session Probe is not off for: `● on (daemon)`, `○ read (inline) | runs only`. */
 export function renderFooter(reading: FooterReading): string {
   // An inline session records (the agent does) even while a cached reading from before `/probe inline` says `read`.
   const recording = reading.tracking || Boolean(reading.inline);

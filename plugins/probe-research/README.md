@@ -105,12 +105,13 @@ plugin is added to the central prbe-ai marketplace, the install becomes `probe-r
 
   | State | The line |
   |---|---|
-  | on, the daemon records | `Probe \| ● on (daemon) \| BIRD SFT Fine Tuning` (green dot) |
-  | on, the agent records | `Probe \| ● on (inline) \| BIRD SFT Fine Tuning` (green dot) |
-  | read | `Probe \| ● read (daemon) \| BIRD SFT Fine Tuning` (yellow dot) |
-  | off, or Probe not set up | nothing |
+  | on, the daemon records | `● on (daemon) \| BIRD SFT Fine Tuning` (green dot) |
+  | on, the agent records | `● on (inline) \| BIRD SFT Fine Tuning` (green dot) |
+  | read | `● read (daemon) \| BIRD SFT Fine Tuning` (yellow dot) |
+  | off | `● off` (red dot; `off (auto)` in auto mode) |
+  | Probe not set up | nothing |
   | a problem | `… \| BIRD SFT Fine Tuning \| session transcript not recorded` (the note in yellow) |
-  | Probe itself broken | `Probe \| ● service down`, `status unavailable` or `signed out` (red dot) |
+  | Probe itself broken | `● Probe service down`, `● Probe status unavailable` or `● signed out of Probe` (red dot) |
 
   The title is the project's name (its slug until a name is known); with none the last divider goes too.
   One note at most, most serious first. The line never carries a command; this is what to do:

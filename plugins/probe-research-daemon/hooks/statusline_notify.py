@@ -14,9 +14,9 @@ absent: it costs attention and delivers nothing. So this fires when what the
 notice shows moves (`state_key`: the state words, the title, a capture problem),
 never for a run starting or finishing, which in a normal session is a few lines.
 
-    Probe | on (inline) | BIRD SFT Fine Tuning
-    Probe | on (daemon) | nothing filed yet
-    Probe | on (inline) | BIRD SFT Fine Tuning | session transcript not recorded: halted; fix: see probe doctor
+    on (inline) | BIRD SFT Fine Tuning
+    on (daemon) | nothing filed yet
+    on (inline) | BIRD SFT Fine Tuning | session transcript not recorded: halted; fix: see probe doctor
 
 OPT-IN, exactly like the segment. The wizard's status-line step under Codex sets the
 flag this reads; nothing here runs for anyone who did not ask for it.
