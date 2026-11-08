@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- npx launcher 0.31.0: the install pages' commands run on CLI 0.461.0 or newer, which has auto mode's `session control` and `install --session-control`; a computer with an older Probe gets that release for the pages' calls instead of "No such option".
 - **Every Probe message an agent reads names the fix it runs from the chat (tap 0.10.69).** Messages that said to run the wizard, or to run a command "in a terminal" or "from your own terminal", now name the exact `npx -y probe-research … --json` command (sign-in, update, install, repair), or "ask your agent to …" where only the person reads them; a change that records less (Who records, capture off, sign out, uninstall) carries `--directed` and says it waits for the person's ask. This covers the CLI's errors and notices, `--help`, `probe doctor` and `status` rows, the session-start and update notices, the MCP's sign-in answer, the SDK's credential warnings, the tap's log lines, the pi extension, the skills and `/probe-research-setup`. Unchanged on purpose: the daemon's questions (`probe approvals`, the researcher's own answer), deleting a captured chat, Apple's Xcode license, a job's write token and the interactive menu's own screens. A test fails if a new message names the wizard or a terminal.
 
 ## 0.462.0
