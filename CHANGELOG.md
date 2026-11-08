@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.468.0
+
 - **An off chat draws no status line again.** Claude Code's status line and pi's footer show nothing while Probe is off for the chat (auto chats and the agent's lowerings included), instead of `● off`. In Claude Code's fullscreen view (`"tui": "fullscreen"`) Claude Code itself keeps the empty row; in its default view the row goes. `probe statusline show` says `(hidden: Probe is off for this chat)`.
 
 ## 0.467.0
