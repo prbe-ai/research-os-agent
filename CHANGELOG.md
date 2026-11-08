@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Internal: `probe.generated.samples` carries the RL sample store's contract (records, wire shapes, the canonical scenario encoding and the derived ids), generated from `contracts/probe_contracts/records/samples/` by `python -m probe_contracts.codegen`. Nothing uses it yet.
+
+## 0.465.0
+
 - **The status line drops its `Probe |` prefix and says off again.** It now reads `● on (daemon) | BIRD SFT Fine Tuning` (pi's footer and the one-line notices the same). A failure names Probe in its words: `● Probe service down`, `● Probe status unavailable`, `● signed out of Probe`. An off chat draws `● off` again (`● off (auto)` in auto mode, with the agent's lowering after it), because Claude Code keeps the status line's row whatever it prints, so drawing nothing only left an empty gap. An agent-prompt install's Recommended now sets Manual (auto mode is opt-in), even on a computer that chose Auto before.
 
 ## 0.464.0

@@ -1,6 +1,6 @@
 {
   "name": "probe-research-daemon",
-  "version": "0.235.0",
+  "version": "0.236.0",
   "description": "Probe Research for Cursor, daemon profile: the Probe daemon records and reads the team's work for this agent. Installs instrument-code, plan-research-review, visualize-progress and the guard's skills; no MCP. Probe's hook entries live in ~/.cursor/hooks.json, not here.",
   "author": {
     "name": "Probe",
