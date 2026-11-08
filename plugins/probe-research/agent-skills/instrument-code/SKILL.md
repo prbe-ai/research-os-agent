@@ -1,6 +1,6 @@
 ---
 name: instrument-code
-description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that trains, evaluates, sweeps or serves, so that it records run-level metrics. Use when writing or changing any such script, launching a training script on another machine, when a trainer already has its own integration (miles, trl, verl, Ray), and when a run finished green but recorded nothing, less than expected, or onto the wrong run. HARD TRIGGER - ENSURE YOU READ BEFORE ANY PAID GPU HOURS.
+description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that trains, evaluates, sweeps or serves, so that it records run-level metrics, and an RL trainer (Miles, ART, SkyRL, verl, TRL) or a Harbor job, so that it records every rollout as a sample. Use when writing or changing any such script, launching a training script on another machine, when a trainer already has its own integration (Miles, ART, SkyRL, verl, TRL, Harbor, Ray), and when a run finished green but recorded nothing, less than expected, or onto the wrong run. HARD TRIGGER - ENSURE YOU READ BEFORE ANY PAID GPU HOURS.
 ---
 # Instrument code
 
@@ -120,6 +120,31 @@ check passes, nothing initialises.
 3. Assert it landed where it is READ, not where you set it
 4. `import probe` needs `probe-research` in THAT process's environment (`uv add probe-research`). The wizard's CLI install is isolated and NOT importable; `probe` and `probe-agent` on PyPI are unrelated packages owned by other people
 
+The RL launchers (RL TRAINERS below) do 1 and 2 for you: they open the run
+before Ray starts and put the setup hook, `PROBE_*` and a token for that run
+only in the job's runtime env. 3 stays yours: check the capture on a short run.
+
+## RL TRAINERS AND HARBOR:
+
+Each records the trainer's metrics and every attempt (rollout, trajectory) as
+a SAMPLE: task, scenario, reward, the weights that made it, the step that
+trained on it, passed / failed / error. Before launching, read your
+framework's section of `instrument-code/rl-frameworks.md` (beside this file):
+the lines to paste, the task and scenario fields, the worker token, resume.
+
+| framework | the door |
+|---|---|
+| Miles (upstream and the July fork) | `python -m probe.connectors.miles.launch train_async.py ...` + `--custom-rollout-log-function-path probe.connectors.miles.log_samples` |
+| ART | `probe.integrations.art.track(model)`, `WANDB_API_KEY` unset |
+| SkyRL | `trainer.override_entrypoint=probe.integrations.skyrl.entrypoint` on `skyrl.train.entrypoints.main_base` |
+| verl | `python -m probe.integrations.verl.launch -- python3 -m verl.trainer.main_ppo ...` |
+| TRL | `report_to="probe"` + `probe.integrations.trl.track(trainer)` |
+| Harbor | `harbor run ... --plugin probe --pk run=RUN` (`probe-research[cli,harbor]`) |
+
+A per-sample number of an RL attempt is a sample's, never a labeled metric
+point. Then prove the capture on a two-step run: `probe samples capture RUN`
+says yes, or no with its reasons.
+
 ## WHAT MUST REACH THE JOB:
 
 Three things, none of which travel on their own - the PACKAGE, the run id +
@@ -131,7 +156,7 @@ attaches, but that export dies at the machine boundary:
 | Launcher | id + epoch + token | the package |
 |---|---|---|
 | Modal | `secrets=[modal.Secret.from_local_environ(["PROBE_RUN_ID", "PROBE_RUN_EPOCH", "PROBE_TOKEN"])]` (local env is not forwarded; never a literal - the snapshot uploads this script) | `modal.Image.debian_slim().pip_install("probe-research")` |
-| Ray | `runtime_env={"env_vars": {...}}`, the same three | `runtime_env={"pip": ["probe-research"]}` |
+| Ray | `runtime_env={"env_vars": {...}}`, the same three (Ray's dashboard shows them: only ever a run's own token) | `runtime_env={"pip": ["probe-research"]}` |
 | Slurm | `sbatch --export=ALL,PROBE_TOKEN,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` | the venv the job activates |
 | Docker / k8s | `-e PROBE_TOKEN -e PROBE_RUN_ID=...` / `env:` on the pod | the image |
 
@@ -196,13 +221,16 @@ Tune waits for `cleanup()`, then SIGKILLs the trial's processes 200 ms after
 its SIGTERM, too soon for the exit hook's close. Not closed there, the run
 stays `running`, or reads `failed` (the SIGTERM taken for a preemption).
 
-A trainer integration (miles, trl, verl, Ray, etc) may mint its OWN run and
-ignore the id you supply. Steer it with the knobs it reads (project, experiment,
-run name, external id), then check where it actually wrote:
+A trainer integration (Miles, ART, SkyRL, verl, TRL, Harbor, Ray, etc) may
+open its OWN run and ignore the id you supply. Steer it with the knobs it reads
+(`PROBE_PROJECT`, experiment, run name, external id), then check where it
+actually wrote:
 
-- the WRITER knows - a durable queue writes `intent.json` naming its `run_id`
+- the WRITER knows - each RL adapter keys its run so a relaunch finds it again
+  (`rl-frameworks.md` names each key), and every Ray worker's runtime env
+  carries the `PROBE_RUN_ID` it joined
 - a default project name in a run spec quietly collects runs that belong
-  elsewhere
+  elsewhere (Miles: `miles`)
 - an empty run proves where you looked, not what happened
 
 ## METRIC OR SPAN:
@@ -214,6 +242,7 @@ run name, external id), then check where it actually wrote:
 | one value per step | `probe.log({...}, step=i)` |
 | one final number (test accuracy) | `probe.log({"test/acc": acc})` once - shows as a single number, not a chart |
 | a value per sample | LABELS, never dimensions - per-sample ids shatter one series into hundreds of one-point tiles. Labeled points NEVER plot, so the curve needs a second, unlabeled key |
+| an RL attempt (rollout, trajectory) and its numbers | a SAMPLE: the trainer's adapter, or `run.samples.log` in your own loop (RL TRAINERS AND HARBOR) |
 
 A score of a training run's checkpoint is a metric on that run at the
 checkpoint's step (`probe log RUN key=value --step N`), not a new run.
@@ -283,7 +312,9 @@ never raises and changes no metric. For a run already going:
 Harbor writes each trial to a directory (`result.json`, `agent/trajectory.json`,
 verifier logs). Probe captures that directory into the run, keyed to the
 training step. Rollout spans above are the other door; this one needs no code in
-the agent.
+the agent. A whole Harbor job is samples, one per attempt:
+`harbor run ... --plugin probe` as it runs, or `probe trial add $RUN jobs/<job>`
+after (`rl-frameworks.md`, HARBOR).
 
 ```
 probe trial add $RUN <trial-dir> --step 600               # rollout span + reward metric + files + manifest
@@ -295,7 +326,8 @@ unknown one is stored raw, never rejected; `probe trial expand $RUN
 <manifest-id>` expands it later, idempotent.
 
 With Miles, the trainer writes one export descriptor per trial and nothing
-uploads until something consumes it:
+uploads until something consumes it (key it by the attempt's `TrialResult.id`,
+as Miles' sample is: `rl-frameworks.md`, MILES):
 
 | step | command |
 |---|---|
@@ -330,10 +362,12 @@ disagree.
 
 ## WHERE THE QUEUE LIVES:
 
-ONE queue, SHARED by every capturing process - a path derived from `cwd` gives
-each actor its own queue that no exporter drains. It must outlive the box: Ray
-DELETES its per-job `cwd` on completion, undrained points with it. Drain
-explicitly at the end.
+Every process that records - a rank, a Ray actor, a launcher's driver - queues
+in its machine's outbox (`~/.local/state/probe/outbox`, or `PROBE_OUTBOX_DIR`;
+a rank gets its own `rank-*` folder there), never in `cwd`: Ray DELETES a job's
+`cwd` on completion. A detached worker sends it and outlives the process, so a
+killed actor's queued rows still go. A queue of your own follows the same rules:
+never under `cwd`, on a disk that outlives the job, drained explicitly at the end.
 
 ## VERIFY AT THE DESTINATION:
 
@@ -350,6 +384,10 @@ assert all(not a["uri"].startswith("file://") for a in client.list_run_artifacts
 Series count near point count means something high-cardinality became a
 dimension - fix the shape before spending more compute. Print which outcome
 occurred: drained, written but unpublished, nothing written.
+
+An RL run: `probe samples capture RUN` must say yes, and
+`probe samples stats RUN --by step --measure mean_reward,count` must match the
+trainer's own mean reward per step (`rl-frameworks.md`, CHECK THE CAPTURE).
 
 A `--reference` checkpoint or dataset on a box you are about to destroy resolves
 nowhere afterwards. Code is exempt - always uploaded, and `--reference` on it is

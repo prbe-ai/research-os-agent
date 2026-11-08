@@ -1644,11 +1644,14 @@ DAEMON_PROFILE_ALLOWED = frozenset(
 #: agent holds are the ones `probe exec` printed or the daemon handed it.
 #: Listings and searches across the team's work (`run list`, `series latest`,
 #: `artifact list`, `provenance`, `commits`) stay the daemon's, through `probe ask`.
+#: An RL run's samples and best checkpoint are its own (`instrument-code` checks the
+#: capture of a run before its long launch); `samples export` writes, so it stays out.
 DAEMON_PROFILE_RUN_READS = frozenset(
     {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "get",
      "bundle", "events", "metrics wide", "metrics plot", "metrics export", "metrics grouped",
      "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
-     "snapshot-show"}
+     "snapshot-show", "samples capture", "samples stats", "samples list", "samples show", "samples logs",
+     "samples tokens", "samples tasks", "samples task", "samples weights", "samples compare", "checkpoint best"}
 )
 
 #: Reads of the panes the agent writes (`write-pane`), in the one project or

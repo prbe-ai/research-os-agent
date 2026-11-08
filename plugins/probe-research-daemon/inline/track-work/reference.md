@@ -11,7 +11,7 @@ Lookup only; judgment is in the skill.
 | §3 RUN | snapshot inputs, capture calls, delivery (the outbox) |
 | §4 FILES AND NUMBERS | artifact commands, big files, names and versions, metric shape, derived metrics |
 | §5 PAPERS | paper flags |
-| §6 NOTES, §7 READING BACK, §8 PUBLISHING | notes, reads, experiment versions |
+| §6 NOTES, §7 READING BACK, §8 PUBLISHING | notes, reads (RL samples too), experiment versions |
 | §9 RECIPES | data processing, provisioning, trials |
 
 ## 1. ENTITY COMMANDS
@@ -312,6 +312,41 @@ finding it qualifies.
 To trace a path, URI, artifact id or content hash: `search` with it
 as the query (exact match), then `entity(view="lineage")` on the run that owns
 the hit. No hit means unknown provenance, not none - say so.
+
+### RL samples
+
+An RL run's attempts (rollouts, trajectories) are SAMPLES, recorded by the
+trainer's adapter (`instrument-code`). Each has a task and its scenario (the
+outside values it was posed under: `scenario.set`, `scenario.as_of`), a reward
+and its parts, the weights that made it, the step that trained on it, and a
+result: `passed` (reward at or above the full reward), `failed` (graded below
+it), `error` (never graded: an engine abort, a sandbox, a verifier, a timeout).
+Means leave `error` samples out and count them beside. By default a read counts
+what the model trained on, at the step that trained on it: `--include dropped`
+adds dropped groups, `--split eval` reads eval passes, `--by scheduled_step` the
+step that generated them.
+
+| question | command |
+|---|---|
+| did every sample arrive (yes or no, with reasons) | `probe samples capture RUN` |
+| mean reward per step | `probe samples stats RUN --by step --measure mean_reward,count` (also `min`, `max`, `pass_rate`) |
+| the misses at a step on one scenario | `probe samples list RUN --step N --reward 0 --where scenario.set=P2` |
+| one task at step 0 beside the best checkpoint | `probe samples compare --task T --at RUN@step:0 --at "RUN@checkpoint:best(eval/val)"`; `--match scenario.template` widens to the same template |
+| pass rate per template over steps; groups with no reward variance | `probe samples stats RUN --by step,scenario.template --measure pass_rate`; `--measure zero_variance_share` |
+| did async staleness hurt | `probe samples stats RUN --by staleness_max --measure mean_reward,count`; `--by step_window=50` |
+| the best checkpoint, with its base model, data, config, commit and parent | `probe checkpoint best RUN --metric eval/val [--mode min]`; `--from-evals` reads the eval runs that used each checkpoint |
+| a run's tasks; one task; its samples; its reward at every step | `probe samples tasks RUN --sort mean_reward`; `probe samples task RUN TASK`, `--samples`, `--curve` |
+| the result mix per step; where errors come from | `probe samples stats RUN --by step,result`; `--by host` (or `worker`, `engine`, `error_reason`) `--where result=error` |
+| what broke; one sample whole, its log, its tokens | `probe samples list RUN --result error`; `probe samples show SAMPLE`, `probe samples logs SAMPLE`, `probe samples tokens SAMPLE` |
+| text in responses, turns or logs | `probe samples list RUN --grep "Traceback"` |
+| attempts still running but gone quiet | `probe samples list RUN --outcome in_flight --stale-after 10m` |
+| weight versions and their checkpoints | `probe samples weights RUN` |
+| runs side by side | `probe samples stats RUN --run B --run C --by step` |
+
+`probe samples export RUN --out passed.jsonl --result passed --split train`
+writes samples whole; `--register-dataset NAME --note "..."` records the file
+as that dataset's next version, made by the run (an RFT-SFT set). Text output
+is cut at 4 KiB except `show`; `--json` prints the server's answer.
 
 ## 8. PUBLISHING
 
