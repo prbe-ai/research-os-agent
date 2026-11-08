@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.459.0
+
 - **Every past chat from the chat, however many (fixes-1107b T6b).** `probe import review --chats-all` takes every past chat (or every one `--chats-agent`, `--chats-since` and `--chats-folder` keep) past the 10,000 one review took: one review id, one consent, one `probe import start`. Its new consent line names where they go, how many and their size ("All 25,000 chats (3.1GB) go to <team>'s chats in Probe, in 3 batches of at most 10,000."). The review runs as a job in the Probe service (its own folder, `import-reviews/`, never read as an import): past the agent's 110 s the command answers `reviewing` (exit 75) with `next`, `probe import status --review <id> --wait --json`, which answers the review as `import review --json` would once it is done; a review killed mid-way runs again under the same id (3 runs at most), and its 30 minutes count from when it finished. The start splits the chats into import jobs of at most 10,000 that run one after another; `import start|status|resume --json` read them as one import (`imports`, each with the line to say: "Batch 2 of 3: 14,000 of 25,000 chats."), and `import start` answers `say` ("Started: 25,000 chats to <team>. Say "stop the import" any time."). New `probe import cancel <job>` stops an import, every batch still to run included ("Stopped. 14,000 chats came in and stay; 11,000 didn't."), from any chat (Probe's own upkeep). `probe import resume <job>` runs only the batches that failed or stopped ("12,500 came in; 12,500 didn't: <reason>. Retry the rest?"); a chat that came in is never sent twice. New reason: `reviewing`. The Mac app's review keeps its 10,000 cap.
 
 ## 0.458.0
