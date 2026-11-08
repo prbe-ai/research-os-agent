@@ -1458,6 +1458,10 @@ PLUMBING_GROUP_WRITES = frozenset({"workspace set", "session home set", "session
 #: `run token` mints, extends or revokes the one-run token a remote job records
 #: with: part of the launch (`probe exec --detached-launcher` mints one), and
 #: the run's expiry alert tells the agent to `--extend` it.
+#: `pane push` saves a pane, a visual the coding agent writes over its runs' data
+#: (`write-pane`): the agent's own work, which the daemon never writes (R10 of
+#: run-compare-and-panes; daemon-written panes are a later step). `pane rm` stays
+#: out: a removal, the daemon's in the daemon profile.
 DAEMON_AGENT_WRITES = frozenset(
     {
         "exec",
@@ -1481,6 +1485,7 @@ DAEMON_AGENT_WRITES = frozenset(
         # the daemon, which files nothing of it; `example status` and `delete` are below.
         "example start",
         "example conclude",
+        "pane push",
     }
 )
 
@@ -1595,8 +1600,9 @@ def daemon_allows_agent(matched: str) -> bool:
 
 #: THE DAEMON PROFILE (daemon reads): the machine installed the lean
 #: `probe-research-daemon` plugin, so the daemon records AND reads, and the main
-#: agent's `probe` is `ask`, `exec`, its runs' own data (`DAEMON_AGENT_WRITES`),
-#: reads of one run (`DAEMON_PROFILE_RUN_READS`), `session status` and Probe's
+#: agent's `probe` is `ask`, `exec`, its runs' own data and its panes
+#: (`DAEMON_AGENT_WRITES`), reads of one run (`DAEMON_PROFILE_RUN_READS`) or of
+#: one scope's panes (`DAEMON_PROFILE_PANE_READS`), `session status` and Probe's
 #: own upkeep (`DAEMON_PROFILE_ALLOWED`). The guard in that
 #: plugin refuses every other `probe` command, reads included, with
 #: `DAEMON_PROFILE_DENY` (the approved text, pinned by `test_daemon_profile.py`:
@@ -1672,10 +1678,22 @@ DAEMON_PROFILE_RUN_READS = frozenset(
      "snapshot-show"}
 )
 
+#: Reads of the panes the agent writes (`write-pane`), in the one project or
+#: experiment the agent names: what a recipe resolves to over that scope's runs,
+#: checked before a push (`pane data`), and a pane read back (`pane get`, `pane
+#: list`). A pane cannot be written without them (R10), so they are admitted
+#: though `pane data` reads a scope's runs as the pane will; searches and
+#: listings across the team's work stay the daemon's.
+DAEMON_PROFILE_PANE_READS = frozenset({"pane data", "pane get", "pane list"})
+
 #: ...but not where a flag writes what it read: `run reproduce --materialize`
 #: restores the run's captured tree, as the kept `snapshot-restore` does, and
-#: `--export` writes a file. A word the shell still expands may be either.
-DAEMON_PROFILE_RUN_READ_WRITES = {"run reproduce": frozenset({"--materialize", "--export"})}
+#: `--export` writes a file, as `pane get --out` writes two. A word the shell
+#: still expands may be either.
+DAEMON_PROFILE_READ_WRITES = {
+    "run reproduce": frozenset({"--materialize", "--export"}),
+    "pane get": frozenset({"--out"}),
+}
 
 #: `probe wizard` (and its old name `setup`) also holds the researcher's own
 #: settings -- who records, capture, the new-session default, imports,
@@ -1782,7 +1800,8 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
 
     A write carrying `--directed` is allowed, as the CLI's gate allows it in the
     `daemon` state (`write_gate.refusal`). A read is not (reads go through
-    `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`). The researcher's
+    `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`) and one scope's
+    panes (`DAEMON_PROFILE_PANE_READS`). The researcher's
     switch runs only as `session state <target> --directed` (`switch_refusal`).
     Probe's own upkeep runs with its own flags (`upkeep_command`), and what
     records less only with `--directed` (`records_less`); the agent's own
@@ -1804,8 +1823,8 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
     for key in (" ".join(words[:3]), two, head):
         if key in DAEMON_PROFILE_ALLOWED:
             return (True, "probe " + key)
-        if key in DAEMON_PROFILE_RUN_READS:
-            return (not _flag_writes(args, DAEMON_PROFILE_RUN_READ_WRITES.get(key, frozenset())), "probe " + key)
+        if key in DAEMON_PROFILE_RUN_READS or key in DAEMON_PROFILE_PANE_READS:
+            return (not _flag_writes(args, DAEMON_PROFILE_READ_WRITES.get(key, frozenset())), "probe " + key)
     kind, matched = classify_probe_args(args)
     if kind == "write" and carries_directed(args):
         return (True, matched)
@@ -2316,8 +2335,8 @@ DENY_REASON_DAEMON = (
     "The Probe daemon is recording this conversation (the `daemon` state), so `{matched}` was "
     "refused before it ran: that write is the daemon's (it files runs in an experiment and "
     "group, and renames or moves projects and runs). Yours are starting runs in a project "
-    "(`probe project create <slug>` if none fits), the run's own data and `probe run end`; "
-    "`probe session status` lists them.\n\n" + DIRECTED_RETRY
+    "(`probe project create <slug>` if none fits), the run's own data, the panes you write and "
+    "`probe run end`; `probe session status` lists them.\n\n" + DIRECTED_RETRY
 )
 
 #: THE ONE STATEMENT OF WHO WRITES WHAT IN THE `daemon` STATE. Every surface that
@@ -2335,7 +2354,8 @@ DAEMON_CONTEXT = (
     "`--project` for another, and before it is set pass one, or `probe project create <slug>` if "
     "none fits), "
     "the run's own data (metrics, spans, trials, files the run "
-    "itself attaches) and `probe run end` when a run finishes. The daemon's: everything else, "
+    "itself attaches), the panes you write (`write-pane`) and `probe run end` when a run "
+    "finishes. The daemon's: everything else, "
     "including the experiment and sweep group a run is filed in, renaming or moving projects "
     "and runs, and its notes, artifacts, papers, tags, names, descriptions and lineage, read "
     "from the transcript; it also ends any run you leave open. If the researcher asks for one "

@@ -28,12 +28,14 @@ import { join } from "node:path";
 import { DAEMON_REASON_WORDS, DaemonReason, DaemonStatus, type DaemonStatusValue } from "./core/daemonNotice.js";
 import { TOOL_NAME_PREFIX } from "./mcpSchema.js";
 
-/** The skills a daemon-profile prompt keeps of this package's: the lean plugin's four. */
+/** The skills a daemon-profile prompt keeps of this package's: the lean plugin's five. */
 export const DAEMON_PROFILE_SKILLS: ReadonlySet<string> = new Set([
   "instrument-code",
   "probe",
   "plan-research-review",
   "visualize-progress",
+  // A pane is the coding agent's own visual, never the daemon's (run compare + panes R10).
+  "write-pane",
 ]);
 
 /**
@@ -90,7 +92,7 @@ export function daemonSkillDir(extensionDir: string, name: string): string {
  * of a name, so where a filter or a project entry already loaded one, this
  * path is a no-op.
  */
-export const DAEMON_ADDED_SKILLS: readonly string[] = ["plan-research-review"];
+export const DAEMON_ADDED_SKILLS: readonly string[] = ["plan-research-review", "write-pane"];
 
 /** Every skill path `resources_discover` adds in the daemon profile. */
 export function daemonSkillPaths(extensionDir: string): string[] {

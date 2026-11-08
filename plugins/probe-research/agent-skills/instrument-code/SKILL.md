@@ -221,8 +221,10 @@ checkpoint's step (`probe log RUN key=value --step N`), not a new run.
 `spans: 0` on a training run is usually correct - check the phases are not
 already timing metrics.
 
-Spans have no heartbeat and no reaper, so one opened before the work leaks on
-every path that raises. Record it AFTER, with real start and end timestamps.
+Spans have no heartbeat and no reaper. In the two-call form (`run.span(...)`,
+then a second call with `id=` to close it), one opened before the work leaks on
+every path that raises: record it AFTER, with real start and end timestamps.
+`with probe.span(...)` closes on every path (`failed` when an exception escapes).
 
 `span_type="rollout"` is the only thing you emit that becomes an entity: each
 materializes an addressable TRIAL keyed by that span's id. Pass a real `name=`
@@ -342,7 +344,7 @@ run = client.get_run(run_id)
 assert run["counts"]["metrics"] > 0
 assert len(client.run_series(run_id)) < 50   # else: a wall of one-point tiles
 # on a box you are about to destroy, a file:// pointer resolves nowhere afterwards:
-assert all(not a["uri"].startswith("file://") for a in client.list_run_artifacts(run_id).items)
+assert all(not a["uri"].startswith("file://") for a in client.list_run_artifacts(run_id))
 ```
 
 Series count near point count means something high-cardinality became a

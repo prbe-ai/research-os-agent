@@ -28,7 +28,8 @@ export const DAEMON_CONTEXT =
   "`--project` for another, and before it is set pass one, or `probe project create <slug>` if " +
   "none fits), " +
   "the run's own data (metrics, spans, trials, files the run " +
-  "itself attaches) and `probe run end` when a run finishes. The daemon's: everything else, " +
+  "itself attaches), the panes you write (`write-pane`) and `probe run end` when a run " +
+  "finishes. The daemon's: everything else, " +
   "including the experiment and sweep group a run is filed in, renaming or moving projects " +
   "and runs, and its notes, artifacts, papers, tags, names, descriptions and lineage, read " +
   "from the transcript; it also ends any run you leave open. If the researcher asks for one " +

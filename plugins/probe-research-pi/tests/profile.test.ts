@@ -62,8 +62,8 @@ describe("leanSkills", () => {
   const own = new Map([["probe", daemon], ["visualize-progress", progress]]);
   const none = new Map();
 
-  it("keeps only instrument-code, plan-research-review, probe and visualize-progress", () => {
-    const every = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit", "plan-research-review"];
+  it("keeps only instrument-code, plan-research-review, probe, visualize-progress and write-pane", () => {
+    const every = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit", "plan-research-review", "write-pane"];
     const lean = leanSkills(every.map((name) => skill(name)), own);
     expect(lean.map((s) => s.name).sort()).toEqual([...DAEMON_PROFILE_SKILLS].sort());
   });
