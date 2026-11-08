@@ -230,6 +230,18 @@ and `attributes`: the name is the trial's name until a generated title lands,
 and that happens only once the run is terminal, written FROM `attributes`.
 Sparse attributes give 500 opaque rows.
 
+Per-task eval results are one rollout span per task: its scores in
+`attributes`, its output files linked to it, so the tasks read and count across
+runs. From a shell, `probe span add` prints the span id; upload each output with
+`--span <span id>`.
+
+```python
+with probe.span("rollout", name=task.id, external_key=task.id) as span:
+    out = solve(task)
+    span.attributes.update(score=out.score, unfinished_reason=out.reason)
+    probe.log_artifact(f"eval/{task.id}/output.png", path=out.image, span_id=span)
+```
+
 ## NAME WHAT A CRASH WAS PROCESSING:
 
 Wrap each batch or sample of the loop so a crash email names what it died on.

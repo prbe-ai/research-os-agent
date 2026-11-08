@@ -73,6 +73,8 @@ const EXPECTED_SKILLS = [
   "overview-charts",
   "artifact-diagramming",
   "artifact-design",
+  // Run compare + panes T12: a pane, the agent's own visual on a project or experiment.
+  "write-pane",
 ].sort();
 
 let scratchHome: string;

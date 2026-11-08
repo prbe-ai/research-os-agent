@@ -134,6 +134,8 @@ RESEARCH_SKILLS = {
     "overview-charts",
     "artifact-diagramming",
     "artifact-design",
+    # a pane: the agent's own visual on a project or experiment (run compare + panes T12)
+    "write-pane",
     "probe-research-setup",
     # retired names (kept for resumed transcripts and cached installs);
     # notes-audit and pull-rules were renamed on 2026-09-17

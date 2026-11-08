@@ -1280,6 +1280,9 @@ WRITE_GROUPS = frozenset(
         # The live example (agent-prompt install D18): `example start|conclude` record,
         # `status` reads, `keep` and `delete` end it. The agent runs them in every recorder mode.
         "example",
+        # Panes (run compare + panes T11): `pane push` records; `data`, `get` and `list` read;
+        # `rm` removes.
+        "pane",
     }
 )
 

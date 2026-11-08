@@ -24,7 +24,8 @@
       "plugins/probe-research-pi/skills/overview-contract",
       "plugins/probe-research-pi/skills/overview-charts",
       "plugins/probe-research-pi/skills/artifact-diagramming",
-      "plugins/probe-research-pi/skills/artifact-design"
+      "plugins/probe-research-pi/skills/artifact-design",
+      "plugins/probe-research-pi/skills/write-pane"
     ],
     "mcp": "./plugins/probe-research-pi/mcp.json"
   },
