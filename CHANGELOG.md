@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- npx launcher 0.30.0: the agent install needs CLI 0.459.0 or newer, for bringing in every past chat at once (`--chats-all`), checking a long review, and stopping an import.
 - **A Probe hook you switched off in Codex stays off when its plugin moves the hook to another file.** Codex remembers a hook's on/off (`/hooks`) by the file it comes from, so a hook moving to a new file would come back on, and Probe's approval would let it run. Before approving, Probe now switches such a hook off when its old one is off and you have not switched the new one yourself, and leaves it unapproved. A Probe that already approved it switches it back off. If Codex's settings file cannot be read, the moved hooks wait unapproved rather than guess. On a machine where Probe's own move to the frozen hook plugin switched the old hooks off, going back clears those offs, so going back still runs them. This comes before the capture plugin moves its Codex hooks to their own file.
 
 ## 0.459.0
