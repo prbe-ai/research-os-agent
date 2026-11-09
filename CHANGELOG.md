@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- npx launcher 0.34.0: the agent install needs CLI 0.475.0 or newer, so an agent can bring in just a few past chats first (`import review --chats-limit`) and every install setting is read back.
 - **Probe's rules and the team note load only in chats where Probe is on or read (Claude Code, Codex).** Where the daemon records, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` keep a short Probe block: what Probe is, one line saying the rest comes with an on or read chat, and the auto mode guide (who sets the state, and when ML work turns a chat on, read or off), which an off chat needs to turn itself on (17 lines instead of about 160 with a team note). Probe's working rules (ask the daemon, papers, plan first, daemon messages, feedback) and the team note reach a chat from its session-start hook when it starts on or read, and again after `/clear` or a compaction; a chat that turns on later gets them in the switch's own answer (`probe session state on` prints them as `rules`) or, after a typed `/probe on`, with the hook's notice. A long note comes in parts of up to 7,000 characters with the next prompts or tool calls, as hooks cut longer context. Turning a chat off tells the agent to set them aside until it is on again, and the next compaction leaves them out. pi, Kimi Code and Cursor keep the whole block in their rules file. Rules block v55.
 
 ## 0.476.0
