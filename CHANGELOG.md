@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A sign-in waiting for approval holds only an update's restart, and never for long** (#4602 review). `probe repair` and a newer CLI's restart are no longer held, since they wait on the stop and would report one that did not happen. A newer tap's restart isn't held either, because its session waits on it to record. The hold lasts at most 10 minutes from when the restart was first pending, however often a new sign-in rewrites the file, and a sign-in file whose time is ahead of this computer's clock no longer turns the hold off. A sign-in that starts in the restart's 1-second idle gap now gets its own timer too: before, that restart waited for an unrelated event.
+- **More ML layouts count when Probe suggests past-work folders.** These now count, besides TensorBoard's default run folders in English:
+  - a TensorBoard run folder under any name, holding event files or weights (PyTorch's own tutorial writes `runs/fashion_mnist_experiment_1/`);
+  - default run folder names in any language's months;
+  - Ultralytics YOLO's `runs/detect/train/`;
+  - Hugging Face Trainer's `outputs/checkpoint-500/`;
+  - Hydra runs in the 3 newest day folders.
+  A run folder past a big folder's first 500 names is still found, one lookup each. Only names are read; `probe import folders --help` now says it also looks inside `outputs/` and `runs/`.
+- npx launcher 0.35.0: a `sign-in --wait` stopped at the agent's time limit keeps 4 s of the limit for its approval read, so the answer arrives in time. It reads the approval only while the sign-in still waits, so it never says "approved" for a sign-in the CLI already took.
 - **One Codex that is slow to answer is no longer a `hooks_dark` report.** The Probe service's Codex trust healer sent an automatic `hooks_dark` (`trust_not_settled`) report the first time Codex did not answer its approval, though it asks again a minute later and a busy machine's Codex usually takes that one. It now reports from the third ask in a row that did not settle (about 8 minutes after the first), still once per 6 hours. The count of misses is kept in the healer's record (`codex-trust.json`), so a service that idles out between asks counts on instead of starting over.
 
 ## 0.480.0
