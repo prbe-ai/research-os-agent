@@ -393,6 +393,30 @@ describe("registerExtension — session_start", () => {
   });
 
   it.each([
+    { state: "off", tracking: false, footer: "○ off" },
+    { state: "on", tracking: true, footer: "● on (inline)" },
+  ])("draws an auto chat's $state footer untagged, as the status line does", async ({ state, tracking, footer }) => {
+    installProbeCli();
+    initializeOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({
+          session_id: "pi-auto-session", tracking, signal: tracking ? "on" : "off", state,
+          seeded: true, source: "default", capture: { running: true, reason: "running" }, auto: true,
+        }),
+        "",
+      );
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    await registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: "pi-auto-session", sessionFile: undefined, cwd: "/repo", hasUI: true });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", footer);
+  });
+
+  it.each([
     { state: "off", tracking: false, footer: "○ off (manual)" },
     { state: "on", tracking: true, footer: "● on (inline, manual) | new chats off" },
   ])("draws $footer in $state when the agent turned Probe down on this computer (fixes-1107b PR B)",

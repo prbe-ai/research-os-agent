@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **An auto chat stays in auto through the daemon's quota handoff, and Codex's one-line notice names manual mode.** When the daemon's monthly allowance runs out and it hands the chat to the agent inline, the chat no longer turns manual (the agent kept losing auto control); and Codex's notice reads `on (daemon, manual) | <title>` in a manual chat, `on (daemon) | <title>` in an auto one, as the status line does.
 - **Bringing in past work offers only folders of ML work.** `probe import folders` leaves out a folder with no mark of ML work at its top (`wandb/`, `mlruns/`, a notebook, weights, checkpoints, Hydra or TensorBoard runs), however many chats ran there: a product repo, an app, or the folder the Codex app keeps for each chat. `outputs/` and `runs/` count only in Hydra's (`outputs/<day>/<time>/`) and TensorBoard's (`runs/Nov08_16-11-48_<host>`) own layouts, since the Codex app keeps an `outputs/` of files in every chat's folder.
 - **A sign-in waiting for your browser approval is no longer cut by an update restart.** The Probe service restarted for an update in the second between two of the agent's `sign-in --wait` calls, so nothing checked for the approval until it was back (19 s after one approval, 2026-11-08). It now waits until the sign-in is saved, or 10 minutes at most for one never approved. It only looks at the age of the launcher's `sign-in.json`, never inside it.
 - npx launcher 0.32.0: a `sign-in --wait` stopped at the agent's time limit still says whether the person approved (`approved`, `account`).

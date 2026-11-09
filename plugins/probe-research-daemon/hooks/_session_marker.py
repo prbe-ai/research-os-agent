@@ -3987,12 +3987,20 @@ def inline_on_budget(session_id: str, expected_state: str, now: "float | None" =
             return False
         target = STATE_FULL if expected_state == STATE_DAEMON else STATE_READ_ONLY
         at = time.time() if now is None else now
+        # The handoff is the daemon's, never the person's: an auto chat stays the agent's (`is_auto_chat`).
+        was_default = state_source(session_id) == SOURCE_DEFAULT
+        move = load_agent_move(session_id)
         marker = {"from": expected_state, "since": at, "mode": target, "reason": "budget_exhausted"}
         if not _publish_atomically(inline_path(session_id), json.dumps(marker) + "\n"):
             return False
+        if was_default:  # claimed before the state, as the seed claims it, so no reader sees the move as the person's
+            _publish_atomically(state_source_path(session_id), SOURCE_DEFAULT + "\n")
         if not _set_state_unlocked(session_id, target):
             _remove_inline_marker(session_id)
             return False
+        if not was_default and move is not None and move["auto"]:
+            # The agent's `read` stays its `read`; its daemon `on` is now its chat, inline.
+            save_agent_move(session_id, move["state"] if target == expected_state else MOVED_TO_INLINE, is_auto=True)
         return True
 
 
@@ -4469,30 +4477,34 @@ def get_daemon_fix(reason: "str | None") -> str:
     return DAEMON_REASON_FIXES.get(reason or "", "see probe doctor")
 
 
-def _get_notice_words(session_state: "str | None") -> str:
-    """The notice's state words: `on (daemon)` for a stored `daemon`, else `on (inline)` (its caller knows no more)."""
+def _get_notice_words(session_state: "str | None", *, is_manual: bool = False) -> str:
+    """The notice's state words: `on (daemon)` for a stored `daemon`, else `on (inline)` (its caller knows no more),
+    tagged `manual` as the status line tags them (`is_manual`: the person sets this chat's switch)."""
     state = STATE_FULL if session_state not in (STATE_DAEMON, STATE_FULL) else session_state
-    return get_state_words(state, Reader.DAEMON if state == STATE_DAEMON else Reader.INLINE)
+    return get_state_words(state, Reader.DAEMON if state == STATE_DAEMON else Reader.INLINE, is_manual=is_manual)
 
 
-def state_key(state: dict | None, *, live: bool = False, session_state: "str | None" = None) -> str:
+def state_key(
+    state: dict | None, *, live: bool = False, session_state: "str | None" = None, is_manual: bool = False
+) -> str:
     """What "changed" means for the notice: exactly what it would show (words, title, note and reason), so a capture
     failure is heard and a run starting or stopping is not. `live` is accepted for older callers and ignored."""
     title = _get_line_title(state)
     reason = _capture_reason(state)
-    return "|".join((_get_notice_words(session_state), title or "-", reason or "-"))
+    return "|".join((_get_notice_words(session_state, is_manual=is_manual), title or "-", reason or "-"))
 
 
 def message(
-    state: dict | None, *, live: bool = False, tracking: bool = True, session_state: "str | None" = None
+    state: dict | None, *, live: bool = False, tracking: bool = True, session_state: "str | None" = None,
+    is_manual: bool = False,
 ) -> str:
     """One line for an agent with no status line, read by the person: `<words> | <title> | <note>`, the
     status line's own words with no glyph and no width cap (the one place a capture reason and its fix fit).
 
     `tracking` defaults to True: `statusline_notify.py` reaches here only for a recording chat. `live` is accepted for
-    older callers and ignored.
+    older callers and ignored. `is_manual`: the person sets this chat's switch (not `is_auto_chat`).
     """
-    words = _get_notice_words(session_state)
+    words = _get_notice_words(session_state, is_manual=is_manual)
     title = _get_line_title(state)
     fields = [words, title or NOTE_NOTHING_FILED]
     reason = _capture_reason(state) if tracking else ""

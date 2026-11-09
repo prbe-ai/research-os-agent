@@ -73,10 +73,11 @@ def notice(marker, session_id: str) -> str | None:
     """
     state = marker.read(session_id)
     switch = marker.session_state(session_id)
-    key = marker.state_key(state, session_state=switch)  # what the notice shows: a run starting changes nothing
+    is_manual = not marker.is_auto_chat(session_id)  # the status line's tag (only manual is named)
+    key = marker.state_key(state, session_state=switch, is_manual=is_manual)  # a run starting changes nothing
     if key == marker.read_notified(session_id):
         return None
-    text = marker.message(state, session_state=switch)
+    text = marker.message(state, session_state=switch, is_manual=is_manual)
     marker.write_notified(session_id, key)
     return text
 
