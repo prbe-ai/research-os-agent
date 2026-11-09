@@ -431,13 +431,10 @@ def _seed_tracking_signal() -> None:
         # `daemon` in the lean plugin's sessions, whose agent has nothing to
         # record with, and `full` everywhere else -- including a default still
         # reading `daemon` from when the switch had that position (Richard
-        # 2026-09-29: the daemon is the wizard's alone).
-        state = _session_marker.seed_state(session_id, state)
-        # Who decided it (`seed_source`): `probe session status` says whether the
-        # researcher set the state or it is a machine default.
-        _session_marker.set_session_state_if_absent(
-            session_id, state, source=_session_marker.seed_source(source)
-        )
+        # 2026-09-29: the daemon is the wizard's alone); inline while the team's
+        # daemon allowance is spent. Who decided it (`seed_source`): `probe session
+        # status` says whether the researcher set the state or it is a machine default.
+        _session_marker.seed_started(session_id, state, source)
     except Exception:
         pass
 

@@ -1259,7 +1259,7 @@ def _move(
         # `on` is STORED by who records: `daemon` where the daemon records.
         target = _session_marker.switch_target(session_id, direction) or direction
         _session_marker.set_session_state(session_id, target)
-        return target
+        return _get_landed(session_id, target)
 
     claim = _read_claim(session_id)
     same_invocation = claim is not None and claim["slug"] in (slug, None)
@@ -1290,7 +1290,13 @@ def _move(
         target = _session_marker.switch_target(session_id, target) or target
         _write_claim(session_id, target, [shape], slug)
     _session_marker.set_session_state(session_id, target)
-    return target
+    return _get_landed(session_id, target)
+
+
+def _get_landed(session_id: str, target: str) -> str:
+    """Where a typed move to `target` landed, as `_announce` says it: `INLINE` where a spent daemon allowance put
+    the daemon's on or read inline (`is_budget_inline`), so the agent hears that it records, not the daemon."""
+    return INLINE if _session_marker.is_budget_inline(session_id, target) else target
 
 
 _EXEC = "probe exec"
@@ -1446,7 +1452,7 @@ def _inline_notice(session_id: str = "") -> str:
     skills = [os.path.join(_inline_root(), name) for name in _session_marker.INLINE_SKILL_FILES]
     marker = _session_marker.inline_marker(session_id) or {}
     options = {"read_only": marker.get("mode") == _session_marker.STATE_READ_ONLY,
-               "budget": marker.get("reason") == "budget_exhausted"}
+               "budget": marker.get("reason") == _session_marker.BUDGET_INLINE_REASON}
     try:
         return _version_check().inline_notice_for(*skills, **options)
     except Exception:  # noqa: BLE001 -- the notice still lands
@@ -1564,8 +1570,10 @@ def _make_auto_line(payload: dict, session_id: str) -> "str | None":
         return None
     word = _session_marker.get_auto_state_word(session_id, _state(session_id, _payload_cwd(payload)))
     prompt = payload.get("prompt")
+    spent = _session_marker.get_budget_inline_state(session_id, _session_marker.STATE_DAEMON) is not None
     return _session_marker.make_auto_prompt_line(
-        word, _session_marker.claim_first_prompt(session_id), prompt if isinstance(prompt, str) else "")
+        word, _session_marker.claim_first_prompt(session_id), prompt if isinstance(prompt, str) else "",
+        is_allowance_spent=spent)
 
 
 def _from_helper_agent(payload: dict) -> bool:
@@ -1600,7 +1608,12 @@ def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, se
     if landed == REFUSED_DAEMON:
         notice = _session_marker.DAEMON_SWITCH_REFUSAL
     elif landed == INLINE:
-        _announce_inline_once(hook_event, session_id, rules=daemon)
+        # A typed move into the budget stretch already told: one line on why it stays inline, never silence.
+        marker = _session_marker.inline_marker(session_id) or {}
+        stays = (marker.get("reason") == _session_marker.BUDGET_INLINE_REASON
+                 and _session_marker.inline_notice_due(session_id) is None)
+        _announce_inline_once(hook_event, session_id, _session_marker.ALLOWANCE_SPENT_INLINE if stays else None,
+                              rules=daemon)
         return
     else:
         notices = DAEMON_PROFILE_FLIP_NOTICE if daemon else FLIP_NOTICE
