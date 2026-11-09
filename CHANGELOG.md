@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.476.0
+
 - **Panes can move with a training run, show documents, and open what you click.** The `write-pane` skill teaches `PROBE.onData` (redraw on the dashboard's 30 s refresh while a run trains, keeping the pane's own controls), `PROBE.bytes` with pdf.js (its cdnjs module build) and mammoth for PDF and Word files, a run saving a PDF beside each Word file for the exact look, a git-style before/after document diff (JSZip + jsdiff), and `PROBE.open` for click-through to a run, a sample's trial page or a file. Needs the server and dashboard from the panes follow-up (#4606).
 
 ## 0.475.0
