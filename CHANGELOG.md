@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **One Codex that is slow to answer is no longer a `hooks_dark` report.** The Probe service's Codex trust healer sent an automatic `hooks_dark` (`trust_not_settled`) report the first time Codex did not answer its approval, though it asks again a minute later and a busy machine's Codex usually takes that one. It now reports from the third ask in a row that did not settle (about 8 minutes after the first), still once per 6 hours. The count of misses is kept in the healer's record (`codex-trust.json`), so a service that idles out between asks counts on instead of starting over.
+
 ## 0.480.0
 
 - **A run keeps the name its script gave it.** `probe.init(name=...)` under a coding agent sent the name as the agent's draft, so the Probe daemon and generated titles could rename it, and a pane or script that found its runs by name (`baseline`, `lr-3e-4`) lost them. A name given when a run is created (`probe.init`, `probe exec --name`, `probe run child --name`, an offline run) is now kept, as it already was from a plain terminal, and so is a description sent with it. A person can still rename it, and `--authored-by agent` still asks for a better one. Names Probe makes up with none of your words in them (a fork's `-fork`, a retry's `-rN`, a Hugging Face `trial-N`, TRL's `trl`, Miles' `miles-<time>-<id>`, verl's `verl`, a W&B import's made-up `adjective-noun-N` or bare run id) stay open to improvement, without changing the experiment created beside them.
