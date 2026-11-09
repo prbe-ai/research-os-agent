@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Tests only: the SDK safety net's baselines are re-recorded.** `sdk_api.json` and `sdk_modules.json` had drifted red on main from intentional changes (`probe.events` #4662, `probe.commands` #4693, run edits #4677, live samples #4696, `run.samples` and `arm_resume_guard(key_floors=)` #4563, `finish(status=None, exit_code=)` #4276, `project=probe.FROM_ENV` #4364, W&B claim #4659). `sdk.delivery.outbox.drainers.service_handoff` is dropped from the module list: it was removed on purpose by service-only A4 (626cd27292).
+- **Run commands reach every rank of an `mp.spawn` job.** Under a launcher that sets no `RANK` (`torch.multiprocessing.spawn`, Lightning's `ddp_spawn`) every rank's lease named no rank, so every rank followed the live stream and claimed; a command rank 1 claimed waited in its own queue, `probe.commands.sync()` handed on only rank 0's, and the command ended `lost` when the job exited. Only torch.distributed's rank 0 now follows the stream and claims, and the hand-off gathers every rank's claimed commands (one `all_gather_object`), so one claimed before torch numbered its rank still runs on every rank at the same step; rank 0 answers.
 
 ## 0.491.0
 
