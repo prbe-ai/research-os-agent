@@ -1251,6 +1251,8 @@ WRITE_GROUPS = frozenset(
         # Panes (run compare + panes T11): `pane push` records; `data`, `get` and `list` read;
         # `rm` removes.
         "pane",
+        # Chart layouts (team flag chart_layouts): `chart set` and `chart layout` record.
+        "chart",
     }
 )
 
@@ -1459,6 +1461,9 @@ DAEMON_AGENT_WRITES = frozenset(
         "example start",
         "example conclude",
         "pane push",
+        # Presentation only: how a chart draws, how a page lays out (team flag chart_layouts).
+        "chart set",
+        "chart layout",
     }
 )
 
