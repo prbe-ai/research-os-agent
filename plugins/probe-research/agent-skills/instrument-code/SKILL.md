@@ -464,3 +464,8 @@ run.on(TrainerCommand.EVAL_NOW, lambda payload: evaluate(**payload))  # `probe r
 
 A kind is an enum member, never a string. An ask the script registered nothing for is
 refused at once, with why; `probe run commands RUN` lists what was asked and answered.
+
+The HF Trainer callback does checkpoint, config (`lr`) and stop for you; with Lightning add
+`ProbeCommands()` (`probe.integrations.lightning_commands`) beside `ProbeLogger`. A plain
+script on several processes calls `probe.commands.sync()` on every rank at the same point
+(every N steps), or its asks are refused: a save or an LR change must happen on every rank.
