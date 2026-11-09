@@ -1287,6 +1287,7 @@ READ_VERBS = frozenset(
         "diff",
         "search",
         "events",
+        "edits",
         "coordinates",
         "download",
         "help",
@@ -1652,7 +1653,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
 #: An RL run's samples and best checkpoint are its own (`instrument-code` checks the
 #: capture of a run before its long launch); `samples export` writes, so it stays out.
 DAEMON_PROFILE_RUN_READS = frozenset(
-    {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "get",
+    {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "run edits", "get",
      "bundle", "events", "metrics wide", "metrics plot", "metrics export", "metrics grouped",
      "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
      "snapshot-show", "samples capture", "samples stats", "samples list", "samples show", "samples logs",
