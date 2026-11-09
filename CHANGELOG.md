@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.493.0
+
 - **Streaming commands reach a pipe line by line (rl-next T20b).** `probe samples tail --json` (and `probe run logs --follow --json`) printed nothing to a pipe until it exited: the CLI runs as a child of the Probe service on the caller's own pipe, where Python holds unflushed output, and its JSON writer never flushed. Every line the CLI prints now goes at once. `PYTHONUNBUFFERED` now works for a command run by the service too (it still held 8 KiB). `probe watch` and `probe samples proxy` already flushed; tests read each through a pipe via the real service.
 - **`probe samples cancel` and `retry` wait for the producer's answer and print it.** Up to 15 s (`--no-wait` returns once asked): the producer's note (Miles: "Miles drops this sample's whole group from training..." and the samples dropped with it), a retry's new sample, or why it was refused (exit 1, also for expired or lost). Still open at 15 s, it says so and points to `probe samples commands`. `--json` prints the command as it ended. The command's live notice ends the wait at once.
 - **`probe samples live` shows how ended samples ended.** An OUTCOME column, when a listed sample ended: `canceled`, `dropped (group_has_aborted)`, `error (timeout)`. `samples tail` ends with the same words.
