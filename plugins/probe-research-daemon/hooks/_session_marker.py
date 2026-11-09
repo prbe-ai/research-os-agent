@@ -1421,10 +1421,11 @@ READ_GROUPS = frozenset(
 #: `metrics backfill` stores a derived curve, `shared add` uploads into the
 #: team's Shared folder, `shared share|unshare` move a file into or out of it,
 #: `samples export` writes a file and can register it as a dataset, `samples cancel|retry`
-#: ask a running sample's producer to stop or rerun it. Read as reads, `read` let them through.
+#: ask a running sample's producer to stop or rerun it, `samples proxy` records a run's samples.
+#: Read as reads, `read` let them through.
 READ_GROUP_WRITES = frozenset(
     {"metrics backfill", "shared add", "shared share", "shared unshare", "samples export", "samples cancel",
-     "samples retry"}
+     "samples retry", "samples proxy"}
 )
 
 #: ...and the ones that remove: cleanup, never refused, as `REMOVAL_VERBS` is in
@@ -1465,11 +1466,13 @@ DAEMON_AGENT_WRITES = frozenset(
         "run token",
         # Control of a live run the agent launched (agentic W&B C.1): checkpoint, a setting, stop.
         "run send",
-        # ...and of its RL samples (rl-next W34): stop or rerun one.
+        # ...and of its RL samples (rl-next W34): stop or rerun one; the rollout proxy sidecar (W35) a
+        # launch starts beside its harness.
         "samples cancel",
         "samples retry",
         # Relaunching a run from its checkpoint (agentic W&B C.2): a launch, like `exec`.
         "run resume",
+        "samples proxy",
         "span add",
         "trial add",
         "trial stage",
