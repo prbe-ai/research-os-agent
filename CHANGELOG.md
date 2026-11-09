@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A training job that joins a run made ahead of it (`PROBE_RUN_ID`, `probe exec`) records its trainer config.** verl, ART and SkyRL runs read `config: {}` (and so did TRL without its HF callback, and a Miles driver) when a launcher had made the run: the adapters now add the config keys the run lacks, and a key already on it (one a person set) is never overwritten (W41c, GPU smoke bug 8).
+- **The live log no longer ships Probe's own HTTP request lines.** A framework that sets the root logger to INFO (verl's hydra) printed a line for every SDK request, and the live log sent each one back as another upload: 63% of a verl job's log lines. Lines httpx or urllib3 logged for a request to the configured API base URL are left out of the run page's Logs tab (the terminal and the final `probe/run.log` keep them); the user's own lines all ship, and no logging level changes. A stretch with nothing else to show waits for the next line instead of being sent alone (W41c, GPU smoke bug 6).
+
 ## 0.478.0
 
 - **write-pane skill fixes.** `PROBE.open` must be caught (an uncaught rejection fails the whole pane); a `runs` row opens by its `id` (other rows by `run_id`); the PDF example includes its `<canvas>`; alignment (`<w:jc>`) is compared per paragraph; file reads can also reject `unavailable`; a document over 25 MiB is refused unread only when its size is known.
