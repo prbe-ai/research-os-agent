@@ -41,9 +41,13 @@ machine, including remote jobs:
   `outputs/<its path there>`; `.git`, `.venv`, `node_modules`, caches,
   credential-shaped names (`.env`, `*.pem`, `.pgpass`) and, in a home folder,
   every dot-entry (`.kube`, `.docker`) are skipped
-- everything it PRINTED, as `probe/run.log` (first 2 MB + last 8 MB), C-level
-  output included. Under `probe exec` the child's output is teed the same way;
-  more processes of one run (ranks) each keep `probe/run.rank<N>.log`
+- everything it PRINTED, from `import probe` (model loading included) to its
+  exit, C-level output too, as the run's Logs (stored as `probe/run.log`,
+  first 2 MB + last 8 MB, a redrawn progress bar kept as its last frame).
+  Under `probe exec` the child's output is teed the same way, and `probe exec
+  torchrun` interleaves its local ranks in that one log; every other rank that
+  joins the run keeps its own `probe/run.rank<N>.log`. A notebook's output is
+  not kept (a warning says so)
 
 A close uploads files up to 64 MB and spends at most 120 s inspecting them
 (`PROBE_CAPTURE_BUDGET_SEC`, or the finish timeout). When your team has big-file
