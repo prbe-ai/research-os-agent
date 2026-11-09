@@ -1410,10 +1410,11 @@ READ_GROUPS = frozenset(
 #: Commands inside a `READ_GROUPS` group that record rather than print:
 #: `metrics backfill` stores a derived curve, `shared add` uploads into the
 #: team's Shared folder, `shared share|unshare` move a file into or out of it,
-#: `samples export` writes a file and can register it as a dataset.
-#: Read as reads, `read` let them through.
+#: `samples export` writes a file and can register it as a dataset, `samples cancel|retry`
+#: ask a running sample's producer to stop or rerun it. Read as reads, `read` let them through.
 READ_GROUP_WRITES = frozenset(
-    {"metrics backfill", "shared add", "shared share", "shared unshare", "samples export"}
+    {"metrics backfill", "shared add", "shared share", "shared unshare", "samples export", "samples cancel",
+     "samples retry"}
 )
 
 #: ...and the ones that remove: cleanup, never refused, as `REMOVAL_VERBS` is in
@@ -1454,6 +1455,9 @@ DAEMON_AGENT_WRITES = frozenset(
         "run token",
         # Control of a live run the agent launched (agentic W&B C.1): checkpoint, a setting, stop.
         "run send",
+        # ...and of its RL samples (rl-next W34): stop or rerun one.
+        "samples cancel",
+        "samples retry",
         "span add",
         "trial add",
         "trial stage",
@@ -1663,7 +1667,8 @@ DAEMON_PROFILE_RUN_READS = frozenset(
      "bundle", "events", "metrics wide", "metrics plot", "metrics export", "metrics grouped",
      "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
      "snapshot-show", "samples capture", "samples stats", "samples list", "samples show", "samples logs",
-     "samples tokens", "samples tasks", "samples task", "samples weights", "samples compare", "checkpoint best"}
+     "samples tokens", "samples tasks", "samples task", "samples weights", "samples compare", "checkpoint best",
+     "samples live", "samples tail", "samples commands"}
 )
 
 #: Reads of the panes the agent writes (`write-pane`), in the one project or
