@@ -166,8 +166,7 @@ python -m probe.integrations.verl.launch -- python3 -m verl.trainer.main_ppo \
 
 - The launcher puts `probe` in `trainer.logger` (`['console','probe']`) and takes W&B out, with a warning.
   Each training batch is read in memory before the actor update: no `trainer.rollout_data_dir` needed.
-- Not recorded yet: samples of validation inside the fully async rollouter (its metrics are), and prompt
-  groups a filter drops before the update.
+- Not recorded yet: prompt groups a filter drops before the update.
 - **Run identity and resume**: `verl:<trainer.project_name>/<trainer.experiment_name>`;
   `trainer.resume_mode=auto` (or `resume_path`) at `global_step_k` reopens it rewound to k+1.
 - **Worker credential**: `PROBE_VERL_WORKER_TOKEN`.
@@ -270,16 +269,22 @@ probe samples live $RUN                     # running now: elapsed, host, phase,
 probe samples live $RUN --hung --json       # no progress for 10 min (--hung-after 3m), or a silent producer
 probe samples live $RUN --slow              # slower than its task's p90 and 2x its step's median
 probe samples live $RUN --failing           # errors in the last 10 min by reason, host and task
-probe samples live $RUN --state ended       # how they ended; abandoned = a crash or a resume, superseded = retried
+probe samples live $RUN --state ended       # how each ended and why; abandoned = a crash or a resume, superseded = retried
 probe samples tail $RUN SAMPLE              # its turns as they happen, until it ends (where watch works)
-probe samples cancel $RUN SAMPLE --reason "tool loop"   # or retry; where its framework allows (table)
+probe samples cancel $RUN SAMPLE --reason "tool loop"   # or retry, where its framework allows (table); prints the answer
 probe samples commands $RUN                 # who asked what, and what happened
 probe watch $RUN --until samples.live:state=hung --timeout 3600   # sleep until one hangs (exit 0)
 ```
 
 - Judged on the server's clock: a box with a wrong clock never makes a sample look hung, and a crash or a resume
-  reads `abandoned`, never hung. The agent that launched the run is told when samples hang (`samples_hung`).
+  reads `abandoned`, never hung.
+- The agent that launched the run hears of hung samples through the Probe daemon (`samples_hung`). With no daemon
+  (inline, or a plain script), wait for them: `probe watch $RUN --until samples.live:state=hung`.
+- An ended sample shows its outcome and why: `dropped (group_has_aborted)` is a Miles sibling dropped with a canceled
+  sample's group.
 - An ask a framework cannot do safely is refused at once, with why; one no running producer took reads `expired`.
+  The live list can show an end a few seconds late, so an ask on a try that just ended is refused (`the sample
+  already ended`): pick a newer one.
 - A sample that ends `ungraded` ended cleanly; a judge grades it later.
 
 | framework | live samples | watch | cancel | retry |

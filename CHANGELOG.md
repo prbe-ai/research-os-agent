@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Streaming commands reach a pipe line by line (rl-next T20b).** `probe samples tail --json` (and `probe run logs --follow --json`) printed nothing to a pipe until it exited: the CLI runs as a child of the Probe service on the caller's own pipe, where Python holds unflushed output, and its JSON writer never flushed. Every line the CLI prints now goes at once. `PYTHONUNBUFFERED` now works for a command run by the service too (it still held 8 KiB). `probe watch` and `probe samples proxy` already flushed; tests read each through a pipe via the real service.
+- **`probe samples cancel` and `retry` wait for the producer's answer and print it.** Up to 15 s (`--no-wait` returns once asked): the producer's note (Miles: "Miles drops this sample's whole group from training..." and the samples dropped with it), a retry's new sample, or why it was refused (exit 1, also for expired or lost). Still open at 15 s, it says so and points to `probe samples commands`. `--json` prints the command as it ended. The command's live notice ends the wait at once.
+- **`probe samples live` shows how ended samples ended.** An OUTCOME column, when a listed sample ended: `canceled`, `dropped (group_has_aborted)`, `error (timeout)`. `samples tail` ends with the same words.
+- **The instrument-code skill's live section, corrected after the GPU smoke.** verl's fully async rollouter records validation samples; the launching agent hears of hung samples through the Probe daemon, and without one waits with `probe watch $RUN --until samples.live:state=hung`; ended samples show their outcome and why; an ask on a try that just ended is refused (the live list can show an end a few seconds late). SDK copy of `SampleErrorReason` regenerated (`group_has_aborted`): needs this release's server.
+
 ## 0.492.0
 
 - **Tests only: the SDK safety net's baselines are re-recorded.** `sdk_api.json` and `sdk_modules.json` had drifted red on main from intentional changes (`probe.events` #4662, `probe.commands` #4693, run edits #4677, live samples #4696, `run.samples` and `arm_resume_guard(key_floors=)` #4563, `finish(status=None, exit_code=)` #4276, `project=probe.FROM_ENV` #4364, W&B claim #4659). `sdk.delivery.outbox.drainers.service_handoff` is dropped from the module list: it was removed on purpose by service-only A4 (626cd27292).
