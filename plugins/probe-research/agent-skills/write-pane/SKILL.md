@@ -1,6 +1,6 @@
 ---
 name: write-pane
-description: Writes a pane - one live visual (a leaderboard, before/after images, a task table, a chart) on a project's or experiment's Probe page, redrawn from its runs' data each time it opens. Use when results would read better as a picture than as numbers, and for per-task eval results across runs.
+description: Writes a pane - one live visual (a leaderboard, before/after images or documents, a task table, a chart) on a project's or experiment's Probe page, redrawn from its runs' data each time it opens and while a run trains. Use when results would read better as a picture than as numbers, for per-task eval results across runs, and to show the PDFs or Word files a run wrote.
 ---
 # Write a pane
 
@@ -23,6 +23,9 @@ with probe.span("rollout", name=task.id, external_key=task.id) as span:
     span.attributes.update(score=out.score, unfinished_reason=out.reason)  # None when it finished
     probe.log_artifact(f"eval/{task.id}/after.png", path=out.image, span_id=span)
 ```
+
+A run that writes Word files should also save a PDF of each, so a pane can show its exact look
+(`soffice --headless --convert-to pdf --outdir out/ out/after.docx`), and log both to the span.
 
 A sample is `failed` only when an exception escapes the `with` block; setting `unfinished_reason`
 alone leaves it `completed`, so count why tasks did not finish by that attribute, not by status.
@@ -73,6 +76,8 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
   `PROBE.json(row)` to parsed JSON. They read only rows of the pane's own `files` entries. Each can
   reject (`budget`, `not_in_files`, `too_large`): catch it and draw a placeholder, or the whole pane
   shows as failed.
+- `PROBE.bytes(row)` resolves to an `ArrayBuffer` of the file's original bytes (a PDF, a Word
+  file, any binary up to 25 MiB; bigger rejects `too_large` unread) for a library to draw.
 - Images: create the `<img>` in script and set its `src` from `PROBE.image(row)`. An `<img>` in
   the markup is refused (its `src` is not a `data:` URL yet). A `<script>` is not a module, so
   wrap `await` in a function:
@@ -92,17 +97,64 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
 - The frame reaches no network: no `fetch`, XHR, WebSocket or `import()`, no `eval` or
   `new Function`, no `postMessage`, no cookies. Load a library as one exact-version cdnjs build,
   `<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>` (not Plotly
-  or Vega: they need `eval`).
+  or Vega: they need `eval`). A library that ships only as a module loads by its src,
+  `<script type="module" src=".../pdf.min.mjs"></script>`; its global exists from
+  `DOMContentLoaded` on.
 - Buttons, `<select>`, and checkboxes and sliders written as markup (`<input type="checkbox">`,
   `<input type="range">`) are fine; never `createElement('input')`. No text fields,
-  `contenteditable` or key listeners. A `<script>` takes only `src`; attach handlers with
-  `addEventListener`, never `on*` attributes.
+  `contenteditable` or key listeners. A `<script>` takes only `src` (plus `type="module"` beside a
+  library's `src`); attach handlers with `addEventListener`, never `on*` attributes.
 - Look: start with the content. The dashboard prints the title above it, so don't repeat it. No
   outer border, card or box, and no inner scrollbar: the pane sits on the page and grows to its
   content. Use the host's colors (`--ov-fg`, `--ov-muted`, `--ov-line`, `--ov-accent`,
   `--ov-good`, `--ov-bad`); for design, `artifact-design`.
 
-## 4. Push it
+## 4. Live runs, documents, click-through
+
+- **Live.** While a run in view is still going, the dashboard reads the pane's data again every
+  30 s. Redraw it by passing your draw function to `PROBE.onData`; the reads above answer the new
+  data, and your own controls (a slider, a picked tab) keep their state. Without it the pane keeps
+  its first picture until someone clicks refresh.
+
+  ```js
+  function draw() { renderTable(PROBE.samples('tasks').rows, currentFilter); }
+  draw();
+  PROBE.onData(draw);
+  ```
+- **PDF.** pdf.js from its module build, drawing only the pages on screen:
+
+  ```html
+  <script type="module" src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299/pdf.min.mjs"></script>
+  <script type="module" src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299/pdf.worker.min.mjs"></script>
+  <script>
+  document.addEventListener('DOMContentLoaded', async function () {
+    try {
+      var bytes = await PROBE.bytes(PROBE.files('docs').rows[0]);
+      var doc = await window.pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+      var page = await doc.getPage(1), viewport = page.getViewport({ scale: 1.2 });
+      var canvas = document.getElementById('page');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport, canvas: canvas }).promise;
+    } catch (e) { document.getElementById('page').replaceWith(e.message); }
+  });
+  </script>
+  ```
+- **Word.** `mammoth.convertToHtml({arrayBuffer: bytes})` (cdnjs `mammoth/1.13.0/mammoth.browser.min.js`)
+  gives a plain view: text, bold, italics and tables survive; fonts, colours and alignment do not.
+  For the exact look, draw the PDF the run saved beside it.
+- **Before/after diff.** For a document edit, unzip both files with JSZip
+  (cdnjs `jszip/3.10.1/jszip.min.js`), read `word/document.xml`, and compare with jsdiff
+  (cdnjs `jsdiff/8.0.2/diff.min.js`, global `Diff`): `Diff.diffArrays` over paragraph texts finds
+  the changed paragraphs, `Diff.diffWordsWithSpace` the changed words, and comparing each run's
+  `<w:b/>`, `<w:i/>` and `<w:jc>` shows formatting changes. Show it git-style: removed lines red,
+  added green, unchanged paragraphs folded. The raw XML diff (`Diff.diffArrays` over its lines) is
+  what the model wrote.
+- **Click-through.** `PROBE.open(ref, {newTab})` opens a run (`{run: row.run_id}`), a sample's
+  trial page (`{sample: {run: row.run_id, id: row.id}}`) or a file's page (`{file: row.id}`). Call
+  it from a click handler: it opens only right after a click in the pane, once per click, and
+  only what the pane's data holds; otherwise it rejects (`no_gesture`, `not_in_data`).
+
+## 5. Push it
 
 ```
 probe pane push <project-or-experiment> <slug> --html pane.html --data recipe.json [--title "Before / after"]
