@@ -1334,6 +1334,8 @@ READ_VERBS = frozenset(
         "options",
         # `project pick`: the projects a run may be filed in (agent-prompt install D22).
         "pick",
+        # `run logs`: what a run printed (run logs as a first-class feature).
+        "logs",
     }
 )
 
@@ -1657,7 +1659,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
 #: capture of a run before its long launch); `samples export` writes, so it stays out.
 DAEMON_PROFILE_RUN_READS = frozenset(
     {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "run edits",
-     "run commands", "get",
+     "run commands", "run logs", "get",
      "bundle", "events", "metrics wide", "metrics plot", "metrics export", "metrics grouped",
      "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
      "snapshot-show", "samples capture", "samples stats", "samples list", "samples show", "samples logs",
@@ -1674,11 +1676,12 @@ DAEMON_PROFILE_PANE_READS = frozenset({"pane data", "pane get", "pane list"})
 
 #: ...but not where a flag writes what it read: `run reproduce --materialize`
 #: restores the run's captured tree, as the kept `snapshot-restore` does, and
-#: `--export` writes a file, as `pane get --out` writes two. A word the shell
-#: still expands may be either.
+#: `--export` writes a file, as `pane get --out` writes two and `run logs
+#: --output` one. A word the shell still expands may be either.
 DAEMON_PROFILE_READ_WRITES = {
     "run reproduce": frozenset({"--materialize", "--export"}),
     "pane get": frozenset({"--out"}),
+    "run logs": frozenset({"--output"}),
 }
 
 #: `probe wizard` (and its old name `setup`) also holds the researcher's own

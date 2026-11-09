@@ -49,6 +49,9 @@ machine, including remote jobs:
   joins the run keeps its own `probe/run.rank<N>.log`. A notebook's output is
   not kept (a warning says so)
 
+Read what a run printed with `probe run logs <run>` (`--tail N` for its last lines); read it again
+for newer output.
+
 A close uploads files up to 64 MB and spends at most 120 s inspecting them
 (`PROBE_CAPTURE_BUDGET_SEC`, or the finish timeout). When your team has big-file
 capture switched on, a file between 64 MB and 5 GB goes up in parts after the
