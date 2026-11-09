@@ -128,6 +128,11 @@ The RL launchers (RL TRAINERS below) do 1 and 2 for you: they open the run
 before Ray starts and put the setup hook, `PROBE_*` and a token for that run
 only in the job's runtime env. 3 stays yours: check the capture on a short run.
 
+## SWITCHING OFF W&B:
+
+A script that logs to W&B (`import wandb`) moving to Probe: follow `instrument-code/from-wandb.md` (beside this
+file). It holds the order (both for one run, check parity, then remove W&B) and the call map.
+
 ## RL TRAINERS AND HARBOR:
 
 Each records the trainer's metrics and every attempt (rollout, trajectory) as
