@@ -1933,8 +1933,9 @@ UPKEEP_FLAG_RULES = {
     "update": ("--check --yes -y --plugin", "--no-plugin --channel"),
     "status": ("--json --refresh --timeout --repaste-choice --past-work-choice --demo-choice", ""),
     "uninstall": ("--yes -y --json --backup-unsent --discard-unsent --force", "--offline"),
-    "import review": ("--sessions --folder --workspace --agent --wandb-project --wandb-folder --wandb-key --json "
-                      "--chats-agent --chats-since --chats-folder --chats-limit --chats-all", ""),
+    "import review": ("--sessions --folder --workspace --agent --wandb-project --wandb-folder --wandb-key "
+                      "--skip-files-over --json --chats-agent --chats-since --chats-folder --chats-limit --chats-all",
+                      ""),
     "import folders": ("--json", ""),
     "import status": ("--review --wait --json", ""),
     "import cancel": ("<job_id> --json", ""),
@@ -1983,7 +1984,7 @@ PROBE_UPKEEP = {
     "example status": {"--json": 0},
     "import cancel": {"--json": 0, "<arguments>": 1},
     "import folders": {"--json": 0},
-    "import review": {"--agent": 1, "--chats-agent": 1, "--chats-all": 0, "--chats-folder": 1, "--chats-limit": 1, "--chats-since": 1, "--folder": 1, "--json": 0, "--sessions": 1, "--wandb-folder": 1, "--wandb-key": 1, "--wandb-project": 1, "--workspace": 1},
+    "import review": {"--agent": 1, "--chats-agent": 1, "--chats-all": 0, "--chats-folder": 1, "--chats-limit": 1, "--chats-since": 1, "--folder": 1, "--json": 0, "--sessions": 1, "--skip-files-over": 1, "--wandb-folder": 1, "--wandb-key": 1, "--wandb-project": 1, "--workspace": 1},
     "import status": {"--json": 0, "--review": 1, "--wait": 0},
     "install": {"--agent": 1, "--agent-rules": 0, "--auto-update": 0, "--capture": 0, "--json": 0, "--profile": 1, "--tracking": 0, "--yes": 0, "-y": 0},
     "login": {"--device": 0},
