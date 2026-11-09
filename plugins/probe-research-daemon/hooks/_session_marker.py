@@ -1396,7 +1396,7 @@ HELP_FLAGS = frozenset({HELP_FLAG, "-h"})
 #: is an argument and the command runs (`probe daemon worker -h`), so it is no help.
 #: `test_daemon_profile.py` holds this to the CLI's tree.
 UNKNOWN_OPTIONS_PASSED = frozenset(
-    {"exec", "docs", "cli search", "daemon worker", "daemon override", "daemon session", "daemon task"}
+    {"exec", "docs", "cli search", "daemon worker", "daemon override", "daemon session", "daemon task", "run resume"}
 )
 
 
@@ -1468,6 +1468,8 @@ DAEMON_AGENT_WRITES = frozenset(
         # ...and of its RL samples (rl-next W34): stop or rerun one.
         "samples cancel",
         "samples retry",
+        # Relaunching a run from its checkpoint (agentic W&B C.2): a launch, like `exec`.
+        "run resume",
         "span add",
         "trial add",
         "trial stage",

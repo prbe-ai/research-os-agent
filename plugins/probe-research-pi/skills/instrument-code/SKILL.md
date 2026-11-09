@@ -441,6 +441,13 @@ the relaunch MEANS:
 | keep BOTH curves | `client.fork_run(source, step=400_000)`, CLI `probe run fork <run> --step 400000` | a NEW run from that checkpoint under its own identity; the source is untouched |
 | repeat from scratch | `"supersede"` | a fresh `external_id-rN` retry row; the dead incumbent is tagged `superseded` |
 
+To restart from a checkpoint with new settings in one step:
+`probe run resume <run> --checkpoint best --config lr=1e-4 -- python train.py` (or `--print`
+the exports for sbatch). The script loads `run.resume_checkpoint` (HF
+`trainer.train(resume_from_checkpoint=...)`, Lightning `ckpt_path=`); the HF and Lightning
+integrations apply the lr after the load, and a plain script applies `run.resume_overrides`
+itself, then calls `run.confirm_resume_overrides()`.
+
 Nothing is hidden without `Rewind`, and `Rewind` needs a server that declares
 it - the SDK preflights `GET /v1/server/features` and refuses loudly on an older
 deployment. Never work around that by deleting and re-uploading the run;
