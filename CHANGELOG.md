@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A rejected-update report names the version of the service that noticed it.** Its `facts.noted_by` is the running service's own version, so the server can tell a rollback whose old version came back late from one where nothing answers, even when the report could not read the service's records in time.
+
 ## 0.487.0
 
 - **verl records what it used to miss (rl-next W48).** The fully async rollouter's validation passes are now samples. They are written from the rollouter's own process as producer `verl-rollouter`, at the weight version the pass ran on (the step the trainer logs its metrics at). Groups the V1 replay buffer throws away before training are counted in that step's seal: DAPO-filtered groups as `zero_variance`, failed ones as `error`, stale ones as `stale`, drained surplus as `oversampling`. A critic-warmup step's rows are stored, dropped `filter:critic_warmup`, and the step is sealed with no commit. A multi-turn rollout gets its `turns`: the prompt's messages, then each model reply and tool reply decoded alone. Every block verl times and reports as `timing_s/*` becomes a phase span with its real start and end. verl's engine stop reason never reaches a batch at the pinned commit, so finish reasons stay `length` / `stop`.
