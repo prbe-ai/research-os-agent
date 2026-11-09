@@ -4595,7 +4595,7 @@ NOTICE_RUNS_ONLY = 'Probe: chats are no longer recorded on this computer; runs s
 NOTICE_SIGNED_OUT = ('Probe: signed out here; nothing is recorded until you sign in again. '
                      'Say "sign me back in to Probe".')
 NOTICE_AGENT_REMOVED = 'Probe: removed from {agent}; its chats are no longer recorded. Say "add Probe back to {agent}".'
-NOTICE_UNINSTALLED = "Probe: removed from this computer. Your team's data on research.prbe.ai stays."
+NOTICE_UNINSTALLED = "Probe: removed from this computer."
 #: The current state, for a status line, pi's footer and `probe status` (never who or when).
 STATUS_WORDS = {
     (SCOPE_CHAT, STATE_OFF): "Probe: off (this chat)",
