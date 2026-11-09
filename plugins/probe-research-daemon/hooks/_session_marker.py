@@ -1288,6 +1288,7 @@ READ_VERBS = frozenset(
         "search",
         "events",
         "edits",
+        "commands",
         "coordinates",
         "download",
         "help",
@@ -1449,6 +1450,8 @@ DAEMON_AGENT_WRITES = frozenset(
         "run fork",
         "run end",
         "run token",
+        # Control of a live run the agent launched (agentic W&B C.1): checkpoint, a setting, stop.
+        "run send",
         "span add",
         "trial add",
         "trial stage",
@@ -1653,7 +1656,8 @@ DAEMON_PROFILE_ALLOWED = frozenset(
 #: An RL run's samples and best checkpoint are its own (`instrument-code` checks the
 #: capture of a run before its long launch); `samples export` writes, so it stays out.
 DAEMON_PROFILE_RUN_READS = frozenset(
-    {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "run edits", "get",
+    {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "run edits",
+     "run commands", "get",
      "bundle", "events", "metrics wide", "metrics plot", "metrics export", "metrics grouped",
      "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
      "snapshot-show", "samples capture", "samples stats", "samples list", "samples show", "samples logs",

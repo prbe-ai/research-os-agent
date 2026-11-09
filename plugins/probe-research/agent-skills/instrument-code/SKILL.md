@@ -429,11 +429,33 @@ the relaunch MEANS:
 | Intent | Use | What it does |
 |---|---|---|
 | continue past a crash | `"auto"` (default) | resumes a dead incumbent in place: same run, same curve, steps at or below the resume point refused |
-| restart from an EARLIER checkpoint, tail discarded | `on_conflict=probe.Rewind(step=400_000)`, CLI `--rewind-to-step 400000` | deletes the record from that step onward (inclusive, W&B-style) in the reopen transaction, so the relaunch REWRITES it. Destructive on purpose, and the only policy that reopens a `completed` run |
+| restart from an EARLIER checkpoint, tail discarded | `on_conflict=probe.Rewind(step=400_000)`, CLI `--rewind-to-step 400000` | hides the record from that step onward (inclusive, W&B-style) in the reopen transaction, so the relaunch REWRITES it; an undoable edit until the relaunch writes over those steps. The only policy that reopens a `completed` run |
 | keep BOTH curves | `client.fork_run(source, step=400_000)`, CLI `probe run fork <run> --step 400000` | a NEW run from that checkpoint under its own identity; the source is untouched |
 | repeat from scratch | `"supersede"` | a fresh `external_id-rN` retry row; the dead incumbent is tagged `superseded` |
 
-Nothing is deleted without `Rewind`, and `Rewind` needs a server that declares
+Nothing is hidden without `Rewind`, and `Rewind` needs a server that declares
 it - the SDK preflights `GET /v1/server/features` and refuses loudly on an older
 deployment. Never work around that by deleting and re-uploading the run;
 upgrade, or fork.
+
+## TAKE COMMANDS WHILE IT RUNS:
+
+Register what the script can be asked; `probe run send RUN <kind>` asks it, and the
+handler runs at the next `run.log()` (a safe point on the training thread):
+
+```python
+from enum import StrEnum
+from probe import CommandKind
+
+run.on(CommandKind.CHECKPOINT, lambda: save_checkpoint())        # return the artifact id
+run.on(CommandKind.CONFIG, lambda values: set_lr(values["lr"]))  # then recorded on run.config
+run.on(CommandKind.STOP, lambda: trainer.request_stop())         # graceful; `stop --force` signals the process
+
+class TrainerCommand(StrEnum):
+    EVAL_NOW = "eval_now"
+
+run.on(TrainerCommand.EVAL_NOW, lambda payload: evaluate(**payload))  # `probe run send RUN eval_now --json '{...}'`
+```
+
+A kind is an enum member, never a string. An ask the script registered nothing for is
+refused at once, with why; `probe run commands RUN` lists what was asked and answered.
