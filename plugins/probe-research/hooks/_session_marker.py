@@ -1253,6 +1253,9 @@ WRITE_GROUPS = frozenset(
         "pane",
         # Chart layouts (team flag chart_layouts): `chart set` and `chart layout` record.
         "chart",
+        # Pins (pinned views D11): `list` reads; `add` and `rm` run only with `--directed`
+        # (DIRECTED_ONLY). Here, not in TOP_LEVEL_WRITES, which would make `list` a write too.
+        "pin",
     }
 )
 
@@ -1366,8 +1369,15 @@ UNGATED_COMMANDS = frozenset(
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
 #: the researcher's correction), so from an agent session it is only admitted
-#: with `--directed`, in every state.
-DIRECTED_ONLY = frozenset({"companion feedback"})
+#: with `--directed`, in every state. So are `pin add` and `pin rm`: a pin sits at the top of a
+#: project's page for the whole team, so an agent pins or unpins only when the researcher asks
+#: (pinned views D12).
+DIRECTED_ONLY = frozenset({"companion feedback", "pin add", "pin rm"})
+
+#: A write whose flag also makes another command's write, so it is classified as that one and every
+#: rule for it applies: `pane push --pin` pins the pane it saves, so it is `pin add` (pinned views
+#: D12). The flag is matched as typed: the CLI's own gate sees the expanded argv.
+WRITES_ALSO = {"pane push": ("--pin", "pin add")}
 
 #: Root `probe` options that take a VALUE (the root callback in `cli/main.py`).
 #: Their value is not a command word: `probe --base-url URL notes push` runs
@@ -1566,6 +1576,8 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
         return (None, "probe " + head)
     if head in READ_GROUPS:
         return ("read", "probe " + head)
+    if command in WRITES_ALSO and _names_flag(args, WRITES_ALSO[command][0]):
+        return ("write", "probe " + WRITES_ALSO[command][1])
     if command in DIRECTED_ONLY:
         return ("write", "probe " + command)
     if command in READ_UNLESS_FLAGS:
@@ -1577,6 +1589,11 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
         if verb and verb not in REMOVAL_VERBS:
             return ("write", "probe " + command)
     return (None, "probe " + head)
+
+
+def _names_flag(args: "list[str]", flag: str) -> bool:
+    """Does one of these args name `flag` (`--flag=value` too)?"""
+    return any(arg.split("=", 1)[0] == flag for arg in args)
 
 
 def daemon_allows_agent(matched: str) -> bool:
@@ -1642,6 +1659,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: Probe's own upkeep the person asks for (install, update, uninstall, imports,
 #: the example, W&B, the new-chat default, the service) is `PROBE_UPKEEP`, read
 #: with its flags, not here by name (fixes-1107b T2).
+#: `pin add|list|rm` pin a view the researcher asked for, read the pins and unpin
+#: (pinned views D11, D12): the daemon's writer never pins, so they are the agent's;
+#: the CLI's gate still asks `pin add` and `pin rm` for `--directed` (DIRECTED_ONLY).
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session send", "run expect", "paper find",
      "docs", "cli search", "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
@@ -1649,7 +1669,8 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "draft edit",
-     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show"}
+     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
+     "pin add", "pin list", "pin rm"}
 )
 
 #: Reads of ONE run, named by its id: the agent looks at the runs it launched
@@ -1840,6 +1861,8 @@ def daemon_profile_allows(args: "list[str]", session_id: "str | None" = None) ->
     kind, matched = classify_probe_args(args)
     if kind == "write" and carries_directed(args):
         return (True, matched)
+    if matched[len("probe "):] in DAEMON_PROFILE_ALLOWED:
+        return (True, matched)  # `pane push --pin` is `pin add` (WRITES_ALSO): the CLI's gate asks
     return (daemon_allows_agent(matched), matched)
 
 

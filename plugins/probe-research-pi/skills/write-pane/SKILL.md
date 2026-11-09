@@ -170,6 +170,14 @@ on. `probe pane data <project-or-experiment> <slug>` reads a saved pane's data, 
 <project-or-experiment>` lists the panes, and `probe pane get <project-or-experiment> <slug>`
 prints one's HTML and recipe.
 
+Pin a view only when the researcher asks, and once: pins sit at the top of the project for the
+whole team, 24 at most, so pinning and unpinning take `--directed`. `probe pane push ... --pin
+--directed` pins the pane it saves; `probe pin add <project-or-experiment> --pane <slug> --directed`
+pins a saved one (or `--chart <metric>`, `--key-metrics`, `--parallel`); `probe pin list <project>`
+reads them and `probe pin rm <project> <pin-id> --directed` unpins. Never pin from a script or a
+sweep that runs again: a pin someone removed would come back. When Pinned is full, ask the
+researcher which view to unpin.
+
 From a script or notebook, the SDK does the same:
 
 ```python
