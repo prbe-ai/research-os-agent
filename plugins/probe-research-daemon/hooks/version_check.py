@@ -1041,6 +1041,25 @@ def _daemon_profile_notice() -> str | None:
     return f"Probe: {tail}. Run `probe doctor`." if tail else None
 
 
+def _owed_rules(said: list) -> "str | None":
+    """Probe's rules and the team note, for a chat that starts on or read where the agent's hooks add them
+    (`session_marker.take_owed_rules`): a fresh context (a start, `/clear`, a compaction) is owed them again,
+    a resume only what it never had. A part that does not fit beside `said` waits for the next prompt."""
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        return None
+    session_id = os.environ.get(SESSION_ID_ENV) or ""
+    try:
+        instruction = _hook_harness().instruction_file()
+        if not session_id or not instruction:
+            return None
+        if os.environ.get(SESSION_SOURCE_ENV) != RESUME_SOURCE:
+            _session_marker.reset_given_rules(session_id)
+        room = _session_marker.HOOK_CONTEXT_CHARS - sum(len(text) + 2 for text in said)
+        return _session_marker.take_owed_rules(session_id, _probe_state(), instruction, room=room)
+    except Exception:  # noqa: BLE001 -- fail open: the next prompt tries again
+        return None
+
+
 #: What the researcher sees when the daemon cannot record (daemon reads; the
 #: approved text is `mailbox.FAILURE_MESSAGES[DAEMON_STOPPED]`, pinned by a test).
 DAEMON_STOPPED_LINE = "Probe daemon stopped: {reason}. Recording and reads resume when it restarts."
@@ -1087,6 +1106,9 @@ def _final(obj: dict) -> NoReturn:
             prior = obj.get("systemMessage")
             obj["systemMessage"] = f"{prior}\n{notice}" if prior else notice
         context = [c for c in (_inline_reminder(), *notices.agent_lines, *lowered_agent) if c]
+        rules = _owed_rules(context)
+        if rules:
+            context.append(rules)
         if context:
             obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(context)}
         _emit(obj)

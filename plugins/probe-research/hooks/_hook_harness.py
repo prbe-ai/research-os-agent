@@ -139,6 +139,17 @@ def current(env=None) -> Row:
     return Row(next(raw for raw in rows if raw["id"] == document["default"]))
 
 
+def instruction_file(env=None) -> "str | None":
+    """This harness's global rules file (`agent_rules.memory_path`), or None when it has none here."""
+    try:
+        row = current(env)
+        home = row.home_dir(env)
+        name = (row.instructions or {}).get("global")
+    except Exception:  # noqa: BLE001 -- no registry row to read: no file
+        return None
+    return os.path.join(str(home), name) if home is not None and name else None
+
+
 def session_id(env=None) -> str:
     """This session's id from the environment ("" when none): the current
     harness's session variable first, then a captured harness's. Only captured

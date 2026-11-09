@@ -1507,29 +1507,52 @@ def _hook_harness():
     return module
 
 
-def _announce_inline_once(hook_event: str, session_id: str, lead: "str | None" = None) -> None:
+def _announce_inline_once(hook_event: str, session_id: str, lead: "str | None" = None, *,
+                          cwd: "str | None" = None, rules: bool = False) -> None:
     """Manual or trusted confirmed-quota inline is active and the
     agent has not been told about this stretch: tell it now, once, where this
     harness lets it land (`_inline_reaches_model`). Marked told only then.
     From the notice on, each event whose context reaches the model carries the
     next part of the skills it records by, whole (`_skills_reach_model`,
     `session_marker.next_inline_skills_part`, notes parity N1). `lead`: a line
-    said first in the same answer (auto mode's, `_make_auto_line`)."""
+    said first in the same answer (auto mode's, `_make_auto_line`). `rules`:
+    Probe's rules and the team note this chat is owed go last (`_rules_parts`)."""
     since = _session_marker.inline_notice_due(session_id)
     told = since is not None and _inline_reaches_model(hook_event)
     if since is not None and not told:
-        if lead:
-            _emit_context(hook_event, lead)
-        return  # the skills follow the notice, never come before it
-    parts = ([lead] if lead else []) + ([_inline_notice(session_id)] if told else [])
-    if _skills_reach_model(hook_event):
-        part = _session_marker.next_inline_skills_part(session_id, _inline_root())
-        if part:
-            parts.append(part)
+        parts = [lead] if lead else []  # the skills follow the notice, never come before it
+    else:
+        parts = ([lead] if lead else []) + ([_inline_notice(session_id)] if told else [])
+        if _skills_reach_model(hook_event):
+            part = _session_marker.next_inline_skills_part(session_id, _inline_root())
+            if part:
+                parts.append(part)
+    if rules:
+        parts += _rules_parts(hook_event, session_id, parts, cwd)
     if parts:
         _emit_context(hook_event, "\n\n".join(parts))
     if told:
         _session_marker.mark_inline_shown(session_id, since)
+
+
+def _rules_parts(hook_event: str, session_id: str, said: list, cwd: "str | None" = None) -> list:
+    """Probe's rules and the team note this chat is owed while it is not off, where the agent's hooks add them
+    (`session_marker.take_owed_rules`): the next part that fits beside `said`. In an off chat that had them, the
+    line that sets them aside, once (`RULES_SET_ASIDE`): text already in a chat cannot be taken out."""
+    if not _skills_reach_model(hook_event):
+        return []
+    try:
+        state = _state(session_id, cwd)
+        if state == _session_marker.STATE_OFF:
+            return [_session_marker.RULES_SET_ASIDE] if _session_marker.reset_given_rules(session_id) else []
+        instruction = _hook_harness().instruction_file()
+        if not instruction:
+            return []
+        room = _session_marker.HOOK_CONTEXT_CHARS - sum(len(text) + 2 for text in said)
+        text = _session_marker.take_owed_rules(session_id, state, instruction, room=room)
+    except Exception:  # noqa: BLE001 -- the next event tries again
+        return []
+    return [text] if text else []
 
 
 def _make_auto_line(payload: dict, session_id: str) -> "str | None":
@@ -1571,27 +1594,22 @@ def _skills_reach_model(hook_event: str) -> bool:
 
 def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, session_id: str = "") -> None:
     """Tell the model where the switch landed. Silent when nothing resolved.
-    `daemon`: the lean plugin, whose sessions the daemon records and reads for."""
+    `daemon`: the lean plugin, whose sessions the daemon records and reads for:
+    a move to on or read carries Probe's rules and the team note the chat is
+    owed, a move to off sets them aside (`_rules_parts`)."""
     if landed == REFUSED_DAEMON:
         notice = _session_marker.DAEMON_SWITCH_REFUSAL
     elif landed == INLINE:
-        _announce_inline_once(hook_event, session_id)
+        _announce_inline_once(hook_event, session_id, rules=daemon)
         return
     else:
         notices = DAEMON_PROFILE_FLIP_NOTICE if daemon else FLIP_NOTICE
         notice = notices.get(landed) if landed else None
-    if not notice:
-        return
-    sys.stdout.write(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": hook_event,
-                    "additionalContext": notice,
-                }
-            }
-        )
-    )
+    parts = [notice] if notice else []
+    if daemon and landed and landed != REFUSED_DAEMON:
+        parts += _rules_parts(hook_event, session_id, parts)
+    if parts:
+        _emit_context(hook_event, "\n\n".join(parts))
 
 
 # ---------------------------------------------------------------------------
@@ -2552,7 +2570,8 @@ def main() -> None:
                 landed = _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
                 _announce("UserPromptSubmit", landed, daemon=True, session_id=session_id)
             else:
-                _announce_inline_once("UserPromptSubmit", session_id, lead=_make_auto_line(payload, session_id))
+                _announce_inline_once("UserPromptSubmit", session_id, lead=_make_auto_line(payload, session_id),
+                                      cwd=_payload_cwd(payload), rules=True)
         elif hook_event == "PostToolUse":
             landed = None
             # A helper agent's Skill call is never the switch: its words are the main agent's.
@@ -2569,8 +2588,8 @@ def main() -> None:
                 _announce("PostToolUse", landed, daemon=True, session_id=session_id)
             elif not _from_helper_agent(payload):
                 # A subagent's context is not the agent's: what lands there
-                # (the notice, a part of the skills) would be marked sent unheard.
-                _announce_inline_once("PostToolUse", session_id)
+                # (the notice, a part of the skills, the rules) would be marked sent unheard.
+                _announce_inline_once("PostToolUse", session_id, cwd=_payload_cwd(payload), rules=True)
         return
     if hook_event == "UserPromptSubmit":
         if _from_helper_agent(payload):
