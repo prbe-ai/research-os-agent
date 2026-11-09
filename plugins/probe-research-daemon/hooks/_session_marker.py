@@ -1404,7 +1404,7 @@ def is_help_flag(word: str, args: "list[str]") -> bool:
 #: `docs` reads Probe's own docs, not the team's record: a read so that `off`
 #: refuses it as it refuses `paper find`.
 READ_GROUPS = frozenset(
-    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance", "docs", "samples"}
+    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance", "docs", "samples", "watch"}
 )
 
 #: Commands inside a `READ_GROUPS` group that record rather than print:
