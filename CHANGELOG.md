@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.478.0
+
 - **write-pane skill fixes.** `PROBE.open` must be caught (an uncaught rejection fails the whole pane); a `runs` row opens by its `id` (other rows by `run_id`); the PDF example includes its `<canvas>`; alignment (`<w:jc>`) is compared per paragraph; file reads can also reject `unavailable`; a document over 25 MiB is refused unread only when its size is known.
 ## 0.477.0
 
