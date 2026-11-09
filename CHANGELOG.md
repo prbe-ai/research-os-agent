@@ -5,6 +5,9 @@
 ## 0.478.0
 
 - **write-pane skill fixes.** `PROBE.open` must be caught (an uncaught rejection fails the whole pane); a `runs` row opens by its `id` (other rows by `run_id`); the PDF example includes its `<canvas>`; alignment (`<w:jc>`) is compared per paragraph; file reads can also reject `unavailable`; a document over 25 MiB is refused unread only when its size is known.
+- **RL runs record their base model with a run token too.** The Hugging Face callback, ART and SkyRL (which recorded none) send the Hub model a run starts from (`init`) and the Hub datasets it reads by their uri in `POST /v1/runs/{id}/uses`, not through `POST /v1/sources`, which a token for one run may not call: `probe checkpoint best`'s lineage now names the base model on runs a job joined (`PROBE_RUN_ID`). `run.use_dataset(SourceRef(uri=...))` sends a source that was never registered the same way. Needs the server from rl-next W41b; an older server refuses it with one warning (rl-next W41b).
+- **`probe samples tasks --split eval`** lists an eval-only run's tasks (a Harbor job's); the list reads train samples by default. **`probe samples capture`** says when a run's last step came from where its data ended (no step count was declared).
+
 ## 0.477.0
 
 - npx launcher 0.34.0: the agent install needs CLI 0.475.0 or newer, so an agent can bring in just a few past chats first (`import review --chats-limit`) and every install setting is read back.
