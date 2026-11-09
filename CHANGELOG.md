@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The status line names manual mode, not auto.** An auto chat reads `● on (daemon)`, `● off`; a chat the person sets (manual mode, or `/probe` in an auto chat) reads `● on (daemon, manual)`, `● off (manual)`. pi's footer the same.
+
 ## 0.470.0
 
 - **An off chat says `● off` again, alone.** Reverts 0.468.0's hidden line: Claude Code's status line draws `● off` (`● off (auto)` in an auto chat) and pi's footer `○ off`, now with no note after it (the agent's `new chats off` shows only on on and read chats).

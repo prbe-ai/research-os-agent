@@ -352,14 +352,14 @@ function getFooter(s: SessionState, sessionId: string, lease?: { status: DaemonS
   const inline = inDaemonProfile(s, sessionId) && sessionIsInline(sessionId);
   if (inline && sessionInlineReadOnly(sessionId)) {
     return {
-      text: renderFooter({ tracking: false, lowered: cached.lowered, isAuto: isAutoChat(s, sessionId) }),
+      text: renderFooter({ tracking: false, lowered: cached.lowered, isManual: !isAutoChat(s, sessionId) }),
       redrawAtMs: kept,
     };
   }
   // Probe off: no Probe calls, and the Probe service holds the session without capturing it. `○ off`, as the
   // status line says it.
   if (probeIsOff(s)) {
-    return { text: renderOffFooter({ isAuto: isAutoChat(s, sessionId) }), redrawAtMs: kept };
+    return { text: renderOffFooter({ isManual: !isAutoChat(s, sessionId) }), redrawAtMs: kept };
   }
   let daemonLive: boolean | undefined;
   let startingEndMs: number | null = null;
@@ -386,7 +386,7 @@ function getFooter(s: SessionState, sessionId: string, lease?: { status: DaemonS
     inline,
     daemonReads: inDaemonProfile(s, sessionId) && !inline,
     lowered: cached.lowered,
-    isAuto: isAutoChat(s, sessionId),
+    isManual: !isAutoChat(s, sessionId),
   });
   // The window's last moment still counts as starting (`is_worker_starting`): redraw just past it.
   return { text, redrawAtMs: getEarliest(kept, startingEndMs === null ? null : startingEndMs + 1) };

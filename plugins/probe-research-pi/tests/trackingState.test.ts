@@ -234,22 +234,22 @@ describe("renderFooter", () => {
   });
 });
 
-describe("renderFooter in an auto chat (probe auto mode)", () => {
-  it("puts auto inside the parentheses, as the status line does", () => {
-    expect(renderFooter({ tracking: true, daemonLive: true, isAuto: true })).toBe("● on (daemon, auto)");
-    expect(renderFooter({ tracking: true, isAuto: true })).toBe("● on (inline, auto)");
-    expect(renderFooter({ tracking: false, isAuto: true })).toBe("○ read (inline, auto)");
-    expect(renderFooter({ tracking: false, daemonReads: true, isAuto: true, lowered: "Probe: runs only" }))
-      .toBe("○ read (daemon, auto) | runs only");
+describe("renderFooter in a manual chat (no probe auto mode)", () => {
+  it("puts manual inside the parentheses, as the status line does", () => {
+    expect(renderFooter({ tracking: true, daemonLive: true, isManual: true })).toBe("● on (daemon, manual)");
+    expect(renderFooter({ tracking: true, isManual: true })).toBe("● on (inline, manual)");
+    expect(renderFooter({ tracking: false, isManual: true })).toBe("○ read (inline, manual)");
+    expect(renderFooter({ tracking: false, daemonReads: true, isManual: true, lowered: "Probe: runs only" }))
+      .toBe("○ read (daemon, manual) | runs only");
   });
-  it("leaves a manual chat's words as they were", () => {
-    expect(renderFooter({ tracking: true, daemonLive: true, isAuto: false })).toBe("● on (daemon)");
+  it("leaves an auto chat's words untagged", () => {
+    expect(renderFooter({ tracking: true, daemonLive: true, isManual: false })).toBe("● on (daemon)");
   });
 });
 
 describe("renderOffFooter", () => {
-  it("says off, and auto when the agent sets it", () => {
+  it("says off, and manual when the person sets it", () => {
     expect(renderOffFooter({})).toBe("○ off");
-    expect(renderOffFooter({ isAuto: true })).toBe("○ off (auto)");
+    expect(renderOffFooter({ isManual: true })).toBe("○ off (manual)");
   });
 });

@@ -108,10 +108,13 @@ plugin is added to the central prbe-ai marketplace, the install becomes `probe-r
   | on, the daemon records | `● on (daemon) \| BIRD SFT Fine Tuning` (green dot) |
   | on, the agent records | `● on (inline) \| BIRD SFT Fine Tuning` (green dot) |
   | read | `● read (daemon) \| BIRD SFT Fine Tuning` (yellow dot) |
-  | off | `● off` alone (red dot; `off (auto)` in auto mode) |
+  | off | `● off` alone (red dot) |
   | Probe not set up | nothing |
   | a problem | `… \| BIRD SFT Fine Tuning \| session transcript not recorded` (the note in yellow) |
   | Probe itself broken | `● Probe service down`, `● Probe status unavailable` or `● signed out of Probe` (red dot) |
+
+  In auto mode the words are as above. A chat you set yourself (manual mode, or `/probe` in an auto chat) says so
+  inside the parentheses: `● on (daemon, manual)`, `● off (manual)`.
 
   The title is the project's name (its slug until a name is known); with none the last divider goes too.
   One note at most, most serious first. The line never carries a command; this is what to do:

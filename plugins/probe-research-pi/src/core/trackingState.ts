@@ -402,8 +402,9 @@ export interface FooterReading {
   daemonReads?: boolean;
   /** The newest machine-wide lowering's status words (`recording_lowered[0].status`). */
   lowered?: string;
-  /** The main agent sets this chat's switch (probe auto mode): the words say `auto` (`on (daemon, auto)`). */
-  isAuto?: boolean;
+  /** The person sets this chat's switch, not the agent (no probe auto mode here): the words say `manual`
+   * (`on (daemon, manual)`); an auto chat has no tag (Richard, 2026-11-08). */
+  isManual?: boolean;
 }
 
 /**
@@ -423,20 +424,20 @@ function pickFooterNote(reading: FooterReading, recording: boolean): string {
   return chosenOff ? FooterNote.TranscriptsOff : "";
 }
 
-/** `words` with auto mode inside its parentheses (`session_marker.get_state_words(..., is_auto=True)`). */
-function addAutoTag(words: string, reading: FooterReading): string {
-  return reading.isAuto ? words.replace(/\)$/, ", auto)") : words;
+/** `words` with manual mode inside its parentheses (`session_marker.get_state_words(..., is_manual=True)`). */
+function addManualTag(words: string, reading: FooterReading): string {
+  return reading.isManual ? words.replace(/\)$/, ", manual)") : words;
 }
 
 /** The footer word for a chat Probe is off for (`get_state_words`' `off`). */
 export const OFF_LABEL = "off";
 
 /**
- * The footer for a chat Probe is off for: `○ off` alone (`○ off (auto)` in an auto chat), no note, as the status
+ * The footer for a chat Probe is off for: `○ off` alone (`○ off (manual)` in a manual chat), no note, as the status
  * line says it (Richard, 2026-11-08).
  */
-export function renderOffFooter(reading: Pick<FooterReading, "isAuto">): string {
-  return joinFooter(READ_DOT, reading.isAuto ? `${OFF_LABEL} (auto)` : OFF_LABEL);
+export function renderOffFooter(reading: Pick<FooterReading, "isManual">): string {
+  return joinFooter(READ_DOT, reading.isManual ? `${OFF_LABEL} (manual)` : OFF_LABEL);
 }
 
 /** The footer for a session Probe is not off for: `● on (daemon)`, `○ read (inline) | runs only`. */
@@ -445,8 +446,8 @@ export function renderFooter(reading: FooterReading): string {
   const recording = reading.tracking || Boolean(reading.inline);
   const note = pickFooterNote(reading, recording);
   if (!recording) {
-    return joinFooter(READ_DOT, addAutoTag(reading.daemonReads ? ReadLabel.Daemon : ReadLabel.Inline, reading), note);
+    return joinFooter(READ_DOT, addManualTag(reading.daemonReads ? ReadLabel.Daemon : ReadLabel.Inline, reading), note);
   }
   const words = reading.inline || reading.daemonLive === undefined ? RecordingLabel.Inline : RecordingLabel.Daemon;
-  return joinFooter(RECORDING_DOT, addAutoTag(words, reading), note);
+  return joinFooter(RECORDING_DOT, addManualTag(words, reading), note);
 }

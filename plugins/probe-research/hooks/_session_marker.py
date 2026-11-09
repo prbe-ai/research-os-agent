@@ -133,7 +133,7 @@ MAX_TITLE_ROWS = 32
 
 #: The segment's ceiling in terminal columns, leading indent included: the widest line that must render whole,
 #: `  ● on (daemon) | <20-column title> | session transcript not recorded` (72). Derived, so it moves when
-#: the words do; only words reachable today count (auto mode's `, auto` re-derives it).
+#: the words do; only words reachable today count (a manual chat's `, manual` re-derives it).
 MAX_SEGMENT_CHARS = (
     len(_INDENT) + _GLYPH_WIDTH + len("on (daemon)")
     + len(STATUS_DIVIDER) + TITLE_ROOM_WITH_NOTE + len(STATUS_DIVIDER) + len(NOTE_TRANSCRIPT_NOT_RECORDED)
@@ -5551,12 +5551,13 @@ def _elide(text: str, limit: int = MAX_TITLE_CHARS) -> str:
     return kept + _ELLIPSIS
 
 
-def get_state_words(session_state: "str | None", reader: Reader, *, is_auto: bool = False) -> str:
+def get_state_words(session_state: "str | None", reader: Reader, *, is_manual: bool = False) -> str:
     """The state as the status line says it: `on (daemon)`, `on (inline)`, `read (daemon)`, `read (inline)`, or `off`.
-    `is_auto` puts the auto tag inside the parentheses (`on (daemon, auto)`, `off (auto)`). A word this copy does not
-    know raises, so a newer CLI's state renders as `status unavailable`, never as a guess."""
+    `is_manual` (the person sets this chat's switch, not the agent) puts the manual tag inside the parentheses
+    (`on (daemon, manual)`, `off (manual)`); an auto chat has no tag (Richard, 2026-11-08). A word this copy does
+    not know raises, so a newer CLI's state renders as `status unavailable`, never as a guess."""
     if session_state == STATE_OFF:
-        return "off (auto)" if is_auto else "off"
+        return "off (manual)" if is_manual else "off"
     if session_state in (STATE_DAEMON, STATE_FULL):
         who = "daemon" if session_state == STATE_DAEMON and reader is Reader.DAEMON else "inline"
         level = "on"
@@ -5564,7 +5565,7 @@ def get_state_words(session_state: "str | None", reader: Reader, *, is_auto: boo
         who, level = reader.value, "read"
     else:
         raise ValueError(f"unknown session_state {session_state!r}")
-    return f"{level} ({who}, auto)" if is_auto else f"{level} ({who})"
+    return f"{level} ({who}, manual)" if is_manual else f"{level} ({who})"
 
 
 def _get_reader(session_state: str, is_daemon: bool, is_inline: bool) -> Reader:
@@ -5635,7 +5636,7 @@ def render(
     daemon: bool = False,
     inline: bool = False,
     lowered: str = "",
-    is_auto: bool = False,
+    is_manual: bool = False,
 ) -> str:
     """The status-line segment, or `""` when Probe is not set up. An off chat draws `● off` alone with a red dot: no
     title and no note, not even the agent's lowering (Richard, 2026-11-08).
@@ -5643,6 +5644,7 @@ def render(
     `daemon_live`: the daemon holds a live lease or is still starting (the caller decides; `is_worker_starting`).
     `daemon`: the daemon reads for this chat now (`is_daemon_mode`); `inline` (`is_inline`) wins over it.
     `lowered`: a machine-wide lowering the agent made (`get_lowered_status_word`), shown as the note.
+    `is_manual`: the person sets this chat's switch (not `is_auto_chat`), so the words say `manual`.
     `live` is accepted for older callers and ignored: a running run is not a problem, so it has no note.
     """
     if not configured:
@@ -5650,15 +5652,15 @@ def render(
     if session_state is None:  # a caller from before the five states
         session_state = STATE_FULL if tracking else STATE_READ_ONLY
     if session_state == STATE_OFF:
-        words = get_state_words(STATE_OFF, Reader.INLINE, is_auto=is_auto)
+        words = get_state_words(STATE_OFF, Reader.INLINE, is_manual=is_manual)
         return _fit_fields(words, _RED, "", "", "", color, MAX_SEGMENT_CHARS)
     recording = tracking and session_state != STATE_READ_ONLY
     shown = session_state if recording else STATE_READ_ONLY
     reader = _get_reader(shown, daemon, inline)
-    words = get_state_words(shown, reader, is_auto=is_auto)
+    words = get_state_words(shown, reader, is_manual=is_manual)
     note, reason = _pick_note(recording=recording, reader=reader, session_state=shown,
                               reason=_capture_reason(state), daemon_live=daemon_live, lowered=lowered)
-    ceiling = MAX_SEGMENT_CHARS + (len(", auto") if is_auto else 0)
+    ceiling = MAX_SEGMENT_CHARS + (len(", manual") if is_manual else 0)
     return _fit_fields(words, _GREEN if recording else _YELLOW, _get_line_title(state), note, reason, color, ceiling)
 
 
