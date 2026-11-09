@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The `instrument-code` skill covers live samples (rl-next W38).** `rl-frameworks.md` gains LIVE: what `probe samples live` (`--hung`, `--slow`, `--failing`, `--state ended`), `tail`, `cancel`, `retry`, `commands` and `probe watch RUN --until samples.live:state=hung` give an agent; per framework, which rollouts are live samples and which of watch, cancel and retry work or are refused, and why (Miles: cancel drops the sample's whole group; Harbor: a trial cancel fails `harbor run`, `harbor job resume -p` re-runs cancelled trials after the job); ART's `@tracker.record_rollout` recipe. LIVE IN YOUR OWN HARNESS is the proxy recipe for a custom loop: `run.samples.live_url(key, upstream=...)` in process, or `probe samples proxy --upstream URL --run RUN` beside it. The daemon profile keeps refusing `probe watch` (the daemon follows events and tells the agent of hung samples); its skill test names why. Copied into the three plugins.
+
 ## 0.490.0
 
 - **The CLI holds typer below 0.29.** typer 0.29.0 (released 2026-11-09) stopped building its options on click's `Option`, so the CLI's command spec (`shared/command_rules/cli_spec.py`) finds no `.type` on a `TyperOption` and the release's wheel smoke fails its help check (release 42686297882, every platform). Installed CLIs keep working (the daemon rebuilds its tree from the shipped `cli_spec.json` with click; usage errors still exit 2). Widen after the spec stops reading click attributes off typer's options.

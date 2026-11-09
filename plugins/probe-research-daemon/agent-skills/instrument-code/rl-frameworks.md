@@ -260,3 +260,75 @@ probe checkpoint best $RUN --metric eval/val                    # the checkpoint
   means and counted beside them.
 - `probe samples tasks $RUN` lists one task per prompt and scenario. A task per attempt means the prompt
   the hash keys changes every time (a seed, a timestamp): set `task_id`.
+
+## LIVE: WHILE IT RUNS:
+
+Every adapter also writes each rollout as a LIVE sample, from its start to its end. Read and act on them:
+
+```bash
+probe samples live $RUN                     # running now: elapsed, host, phase, what the agent is doing
+probe samples live $RUN --hung --json       # no progress for 10 min (--hung-after 3m), or a silent producer
+probe samples live $RUN --slow              # slower than its task's p90 and 2x its step's median
+probe samples live $RUN --failing           # errors in the last 10 min by reason, host and task
+probe samples live $RUN --state ended       # how they ended; abandoned = a crash or a resume, superseded = retried
+probe samples tail $RUN SAMPLE              # its turns as they happen, until it ends (where watch works)
+probe samples cancel $RUN SAMPLE --reason "tool loop"   # or retry; where its framework allows (table)
+probe samples commands $RUN                 # who asked what, and what happened
+probe watch $RUN --until samples.live:state=hung --timeout 3600   # sleep until one hangs (exit 0)
+```
+
+- Judged on the server's clock: a box with a wrong clock never makes a sample look hung, and a crash or a resume
+  reads `abandoned`, never hung. The agent that launched the run is told when samples hang (`samples_hung`).
+- An ask a framework cannot do safely is refused at once, with why; one no running producer took reads `expired`.
+- A sample that ends `ungraded` ended cleanly; a judge grades it later.
+
+| framework | live samples | watch | cancel | retry |
+|---|---|---|---|---|
+| Miles | every try, before its first request (`PROBE_MILES_LIVE=0` off; not the legacy v1 rollout) | agent rollouts | generate rollouts, by an SGLang abort; **Miles then drops the sample's whole group** from training (the answer names it) | generate rollouts, in the same slot: the group still trains |
+| Harbor | every trial, with its phases | refused | refused: it makes `harbor run` exit 1; after the job, `harbor job resume -p <job>` re-runs cancelled trials | refused |
+| ART | only rollouts you decorate (below) | refused | refused: it raises in your gather, and ART's default `max_exceptions=0` stops the step | refused |
+| SkyRL | every trajectory; Harbor inside SkyRL, every try | refused | refused: SkyRL retries a failed trial and masks its prompt group | refused |
+| verl | every agent loop | refused | refused | refused |
+| TRL | every row of a GRPO, RLOO or distillation batch; none in AsyncGRPO, GKD, GOLD | refused | refused | refused |
+
+ART awaits your own rollout coroutines, so decorate the rollout:
+
+```python
+tracker = track(model, project="gsm-posttrain")
+
+@tracker.record_rollout(task_key=lambda model, scenario: scenario.id)   # the key its trajectory's task_id holds
+async def rollout(model, scenario) -> art.Trajectory:
+    ...
+    tracker.send_progress(phase="tool", turns=turn, activity="tool bash: pytest -x")   # each model or tool call
+    return trajectory
+```
+
+Each call is one live sample until it returns, and its trajectory names it. A rollout that sends no progress for
+10 min reads hung. It ends graded by the reward it set, else `ungraded`; a raise ends it `error` and still reaches
+your gather.
+
+## LIVE IN YOUR OWN HARNESS: THE PROXY:
+
+No adapter, or an agent loop the adapter cannot see: give each rollout's agent its own model URL. Probe's proxy, in
+your process, forwards every call to the real server byte for byte and records the rollout's progress and, while
+`probe samples tail` watches it, its turns.
+
+```python
+run.samples.attempt_start(key, task_key=task.id, scheduled_step=step, host=socket.gethostname())
+url = run.samples.live_url(key, upstream="http://router:30000/v1")   # any OpenAI or Anthropic API root
+result = run_agent(task, base_url=url)                               # the agent's client calls url, not upstream
+run.samples.attempt_end(key, "passed" if result.reward >= 1.0 else "failed")
+```
+
+- It never breaks training: it never waits on Probe's server; `live_url` returns `upstream` itself when the proxy is
+  off (`PROBE_LIVE_PROXY=0`) or unhealthy; a proxy that dies fails only its own rollouts (`error`, `probe_proxy`).
+- Cancel is off: `live_url(..., can_cancel=True)` lets `probe samples cancel` stop that rollout (its calls then answer
+  `403 probe_canceled`, which the OpenAI and Anthropic SDKs never retry). Only where your loop ends a rollout cleanly
+  on that error.
+- Another language, or a launcher that cannot host it: run it beside the harness.
+
+```bash
+probe samples proxy --upstream http://router:30000/v1 --run $RUN   # prints one JSON line; "control" is $CONTROL
+curl -s -X POST "$CONTROL/rollouts" -d '{"task_key": "gsm-17"}'    # {"attempt_key", "url"}: url is the agent's
+curl -s -X POST "$CONTROL/rollouts/$KEY/end" -d '{"outcome": "passed"}'
+```

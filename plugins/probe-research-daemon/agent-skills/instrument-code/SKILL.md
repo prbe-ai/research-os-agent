@@ -155,7 +155,10 @@ the lines to paste, the task and scenario fields, the worker token, resume.
 
 A per-sample number of an RL attempt is a sample's, never a labeled metric
 point. Then prove the capture on a two-step run: `probe samples capture RUN`
-says yes, or no with its reasons.
+says yes, or no with its reasons. While it trains, `probe samples live RUN`
+shows which samples run, are slow, hung or failing, and cancel or retry one
+where its framework allows (`rl-frameworks.md`, LIVE; a harness with no
+adapter: LIVE IN YOUR OWN HARNESS).
 
 ## WHAT MUST REACH THE JOB:
 
