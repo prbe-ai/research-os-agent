@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Internal: the OpenAPI snapshots (`agent/schema/openapi.json`, the server safety-net baseline) carry the companion refusals' `scope` field and their 429 wording from #4628, edited in place: a full re-dump would also take in unrelated drift.
 - **Miles LoRA runs record their checkpoints.** A LoRA save writes no tracker file, so a Miles LoRA run recorded no checkpoint, and the best-checkpoint read (`probe checkpoint best`), `@checkpoint:best` and a Harbor eval's checkpoint link had nothing to name. The Miles adapter now records the newest committed save in any layout: a full-model save (the tracker file), a LoRA save once Miles has committed `iter_N/adapter`, and its `--save-hf` export once the `.complete` marker is written. A save the train hook sees is recorded on the weight version that step produced. A `--save-hf` export is recorded only once finished, and a run with `--save-hf` alone records its exports (W41d, GPU smoke bug 1).
 
 ## 0.479.0
