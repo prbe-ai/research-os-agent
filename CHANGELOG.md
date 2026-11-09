@@ -4,6 +4,8 @@
 
 - **Restart a run from its checkpoint with new settings.** `probe run resume RUN --checkpoint latest|best|STEP [--config lr=1e-4 ...] -- python train.py` picks the checkpoint (downloaded when Probe holds it, else its recorded path), reopens the run with `Rewind(step = checkpoint step + 1)` (an undoable edit) and runs the command under the run with `PROBE_RESUME_CHECKPOINT` and `PROBE_CONFIG_SET`; `--print` prints the exports for a scheduler instead. The script reads `run.resume_checkpoint` and `run.resume_overrides`; the settings reach `run.config` (and its history) only once applied: the HF Trainer callback and Lightning `ProbeCommands` set the lr after the checkpoint loaded, on every rank, and confirm it; a plain script calls `run.confirm_resume_overrides()`.
 
+- **A script hears `probe run send` within a second.** Registering a handler (`run.on`) now follows the run's `run.command` live events as this writer's producer stream (`probe.events.subscribe`, through the machine's Probe service); an ask is claimed the moment it is made instead of at the next beat (up to 60 s). The beat stays the backstop, and the two never claim one command twice. The run and sample command listeners share the handle's one producer stream (the server keeps one per writer session). `PROBE_COMMANDS_STREAM=0` keeps a script on the beat alone.
+
 ## 0.488.0
 
 - **A rejected-update report names the version of the service that noticed it.** Its `facts.noted_by` is the running service's own version, so the server can tell a rollback whose old version came back late from one where nothing answers, even when the report could not read the service's records in time.
