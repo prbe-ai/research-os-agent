@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **write-pane skill fixes.** `PROBE.open` must be caught (an uncaught rejection fails the whole pane); a `runs` row opens by its `id` (other rows by `run_id`); the PDF example includes its `<canvas>`; alignment (`<w:jc>`) is compared per paragraph; file reads can also reject `unavailable`; a document over 25 MiB is refused unread only when its size is known.
 ## 0.477.0
 
 - npx launcher 0.34.0: the agent install needs CLI 0.475.0 or newer, so an agent can bring in just a few past chats first (`import review --chats-limit`) and every install setting is read back.

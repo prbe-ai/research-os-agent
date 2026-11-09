@@ -74,10 +74,11 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
   return that entry. Name each id literally and read every entry the recipe has.
 - `PROBE.image(row)` resolves to a `data:` URL; `PROBE.text(row)` to text (CSV too);
   `PROBE.json(row)` to parsed JSON. They read only rows of the pane's own `files` entries. Each can
-  reject (`budget`, `not_in_files`, `too_large`): catch it and draw a placeholder, or the whole pane
-  shows as failed.
+  reject (`budget`, `not_in_files`, `too_large`, `unavailable`): catch it and draw a placeholder, or
+  the whole pane shows as failed.
 - `PROBE.bytes(row)` resolves to an `ArrayBuffer` of the file's original bytes (a PDF, a Word
-  file, any binary up to 25 MiB; bigger rejects `too_large` unread) for a library to draw.
+  file, any binary up to 25 MiB; bigger rejects `too_large`, unread when its `size_bytes` is known)
+  for a library to draw.
 - Images: create the `<img>` in script and set its `src` from `PROBE.image(row)`. An `<img>` in
   the markup is refused (its `src` is not a `data:` URL yet). A `<script>` is not a module, so
   wrap `await` in a function:
@@ -121,16 +122,17 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
   draw();
   PROBE.onData(draw);
   ```
-- **PDF.** pdf.js from its module build, drawing only the pages on screen:
+- **PDF.** pdf.js from its module build; draw only the pages on screen (this draws page 1):
 
   ```html
+  <canvas id="page"></canvas>
   <script type="module" src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299/pdf.min.mjs"></script>
   <script type="module" src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299/pdf.worker.min.mjs"></script>
   <script>
   document.addEventListener('DOMContentLoaded', async function () {
     try {
       var bytes = await PROBE.bytes(PROBE.files('docs').rows[0]);
-      var doc = await window.pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+      var doc = await window.pdfjsLib.getDocument({ data: bytes }).promise;
       var page = await doc.getPage(1), viewport = page.getViewport({ scale: 1.2 });
       var canvas = document.getElementById('page');
       canvas.width = viewport.width; canvas.height = viewport.height;
@@ -146,13 +148,15 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
   (cdnjs `jszip/3.10.1/jszip.min.js`), read `word/document.xml`, and compare with jsdiff
   (cdnjs `jsdiff/8.0.2/diff.min.js`, global `Diff`): `Diff.diffArrays` over paragraph texts finds
   the changed paragraphs, `Diff.diffWordsWithSpace` the changed words, and comparing each run's
-  `<w:b/>`, `<w:i/>` and `<w:jc>` shows formatting changes. Show it git-style: removed lines red,
+  `<w:b/>` and `<w:i/>` and each paragraph's `<w:jc>` shows formatting changes. Show it git-style: removed lines red,
   added green, unchanged paragraphs folded. The raw XML diff (`Diff.diffArrays` over its lines) is
   what the model wrote.
-- **Click-through.** `PROBE.open(ref, {newTab})` opens a run (`{run: row.run_id}`), a sample's
-  trial page (`{sample: {run: row.run_id, id: row.id}}`) or a file's page (`{file: row.id}`). Call
-  it from a click handler: it opens only right after a click in the pane, once per click, and
-  only what the pane's data holds; otherwise it rejects (`no_gesture`, `not_in_data`).
+- **Click-through.** `PROBE.open(ref, {newTab})` opens a run (`{run: id}`: a `runs` row's `id`, any
+  other row's `run_id`), a sample's trial page (`{sample: {run: row.run_id, id: row.id}}`) or a
+  file's page (`{file: row.id}`). Call it from a click handler: it opens only right after a click
+  in the pane, once per click, and only what the pane's data holds; otherwise it rejects
+  (`no_gesture`, `not_in_data`). Catch it, or the whole pane shows as failed:
+  `PROBE.open(ref).catch(function () {})`.
 
 ## 5. Push it
 
