@@ -366,7 +366,7 @@ describe("registerExtension — session_start", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ read (inline)");
   });
 
-  it("draws no footer for a session switched off, as the status line draws none", async () => {
+  it("draws ○ off for a session switched off, as the status line says it", async () => {
     installProbeCli();
     initializeOnce((_command, _args, _options, callback) => {
       callback(
@@ -389,14 +389,13 @@ describe("registerExtension — session_start", () => {
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
-    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", undefined);
-    expect(ctx.setStatus).not.toHaveBeenCalledWith("probe-tracking", expect.any(String));
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ off");
   });
 
   it.each([
-    { state: "off", tracking: false, footer: undefined },
+    { state: "off", tracking: false, footer: "○ off" },
     { state: "on", tracking: true, footer: "● on (inline) | new chats off" },
-  ])("says what the agent turned down on this computer as the footer's note in $state (fixes-1107b PR B)",
+  ])("draws $footer in $state when the agent turned Probe down on this computer (fixes-1107b PR B)",
     async ({ state, tracking, footer }) => {
       installProbeCli();
       initializeOnce((_command, _args, _options, callback) => {
@@ -669,14 +668,14 @@ describe("registerExtension — the footer's third state", () => {
       const switched = handlers.get("session_start")!({ reason: "new" }, ctx2);
       await vi.advanceTimersByTimeAsync(2_500);
       await switched;
-      expect(ctx2.setStatus).toHaveBeenLastCalledWith("probe-tracking", undefined);
+      expect(ctx2.setStatus).toHaveBeenLastCalledWith("probe-tracking", "○ off");
       const drawn = ctx1.setStatus.mock.calls.length;
 
       reads.release();
       await vi.advanceTimersByTimeAsync(0);
       expect(ctx1.setStatus.mock.calls.length, "the old session's footer is not redrawn").toBe(drawn);
       await handlers.get("agent_settled")!({}, ctx2);
-      expect(ctx2.setStatus, "the new session's state is its own").toHaveBeenLastCalledWith("probe-tracking", undefined);
+      expect(ctx2.setStatus, "the new session's state is its own").toHaveBeenLastCalledWith("probe-tracking", "○ off");
       await vi.advanceTimersByTimeAsync(120_000);
       expect(reads.calls(first), "and the looks stop").toBe(3);
     } finally {

@@ -101,7 +101,7 @@ DAEMON_HINT = ("ask your agent to set Who records to the daemon "
                "(`npx -y probe-research install --yes --json --who-records daemon --directed`)")
 
 _ELLIPSIS = "…"  # …
-#: The status line's one glyph. Its colour says the kind of state (green on, yellow read, red broken); the words
+#: The status line's one glyph. Its colour says the kind of state (green on, yellow read, red off or broken); the words
 #: say it too, so nothing is lost with colour off.
 _DOT = "●"  # ●
 _INDENT = "  "  # the segment is concatenated after a chained neighbour: keep a gap
@@ -5475,9 +5475,9 @@ def configured(config: dict | None = None, environ=None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Rendering: `  ● <state words> | <title> | <note>` (Richard 2026-11-07; no `Probe |` prefix, 11-08). Off draws
-# nothing (11-08); a failure line is `  ● <failure>` with a red dot (the failure names Probe). One line, bounded by
-# MAX_SEGMENT_CHARS terminal columns.
+# Rendering: `  ● <state words> | <title> | <note>` (Richard 2026-11-07; no `Probe |` prefix, 11-08). Off is
+# `  ● off` alone with a red dot (11-08); a failure line is `  ● <failure>` with a red dot (the failure names Probe).
+# One line, bounded by MAX_SEGMENT_CHARS terminal columns.
 # ---------------------------------------------------------------------------
 
 
@@ -5552,9 +5552,9 @@ def _elide(text: str, limit: int = MAX_TITLE_CHARS) -> str:
 
 
 def get_state_words(session_state: "str | None", reader: Reader, *, is_auto: bool = False) -> str:
-    """The state as the status line says it: `on (daemon)`, `on (inline)`, `read (daemon)`, `read (inline)`, or `off`
-    (never drawn: an off chat draws no line). `is_auto` puts the auto tag inside the parentheses (`on (daemon, auto)`). A
-    word this copy does not know raises, so a newer CLI's state renders as `status unavailable`, never as a guess."""
+    """The state as the status line says it: `on (daemon)`, `on (inline)`, `read (daemon)`, `read (inline)`, or `off`.
+    `is_auto` puts the auto tag inside the parentheses (`on (daemon, auto)`, `off (auto)`). A word this copy does not
+    know raises, so a newer CLI's state renders as `status unavailable`, never as a guess."""
     if session_state == STATE_OFF:
         return "off (auto)" if is_auto else "off"
     if session_state in (STATE_DAEMON, STATE_FULL):
@@ -5637,8 +5637,8 @@ def render(
     lowered: str = "",
     is_auto: bool = False,
 ) -> str:
-    """The status-line segment, or `""` when Probe is off for this chat or not set up (Richard, 2026-11-08). In its
-    fullscreen view Claude Code keeps an empty line's row blank; in its default view the row goes.
+    """The status-line segment, or `""` when Probe is not set up. An off chat draws `● off` alone with a red dot: no
+    title and no note, not even the agent's lowering (Richard, 2026-11-08).
 
     `daemon_live`: the daemon holds a live lease or is still starting (the caller decides; `is_worker_starting`).
     `daemon`: the daemon reads for this chat now (`is_daemon_mode`); `inline` (`is_inline`) wins over it.
@@ -5650,7 +5650,8 @@ def render(
     if session_state is None:  # a caller from before the five states
         session_state = STATE_FULL if tracking else STATE_READ_ONLY
     if session_state == STATE_OFF:
-        return ""
+        words = get_state_words(STATE_OFF, Reader.INLINE, is_auto=is_auto)
+        return _fit_fields(words, _RED, "", "", "", color, MAX_SEGMENT_CHARS)
     recording = tracking and session_state != STATE_READ_ONLY
     shown = session_state if recording else STATE_READ_ONLY
     reader = _get_reader(shown, daemon, inline)

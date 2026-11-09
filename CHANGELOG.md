@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **An off chat says `● off` again, alone.** Reverts 0.468.0's hidden line: Claude Code's status line draws `● off` (`● off (auto)` in an auto chat) and pi's footer `○ off`, now with no note after it (the agent's `new chats off` shows only on on and read chats).
+
 ## 0.469.0
 
 ## 0.468.0

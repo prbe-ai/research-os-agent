@@ -79,6 +79,7 @@ import {
   ProbeState,
   Recorder,
   renderFooter,
+  renderOffFooter,
   SIGNED_OUT_FOOTER,
   STATUS_UNAVAILABLE_FOOTER,
   type CaptureReading,
@@ -332,7 +333,7 @@ function getEarliest(...times: (number | null)[]): number | null {
  * The footer for this session: the status line's words (`trackingState.ts`). In `daemon` it reads the lease and the
  * worker stamp: a worker with no lease yet is STARTING (no note) while the companion key is held, for
  * DAEMON_START_GRACE_MS after the service asked for it (no stamp: no end). pi's own failures (no reading, a kept one
- * past its time, an unreadable config) read `Probe status unavailable`, never hidden: hidden is Probe off or not set up.
+ * past its time, an unreadable config) read `Probe status unavailable`, never hidden: hidden is Probe not set up.
  */
 function getFooter(s: SessionState, sessionId: string, lease?: { status: DaemonStatusValue; reason: string | null }): Footer {
   const cached = s.probe.tracking;
@@ -355,9 +356,11 @@ function getFooter(s: SessionState, sessionId: string, lease?: { status: DaemonS
       redrawAtMs: kept,
     };
   }
-  // Probe off: no Probe calls, and the Probe service holds the session without capturing it. No footer, as the
-  // status line draws none (Richard, 2026-11-08).
-  if (probeIsOff(s)) return { text: undefined, redrawAtMs: kept };
+  // Probe off: no Probe calls, and the Probe service holds the session without capturing it. `○ off`, as the
+  // status line says it.
+  if (probeIsOff(s)) {
+    return { text: renderOffFooter({ isAuto: isAutoChat(s, sessionId) }), redrawAtMs: kept };
+  }
   let daemonLive: boolean | undefined;
   let startingEndMs: number | null = null;
   if (s.probe.state === ProbeState.Daemon) {

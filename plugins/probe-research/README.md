@@ -108,7 +108,7 @@ plugin is added to the central prbe-ai marketplace, the install becomes `probe-r
   | on, the daemon records | `● on (daemon) \| BIRD SFT Fine Tuning` (green dot) |
   | on, the agent records | `● on (inline) \| BIRD SFT Fine Tuning` (green dot) |
   | read | `● read (daemon) \| BIRD SFT Fine Tuning` (yellow dot) |
-  | off | nothing |
+  | off | `● off` alone (red dot; `off (auto)` in auto mode) |
   | Probe not set up | nothing |
   | a problem | `… \| BIRD SFT Fine Tuning \| session transcript not recorded` (the note in yellow) |
   | Probe itself broken | `● Probe service down`, `● Probe status unavailable` or `● signed out of Probe` (red dot) |
