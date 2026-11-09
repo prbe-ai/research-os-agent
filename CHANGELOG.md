@@ -3,6 +3,9 @@
 ## Unreleased
 
 - **Tests only: the SDK safety net's baselines are re-recorded.** `sdk_api.json` and `sdk_modules.json` had drifted red on main from intentional changes (`probe.events` #4662, `probe.commands` #4693, run edits #4677, live samples #4696, `run.samples` and `arm_resume_guard(key_floors=)` #4563, `finish(status=None, exit_code=)` #4276, `project=probe.FROM_ENV` #4364, W&B claim #4659). `sdk.delivery.outbox.drainers.service_handoff` is dropped from the module list: it was removed on purpose by service-only A4 (626cd27292).
+
+## 0.491.0
+
 - **The `instrument-code` skill covers live samples (rl-next W38).** `rl-frameworks.md` gains LIVE: what `probe samples live` (`--hung`, `--slow`, `--failing`, `--state ended`), `tail`, `cancel`, `retry`, `commands` and `probe watch RUN --until samples.live:state=hung` give an agent; per framework, which rollouts are live samples and which of watch, cancel and retry work or are refused, and why (Miles: cancel drops the sample's whole group; Harbor: a trial cancel fails `harbor run`, `harbor job resume -p` re-runs cancelled trials after the job); ART's `@tracker.record_rollout` recipe. LIVE IN YOUR OWN HARNESS is the proxy recipe for a custom loop: `run.samples.live_url(key, upstream=...)` in process, or `probe samples proxy --upstream URL --run RUN` beside it. The daemon profile keeps refusing `probe watch` (the daemon follows events and tells the agent of hung samples); its skill test names why. Copied into the three plugins.
 
 ## 0.490.0
