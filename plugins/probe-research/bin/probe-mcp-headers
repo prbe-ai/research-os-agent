@@ -1,5 +1,5 @@
 #!/bin/sh
-# Emit the Probe Research MCP Authorization header as JSON on stdout.
+# Emit the Probe MCP Authorization header as JSON on stdout.
 #
 # Claude Code runs this on every connect and again after a 401/403, so a rotated
 # token is picked up without restarting the session. It runs through a plain shell
@@ -67,7 +67,7 @@ fi
 # PAIR is the key and a lone session id resolves to nothing.
 #
 # MIRRORS src/probe/sdk/agent_session.py (AGENTS order, _SESSION_RE, the codex pairing
-# check). Only agents whose transcripts actually reach Research OS are named: anything
+# check). Only agents whose transcripts actually reach Probe are named: anything
 # else gets no headers rather than a link nobody can follow.
 #
 # THE CHARSET CHECK IS NOT COSMETIC. This value is interpolated into the JSON on

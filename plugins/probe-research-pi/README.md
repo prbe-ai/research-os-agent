@@ -2,11 +2,11 @@
 
 A [pi](https://github.com/earendil-works/pi) extension with four independent
 capabilities: it spawns the `probe-research-tap` daemon to ship sanitized pi
-session transcripts to Research OS (the pi equivalent of what
+session transcripts to Probe (the pi equivalent of what
 `probe-research-tap`'s `hooks/session-start.sh` / `hooks/session-end.sh` do
 for Claude Code and Codex), it briefs every session with the team's shared
 note (see "Team note" below — this half works even on an unpaired device,
-since it never talks to the tap package), and it bridges Probe Research's
+since it never talks to the tap package), and it bridges Probe's
 read-only MCP server into pi as native tools (see "Probe MCP read tools"
 below — pi has no MCP client of its own, so this extension is one; see
 "pi-mcp-adapter" for when that bridge stands down in favor of a shared one).
@@ -315,7 +315,7 @@ Capture needs a device token, checked in the same order
 
 1. A paired device token at `~/.pi/agent/state/probe-research-tap/.token`
    (written by `PROBE_TAP_SOURCE=pi python3 -m tap pair <token>`, using a
-   pairing token minted from the Research OS dashboard).
+   pairing token minted from the Probe dashboard).
 2. The `PROBE_PI_TAP_TOKEN` env var.
 
 The probe CLI's own config is NOT a source: its `ingest_token` is the capture

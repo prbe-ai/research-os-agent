@@ -1,4 +1,4 @@
-# Probe Research
+# Probe
 
 Experiment tracking for ML teams and the coding agents that run their experiments: Claude Code,
 Codex, Cursor, pi and Kimi Code. Keep working the way you do. From now on:
@@ -39,7 +39,7 @@ What it serves:
 - **`skills/instrument-code`** — the skill that wires the Probe SDK into training
   code, on its own, for `npx skills add` (rendered from the `probe-research` plugin).
 - **`client-version.json`** — the version/staleness advisory manifest the
-  Probe Research backend reads over GitHub raw.
+  Probe backend reads over GitHub raw.
 - **`CHANGELOG.md`** and the [Releases](../../releases) page — the public
   release record for the `probe-research` CLI/SDK
   ([PyPI](https://pypi.org/project/probe-research/),

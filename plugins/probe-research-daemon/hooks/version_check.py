@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe Research version check. Runs on SessionStart AND on PreCompact.
+"""Probe version check. Runs on SessionStart AND on PreCompact.
 
 Prints a Claude Code hook JSON to stdout:
   - up to date, or no data        -> {"continue": true}
@@ -1646,7 +1646,7 @@ def _stale_manifest_notice(fetched_at, now=None) -> str | None:
         return None
     when = "never" if not fetched_at else f"{int(age // 86400)}d ago"
     return (
-        "Probe Research could not confirm your client version "
+        "Probe could not confirm your client version "
         f"(last successful check: {when}). Your install may be out of date. "
         f"Run `probe doctor` to compare; to upgrade, {_session_marker.UPDATE_HINT}."
     )
@@ -1838,13 +1838,13 @@ def main() -> None:
     if messages:
         extra_messages = messages[1:]
     if below_min:
-        head = "⚠ Probe Research is below the minimum supported version"
+        head = "⚠ Probe is below the minimum supported version"
         if head_note:
             head += f" — {head_note}"
     elif needs_update:
-        head = f"⚠ Probe Research update needed — {head_note}"
+        head = f"⚠ Probe update needed — {head_note}"
     else:
-        head = "⚠ Probe Research update available"
+        head = "⚠ Probe update available"
     lines = [head, summary]
     lines.extend(extra_messages)
 
@@ -1881,7 +1881,7 @@ def main() -> None:
     # notice and stays quiet through the one that mattered.
     if urgent:
         ctx = (
-            f"The Probe Research client is out of date ({summary}) and known to "
+            f"The Probe client is out of date ({summary}) and known to "
             "misbehave at that version: features may fail until it is updated. "
             f"Tell the user, and offer to {tell} for them{then}; say so "
             "again if they hit an error that could be explained by the stale "
@@ -1890,7 +1890,7 @@ def main() -> None:
         )
     else:
         ctx = (
-            f"The Probe Research client is out of date ({summary}). If the user wants "
+            f"The Probe client is out of date ({summary}). If the user wants "
             f"to update, {tell} for them{then}. "
             "Do not nag; only act if they ask."
         )

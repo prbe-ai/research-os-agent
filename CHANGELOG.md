@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **A verl launch with no `experiment_name` gets a run key of its own.** `python -m probe.integrations.verl.launch` with an empty `trainer.experiment_name` keyed every such job `verl:<project>/`, so a resume could rewind another job's run; it now mints `verl:<project>/@<8 hex>` like a library-default name, and its checkpoints record it. A name passed in the launcher's or session's init kwargs keys the run by its text (`verl:<project>/<name>`) over no experiment or a shipped default (`gsm8k`, `test`). Resuming such a job from an unstamped checkpoint (saved before 0.497) continues in a new run, with a warning, instead of rewinding `verl:<project>/`; a 0.497-0.501 checkpoint reopens the run that saved it, except for a job that passes a name in its init kwargs over no experiment or a shipped default: its key is now the name's, so it continues in a new run. SkyRL the same way: an empty `trainer.run_name` now mints `skyrl:<project>/@<8 hex>` instead of keying `skyrl:<project>/`.
+- **The CLI, plugins, MCP and the CLAUDE.md block now say "Probe".** Display text only; package, plugin and command names are unchanged. `POINTER_VERSION` 57 rewrites the block heading on the next Stop. The CLI names its device `Probe CLI · <host>`.
 
 ## 0.501.0
 

@@ -1,7 +1,7 @@
 {
   "name": "probe-research",
   "version": "0.260.0",
-  "description": "Probe Research tracking, reproducibility, and status skills for the team's ML work, with a read-only OAuth MCP connection.",
+  "description": "Probe tracking, reproducibility, and status skills for the team's ML work, with a read-only OAuth MCP connection.",
   "author": {
     "name": "Probe",
     "email": "team@prbe.ai",
@@ -25,7 +25,7 @@
     }
   },
   "interface": {
-    "displayName": "Probe Research",
+    "displayName": "Probe",
     "shortDescription": "Track and query agentic research runs",
     "longDescription": "Open, track, snapshot, verify, and close research runs, then render the research status with Probe skills and a read-only OAuth MCP connection.",
     "developerName": "Probe",

@@ -1,7 +1,7 @@
 {
   "name": "probe-research",
   "version": "0.260.0",
-  "description": "Probe Research tracking for Kimi Code: the probe switch (on / read / off per conversation), track-work, instrument-code, visualize-progress, edit-notes, audit-team-note and plan-research-review skills, plus a read-only OAuth MCP.",
+  "description": "Probe tracking for Kimi Code: the probe switch (on / read / off per conversation), track-work, instrument-code, visualize-progress, edit-notes, audit-team-note and plan-research-review skills, plus a read-only OAuth MCP.",
   "author": {
     "name": "Probe",
     "email": "team@prbe.ai",
@@ -16,7 +16,7 @@
     "mcp"
   ],
   "interface": {
-    "displayName": "Probe Research",
+    "displayName": "Probe",
     "shortDescription": "Track and query agentic research runs",
     "developerName": "Probe",
     "websiteURL": "https://research.prbe.ai"

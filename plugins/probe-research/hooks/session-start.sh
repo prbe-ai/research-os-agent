@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Probe Research SessionStart hook: nudge when the installed CLI/plugin is out
+# Probe SessionStart hook: nudge when the installed CLI/plugin is out
 # of date. SYNCHRONOUS and FAIL-OPEN by contract — the version check must finish
 # before this returns its JSON (a SessionStart systemMessage can't come from a
 # detached process), and ANY failure degrades to `{"continue": true}` so a

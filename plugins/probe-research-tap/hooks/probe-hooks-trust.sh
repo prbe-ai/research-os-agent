@@ -29,7 +29,7 @@
 
 PROBE_HOOKS_STATE="${XDG_STATE_HOME:-${HOME:-}/.local/state}/probe/hooks"
 
-PROBE_HOOKS_NUDGE='{"systemMessage": "Probe: its hooks are switched off in this Codex session. They changed in the last Probe update, and Codex runs a changed hook only after you approve it. Type /hooks and approve the Probe Research hooks."}'
+PROBE_HOOKS_NUDGE='{"systemMessage": "Probe: its hooks are switched off in this Codex session. They changed in the last Probe update, and Codex runs a changed hook only after you approve it. Type /hooks and approve the Probe hooks."}'
 
 #: Prompts a session hears it on: enough to be seen, never a nag that the
 #: researcher has no way to stop.

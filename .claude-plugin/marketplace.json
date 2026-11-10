@@ -5,14 +5,14 @@
     "url": "https://github.com/prbe-ai"
   },
   "metadata": {
-    "description": "Probe Research client plugins (experiment tracking + read-only MCP + transcript capture).",
+    "description": "Probe client plugins (experiment tracking + read-only MCP + transcript capture).",
     "version": "0.9.0"
   },
   "plugins": [
     {
       "name": "probe-research",
       "source": "./plugins/probe-research",
-      "description": "Experiment-tracking skills (probe-research:probe, probe-research:track-work, probe-research:visualize-progress, probe-research:instrument-code, probe-research:plan-research-review) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
+      "description": "Experiment-tracking skills (probe-research:probe, probe-research:track-work, probe-research:visualize-progress, probe-research:instrument-code, probe-research:plan-research-review) wired to a read-only Probe MCP server; writes via the `probe` CLI."
     },
     {
       "name": "probe-research-daemon",
@@ -22,7 +22,7 @@
     {
       "name": "probe-research-tap",
       "source": "./plugins/probe-research-tap",
-      "description": "Ships client-sanitized per-session Claude Code or Codex transcripts to Research OS with source-bound device authentication."
+      "description": "Ships client-sanitized per-session Claude Code or Codex transcripts to Probe with source-bound device authentication."
     },
     {
       "name": "probe-hooks",

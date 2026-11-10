@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe Research status-line segment: the command that prints what the Probe service draws (service-only D14).
+"""Probe status-line segment: the command that prints what the Probe service draws (service-only D14).
 
 Reads the status-line payload on stdin, hands it to this machine's Probe service
 (`statusline.render`, drawn by `probe.service.jobs.statusline_render`), prints the ONE line

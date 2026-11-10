@@ -1,7 +1,7 @@
 {
   "name": "probe-research-pi",
   "version": "0.0.0",
-  "description": "pi package for Probe Research, loaded from the public mirror repo's root. Named probe-research-pi (not research-os-agent) so pi-mcp-adapter's \"<package>__<server>\" tool prefix stays probe-research-pi__probe.",
+  "description": "pi package for Probe, loaded from the public mirror repo's root. Named probe-research-pi (not research-os-agent) so pi-mcp-adapter's \"<package>__<server>\" tool prefix stays probe-research-pi__probe.",
   "private": true,
   "type": "module",
   "license": "MIT",

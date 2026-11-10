@@ -1,7 +1,7 @@
 {
   "name": "probe-research-tap",
   "version": "0.10.73",
-  "description": "Ships sanitized per-session Kimi Code transcripts to Probe Research OS.",
+  "description": "Ships sanitized per-session Kimi Code transcripts to Probe.",
   "author": {
     "name": "Probe",
     "email": "team@prbe.ai"
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Probe Session Capture",
     "shortDescription": "Capture sanitized Kimi Code research sessions",
-    "longDescription": "Tails each Kimi Code session's wire, sanitizes it into the shared session shape, and delivers durable batches to Research OS.",
+    "longDescription": "Tails each Kimi Code session's wire, sanitizes it into the shared session shape, and delivers durable batches to Probe.",
     "developerName": "Probe",
     "websiteURL": "https://research.prbe.ai"
   },

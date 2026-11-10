@@ -1,7 +1,7 @@
-"""Probe Research coding-agent transcript tap daemon.
+"""Probe coding-agent transcript tap daemon.
 
 Tails an active Claude Code transcript or Codex rollout, batches new lines,
-and ships them to the matching Research OS ingestion endpoint.
+and ships them to the matching Probe ingestion endpoint.
 Auth is device pairing (`python -m tap pair <token>`): a dashboard-minted
 pairing token is exchanged for a device token, and the backend host is read
 from the token's `iss` claim — no hardcoded host. The manual/self-host

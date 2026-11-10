@@ -1,7 +1,7 @@
 {
   "name": "probe-research-tap",
   "version": "0.10.73",
-  "description": "Ships sanitized per-session Codex rollouts to Probe Research OS.",
+  "description": "Ships sanitized per-session Codex rollouts to Probe.",
   "author": {
     "name": "Probe",
     "email": "team@prbe.ai",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Probe Session Capture",
     "shortDescription": "Capture sanitized Codex research sessions",
-    "longDescription": "Tails Codex rollouts, sanitizes their event shape, and delivers durable batches to Research OS.",
+    "longDescription": "Tails Codex rollouts, sanitizes their event shape, and delivers durable batches to Probe.",
     "developerName": "Probe",
     "category": "Developer Tools",
     "capabilities": [

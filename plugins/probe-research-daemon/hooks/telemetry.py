@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe Research plugin telemetry: the session funnel, observed from hooks.
+"""Probe plugin telemetry: the session funnel, observed from hooks.
 
 One event per funnel step, so drop-off says which fix is needed
 (distribution, prompting, or a bug):

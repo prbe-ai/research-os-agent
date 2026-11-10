@@ -1,7 +1,7 @@
 {
   "name": "probe-research-daemon",
   "version": "0.260.0",
-  "description": "Probe Research, daemon profile: the Probe daemon records and reads the team's work for this agent.",
+  "description": "Probe, daemon profile: the Probe daemon records and reads the team's work for this agent.",
   "author": {
     "name": "Probe",
     "email": "team@prbe.ai",
@@ -17,7 +17,7 @@
   ],
   "skills": "./agent-skills/",
   "interface": {
-    "displayName": "Probe Research (daemon)",
+    "displayName": "Probe (daemon)",
     "shortDescription": "The Probe daemon records and reads for this agent",
     "longDescription": "The Probe daemon records this agent's research sessions and reads the team's prior work for it. Installs the instrument-code, plan-research-review and visualize-progress skills, the daemon's messages and questions, and the guard; no MCP.",
     "developerName": "Probe",

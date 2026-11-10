@@ -1444,7 +1444,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
   // -- the commands --------------------------------------------------------------
 
   const probeStatus: CommandDeclaration = {
-    description: "Show Probe Research session-capture status",
+    description: "Show Probe session-capture status",
     handler: async (_args, ctx) => {
       const sessionId = ctx.sessionManager.getSessionId();
       // The CLI's reading now (`probe session initialize` asks the Probe
@@ -1476,7 +1476,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
   };
 
   const probeMcpLogin: CommandDeclaration = {
-    description: "Connect Probe Research's read MCP tools — bearer token first, interactive OAuth login otherwise",
+    description: "Connect Probe's read MCP tools — bearer token first, interactive OAuth login otherwise",
     handler: async (_args, ctx) => {
       const sessionId = ctx.sessionManager.getSessionId();
       if (inDaemonProfile(s, sessionId)) {

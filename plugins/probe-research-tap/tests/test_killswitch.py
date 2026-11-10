@@ -48,7 +48,7 @@ def _make_response(*, status: int, body: dict | None, error: str = ""):
 
 def test_polls_ingest_sessions_status_endpoint() -> None:
     """The remote killswitch lives at GET /ingest/v1/sessions/status on the
-    Research OS backend (not the hosted plugin's /agent-tap path)."""
+    Probe backend (not the hosted plugin's /agent-tap path)."""
     from tap import killswitch
 
     assert killswitch.PATH == "/ingest/v1/sessions/status"

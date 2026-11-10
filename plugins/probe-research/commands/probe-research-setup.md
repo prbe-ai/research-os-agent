@@ -1,8 +1,8 @@
 ---
-description: Set up Probe Research on this computer from this chat - sign in, connect the coding agents, and bring in work the team already has (past chats, project folders, W&B runs). Agent-run, idempotent; the person only answers questions and approves in the browser.
+description: Set up Probe on this computer from this chat - sign in, connect the coding agents, and bring in work the team already has (past chats, project folders, W&B runs). Agent-run, idempotent; the person only answers questions and approves in the browser.
 ---
 
-# Set up Probe Research
+# Set up Probe
 
 Fetch https://research.prbe.ai/install.md and follow it. It signs the person in (one
 browser approval), installs the CLI, sets Probe up in this computer's coding agents and

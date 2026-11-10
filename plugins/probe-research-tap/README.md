@@ -1,7 +1,7 @@
 # probe-research-tap
 
 A single Claude Code and Codex plugin that ships sanitized per-session
-transcripts to Research OS. The two agents share pairing, consent state,
+transcripts to Probe. The two agents share pairing, consent state,
 durable outbox, retries, HTTP transport, lifecycle management, storage, status,
 and revocation. Only transcript discovery and event normalization are
 agent-specific.

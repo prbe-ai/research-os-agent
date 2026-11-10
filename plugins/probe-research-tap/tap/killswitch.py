@@ -2,7 +2,7 @@
 
 Polls the backend's GET /ingest/v1/sessions/status before each tick. The
 client tolerates {"ingest_enabled": bool, "reason": str|null}, but TODAY the
-Research OS endpoint is static and returns {"ingest_enabled": true}: this poll
+Probe endpoint is static and returns {"ingest_enabled": true}: this poll
 is the SEAM for a FUTURE customer-level pause, not a live control yet. When the
 response ever says paused, the daemon skips the entire tick — no tail, no
 enqueue, no drain — and byte_offset stays put so the next enabled tick catches

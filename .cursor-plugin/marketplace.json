@@ -5,13 +5,13 @@
     "url": "https://github.com/prbe-ai"
   },
   "metadata": {
-    "description": "Probe Research for Cursor. `probe wizard --agent cursor` installs these into ~/.cursor/plugins/local; Cursor has no plugin install command."
+    "description": "Probe for Cursor. `probe wizard --agent cursor` installs these into ~/.cursor/plugins/local; Cursor has no plugin install command."
   },
   "plugins": [
     {
       "name": "probe-research",
       "source": "./plugins/probe-research",
-      "description": "Probe's skills, the probe switch and a read-only Probe Research MCP for Cursor; writes go through the `probe` CLI."
+      "description": "Probe's skills, the probe switch and a read-only Probe MCP for Cursor; writes go through the `probe` CLI."
     },
     {
       "name": "probe-research-daemon",

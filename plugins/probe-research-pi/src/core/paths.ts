@@ -33,7 +33,7 @@ export const PLUGIN_DIR_ENV = "PROBE_PI_TAP_PLUGIN_DIR";
 export const CONFIG_PATH_ENV = "PROBE_CONFIG_PATH";
 
 /**
- * The Probe Research read MCP surface — same server Claude Code and Codex
+ * The Probe read MCP surface — same server Claude Code and Codex
  * already connect to (`agent/plugins/probe-research/.mcp.json`,
  * `.codex-plugin/plugin.json`). `MCP_URL_ENV` is a tests/dev-only override
  * (see README's Config table), present so tests (and, in a pinch, someone

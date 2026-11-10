@@ -1,7 +1,7 @@
 """Canonical home of the tap's transcript data contract.
 
 The probe-research-tap plugin ships sanitized per-session transcripts to the
-Research OS knowledgebase. The backfill CLI ships *historical* transcripts
+Probe knowledgebase. The backfill CLI ships *historical* transcripts
 through the same ingest door, and the two paths must produce identical wire
 shapes — same sanitizer, same batch chunking, same byte-cursor discipline —
 or the same session recorded twice tells two different stories.

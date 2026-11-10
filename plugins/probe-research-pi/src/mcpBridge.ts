@@ -1,5 +1,5 @@
 /**
- * The bridge: connect to the Probe Research read MCP server and offer each of
+ * The bridge: connect to the Probe read MCP server and offer each of
  * its tools as a native pi tool. It registers nothing itself: it returns the
  * connection (`McpTransport`) and the tools as DECLARATIONS built over it
  * (`mcpToolDeclarations`), which the shim (`src/shim.ts`), the only code that
@@ -335,7 +335,7 @@ export function mcpToolDeclarations(transport: McpTransport, deps: McpToolDeps):
   return transport.tools.map((tool) => ({
     name: prefixToolName(tool.name),
     label: tool.title ?? tool.name,
-    description: (tool.description ?? `Probe Research MCP tool: ${tool.name}`).slice(0, 4000),
+    description: (tool.description ?? `Probe MCP tool: ${tool.name}`).slice(0, 4000),
     parameters: jsonSchemaToTypeBox(tool.inputSchema),
     async execute(_toolCallId: string, params: unknown) {
       try {
@@ -521,7 +521,7 @@ export async function interactiveOAuthConnect(
   const provider = new ProbeOAuthClientProvider({
     storage: deps.storage,
     env: deps.env,
-    onAuthorizationUrl: (authUrl) => deps.announce(`Open this URL to authorize Probe Research read access for pi:\n${authUrl}`, "info"),
+    onAuthorizationUrl: (authUrl) => deps.announce(`Open this URL to authorize Probe read access for pi:\n${authUrl}`, "info"),
   });
 
   let start: OAuthLoginStart;

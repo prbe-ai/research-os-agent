@@ -1,7 +1,7 @@
 {
   "name": "research-os-agent",
   "interface": {
-    "displayName": "Probe Research OS"
+    "displayName": "Probe"
   },
   "plugins": [
     {
