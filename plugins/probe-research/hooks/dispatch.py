@@ -1404,6 +1404,42 @@ def yields_to_shim() -> bool:
         return False
 
 
+def get_plugin_root() -> str:
+    """This copy's folder (`<cache>/<marketplace>/<plugin>/<version>` once installed)."""
+    return os.path.dirname(HERE)
+
+
+def yields_to_move() -> bool:
+    """Does this copy step aside because the rename's move (release N+1) installed it under the new name and has
+    not switched yet? Until that one switch the old set is on and records; a `claude plugin install` that outlived
+    a killed update must not make both record. One listdir when no move is under way; any doubt: run."""
+    try:
+        if os.environ.get("PROBE_HOOK_VIA"):
+            return False
+        # `_hook_switches.has_any_held`'s rule, with no import (the hot path: every tool call); the service root
+        # as `_service_paths.root_dir` finds it (`PROBE_SERVICE_ROOT` when absolute).
+        named = os.environ.get("PROBE_SERVICE_ROOT") or ""
+        root = named if os.path.isabs(named) else os.path.join(os.path.expanduser("~"), ".local", "state", "probe", "service")
+        try:
+            names = os.listdir(root)
+        except OSError:
+            return False
+        held = False
+        for name in names:
+            try:
+                held = held or any(each.endswith(".held.json") for each in os.listdir(os.path.join(root, name, "install-move")))
+            except OSError:
+                continue
+        if not held:
+            return False
+        switches = _load_by_path("_hook_switches")
+        row = _agent_row(os.environ)
+        sp = _load_by_path("_service_paths")
+        return row is not None and switches.is_held_by_move(sp.service_dir(), row["id"], get_plugin_root())
+    except Exception:  # noqa: BLE001 - fail open: run the event here
+        return False
+
+
 def run(argv: list) -> None:
     """The entry point: `dispatch.sh` imports this module (so its compiled
     bytecode is cached, ~6ms saved on every event) and calls run([lane]). An
@@ -1412,7 +1448,7 @@ def run(argv: list) -> None:
         # An older service's run (`run_by_service`): marked as every service run is, before
         # `hand_over` takes the hand-over that told it, so its routes read the mark too.
         os.environ[VIA_ENV] = "service"
-    if yields_to_shim():
+    if yields_to_move() or yields_to_shim():
         sys.exit(0)
     hand_over(argv)
     sys.exit(serve(argv))

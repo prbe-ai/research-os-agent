@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "markers_written": "old",
+  "markers_written": "new",
   "identities": {
     "old": {
       "marketplace": "research-os-agent",

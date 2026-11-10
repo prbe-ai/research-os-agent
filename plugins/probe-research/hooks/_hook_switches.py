@@ -73,6 +73,76 @@ def has_any_ledger(service_root) -> bool:
     return any(os.path.isfile(get_ledger_path(os.path.join(str(service_root), name))) for name in names)
 
 
+#: The rename's move (release N+1) lists the new-name copies it installed and has not switched yet in
+#: `<service dir>/install-move/<harness>.held.json` (`{"ids": [...], "twins": {id: old id}, "ledger": path}`); it
+#: deletes the list right before its one switch write. While it lists a copy AND the agent's ledger (Claude Code's
+#: installed_plugins.json, Codex's config.toml) still names its old twin, that copy's hooks step aside: the old set
+#: is still on and records.
+MOVE_DIRNAME = "install-move"
+HELD_SUFFIX = ".held.json"
+
+
+def get_held_path(service_dir, harness: str) -> str:
+    return os.path.join(str(service_dir), MOVE_DIRNAME, f"{harness}{HELD_SUFFIX}")
+
+
+def has_any_held(service_root) -> bool:
+    """Does any machine under this service root hold a new-name copy back? One listdir, and one more per machine
+    whose move folder exists: the cheap check before a hook reads its own machine's list."""
+    try:
+        names = os.listdir(str(service_root))
+    except OSError:
+        return False
+    for name in names:
+        try:
+            found = os.listdir(os.path.join(str(service_root), name, MOVE_DIRNAME))
+        except OSError:
+            continue
+        if any(each.endswith(HELD_SUFFIX) for each in found):
+            return True
+    return False
+
+
+def find_plugin_id(plugin_root) -> str:
+    """`<plugin>@<marketplace>` of a plugin copy at `<cache>/<marketplace>/<plugin>/<version>` (Claude Code, Codex)."""
+    version = os.path.abspath(str(plugin_root))
+    plugin = os.path.dirname(version)
+    return f"{os.path.basename(plugin)}@{os.path.basename(os.path.dirname(plugin))}"
+
+
+def is_held_by_move(service_dir, harness: str, plugin_root, env=None) -> bool:
+    """Does this plugin copy step aside because the rename's move installed it and has not switched yet? False
+    inside the service's own run, with no list, and whenever unsure (then both sets may answer, never neither)."""
+    values = os.environ if env is None else env
+    if values.get(VIA_ENV):
+        return False
+    try:
+        with open(get_held_path(service_dir, harness), "rb") as handle:
+            data = json.loads(handle.read(MAX_LEDGER_BYTES))
+    except (OSError, ValueError):
+        return False
+    ids = data.get("ids") if isinstance(data, dict) else None
+    plugin_id = find_plugin_id(plugin_root)
+    if not isinstance(ids, list) or plugin_id not in ids:
+        return False
+    return is_twin_installed(data, plugin_id)
+
+
+def is_twin_installed(held: dict, plugin_id: str) -> bool:
+    """Does the agent's ledger the list names still name `plugin_id`'s old twin? Unreadable, or no twin or ledger
+    named: False (the copy's hooks run: an old set removed by hand never leaves nothing recording)."""
+    twins, ledger = held.get("twins"), held.get("ledger")
+    twin = twins.get(plugin_id) if isinstance(twins, dict) else None
+    if not isinstance(twin, str) or not isinstance(ledger, str):
+        return False
+    try:
+        with open(ledger, "rb") as handle:
+            text = handle.read(MAX_LEDGER_BYTES * 8).decode("utf-8", "replace")
+    except OSError:
+        return False
+    return f'"{twin}"' in text
+
+
 def load_ledger(path) -> dict:
     """The ledger, or {} (missing, too big, not JSON, not an object)."""
     try:
@@ -312,12 +382,16 @@ def _load_by_path(name: str, path: str):
 
 def main(argv: list) -> int:
     """`python3 -S -B hook_switches.py yield <paths.py> <harnesses.json> <harness id>`, for a shell hook:
-    exit 0 when it steps aside (the shim answers this process), else 1, failures included. `paths.py`:
+    exit 0 when it steps aside (the shim answers this process, or the rename's move holds this copy back:
+    `is_held_by_move`), else 1, failures included. `paths.py`:
     the service's own path rules (its machine key); `harnesses.json`: the harness registry."""
     try:
         if len(argv) != 4 or argv[0] != "yield" or os.environ.get(VIA_ENV):
             return 1
         paths = _load_by_path("_probe_hook_paths", argv[1])
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # <plugin>/tap/hook_switches.py
+        if has_any_held(paths.root_dir()) and is_held_by_move(paths.service_dir(), argv[3], plugin_root):
+            return 0
         if not has_any_ledger(paths.root_dir()):
             return 1
         with open(argv[2], encoding="utf-8") as handle:
