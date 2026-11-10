@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.500.0
+
 - **A Harbor job's data is first class: config, Harbor version and lock, ATIF turns, logs and outputs (T27).** Both doors (`harbor run --plugin probe` and `probe trial add <run> <jobs/job>`) now record, per job and per trial:
   - **The job's `config.json` and `lock.json` on the run's config** (`harbor`: `version`, `commit`, `config`, and `lock` with its schema, Harbor install, concurrency, retry, digest and each distinct locked task, agent and skill; env values hidden and the whole record credential-scrubbed, so a token in a task's `git_url` never lands). The plugin adds the lock in the background when the first trial starts (Harbor writes it after `on_job_start`), and tries again at the job's end if that failed; the job folder door reads both and takes Harbor's version from the lock, never the reader's install. A `harbor` key someone else set on a run (a person's, another job's) is never overwritten: the plugin used to replace it on a joined run.
   - **Each trial's own `config.json` on its sample** (`extras.harbor.config`, env hidden; past 4 KiB its digest and the agent, environment and trial it names).
