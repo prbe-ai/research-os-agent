@@ -13,6 +13,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -164,3 +165,54 @@ def test_cursors_cli_owns_its_session():
     """Cursor's CLI runs as `cursor-agent` (comm `MainThread`): without its name no Cursor chat had
     an owner, and the Probe service refused to record it (`no_owner`)."""
     assert {"cursor-agent", "agent", "Cursor Helper (Plugin)"} <= owner.AGENT_NAMES
+
+
+def test_every_registry_harness_names_an_owner():
+    """Owner names come from the registry (11-09: the hand list had Kimi's Linux title
+    `kimi-code` but not its macOS binary `kimi`, so the service refused those chats)."""
+    from tap import harness_registry
+
+    for harness in harness_registry.get_registry().all():
+        for name in (harness.binary, harness.process_title):
+            assert name is None or name in owner.AGENT_NAMES, (harness.id, name)
+
+
+def test_a_macos_kimi_owns_its_chat(monkeypatch):
+    """The customer's chain: hook -> bash -> `kimi` (native binary) -> tmux."""
+    chain = {
+        400: owner._Proc(300, "s400", False, frozenset({"python3"})),
+        300: owner._Proc(200, "s300", False, frozenset({"bash"})),
+        200: owner._Proc(100, "s200", False, frozenset({"kimi"})),  # harness-literal-ok: process name
+        100: owner._Proc(1, "s100", False, frozenset({"tmux"})),
+    }
+    monkeypatch.setattr(owner, "_proc", chain.get)
+    assert owner.find_owner(400) == owner.Owner(200, "s200", "kimi")  # harness-literal-ok: process name
+
+
+def test_unreadable_registry_keeps_the_fixed_names(tmp_path):
+    """A half-written tap folder never stops recording: the import does not raise,
+    the fixed names (Kimi's `kimi` included) still hold, and `tap owner` exits 0."""
+    tap_root = Path(owner.__file__).resolve().parents[1]
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from tap import harness_registry\n"
+        f"harness_registry.REGISTRY_FILE = Path({str(tmp_path / 'missing.json')!r})\n"
+        "from tap import owner\n"
+        "try:\n"
+        "    harness_registry.get_registry()\n"
+        "except harness_registry.RegistryError:\n"
+        "    pass\n"
+        "else:\n"
+        "    sys.exit('the registry loaded')\n"
+        "assert owner.AGENT_NAMES == owner.OWNER_ALIASES | owner.FALLBACK_NAMES, owner.AGENT_NAMES\n"
+        "assert 'kimi' in owner.AGENT_NAMES\n"  # harness-literal-ok: process name
+        "owner.cfg.owner_file = lambda _sid: Path(sys.argv[1])\n"
+        "sys.exit(owner.main(['--session-id', 'sid', '--from-pid', str(1 << 30)]))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "owner.json")],
+        cwd=tap_root, env={**os.environ, "PYTHONPATH": str(tap_root)},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr

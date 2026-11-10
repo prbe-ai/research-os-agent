@@ -412,6 +412,24 @@ def test_anything_but_recording_means_tap_watch(tmp_path, monkeypatch, answer):
     assert not (tmp_path / "s-1.hosted").exists()
 
 
+@pytest.mark.parametrize(("answer", "said"), [
+    ({"recording": False, "reason": "no_owner"},
+     "did not record session s-1: no_owner (no agent process was found above this hook)"),
+    ({"recording": False, "reason": "something_new"},
+     "did not record session s-1: something_new (the service gave no more detail)"),
+    ({"recording": False}, ""),
+])
+def test_a_refused_record_logs_its_reason(tmp_path, monkeypatch, capsys, answer, said):
+    """The hook appends `tap record`'s stderr to the tap log: a refusal says why (11-09);
+    an answer with no reason says nothing."""
+    monkeypatch.setenv(record_client.HOSTED_ENV, "1")
+    monkeypatch.setattr(record_client, "_call", lambda *a, **k: answer)
+    monkeypatch.setattr(cfg, "hosted_file", lambda sid: tmp_path / f"{sid}.hosted")
+    assert record_client.try_record(_args(tmp_path)) is False
+    err = capsys.readouterr().err
+    assert said in err if said else err == ""
+
+
 @pytest.mark.parametrize("ensured", ["unavailable", "confined", "uninstalling", "backoff"])
 def test_no_service_coming_is_never_waited_for(monkeypatch, ensured):
     """`ensure`'s answer decides (M7): with none coming, `record` asks no more and returns at once."""

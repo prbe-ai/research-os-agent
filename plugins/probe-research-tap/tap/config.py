@@ -184,8 +184,10 @@ def heal_marker(session_id: str) -> Path:
     """Rate-limit stamp for a self-heal attempt.
 
     Shared by `tap start`'s callers so the ten-minute bound is one rule and
-    not two: `hooks/ensure-daemon.sh` stats it, `probe`'s `ensure_capture`
-    writes it. The hook resolves this path in bash; if the two ever disagree
+    not two: `hooks/ensure-daemon.sh` stats it and writes its tap version into
+    it (only its own version's marker holds it back, so a tap update heals at
+    once), `probe`'s `ensure_capture` (pi only, which never runs that hook)
+    stamps it. The hook resolves this path in bash; if the two ever disagree
     the bound silently becomes two different bounds, so any change here is a
     change to that script as well.
     """

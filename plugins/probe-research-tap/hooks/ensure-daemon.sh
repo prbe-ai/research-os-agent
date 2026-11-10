@@ -176,10 +176,25 @@ esac
 # A registry harness: the folder its row names (tap/config.py::plugin_dir()).
 [ -z "$REGISTRY_ENV" ] || STATE="$TAP_PLUGIN_DIR"
 
-# Ten-minute bound, the same rule `probe`'s ensure_capture uses and the same
-# path (tap/config.py::heal_marker), so the two cannot drift into two rules.
+# Ten-minute bound, at the path `probe`'s ensure_capture also stamps
+# (tap/config.py::heal_marker). The marker names the tap version that wrote it,
+# and only this version's own marker holds: an older tap's (empty before 0.10.74)
+# never holds back the first heal on a newly installed tap, so a fix reaches an
+# open chat at its next prompt (11-09). ensure_capture heals pi only, which never
+# runs this hook, so its empty marker never meets this check. Read with bash's
+# own `read`: no process on this path either.
+TAP_VER=""
+if [ -f "$ROOT/tap/__init__.py" ]; then
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        case "$_line" in
+            '__version__ = "'*) TAP_VER="${_line#*\"}"; TAP_VER="${TAP_VER%%\"*}"; break ;;
+        esac
+    done <"$ROOT/tap/__init__.py"
+fi
 MARKER="$STATE/heal/$SID"
 if [ -f "$MARKER" ]; then
+    MARKED=""
+    [ -s "$MARKER" ] && { IFS= read -r -n 64 MARKED <"$MARKER" 2>/dev/null || true; }
     NOW=$(date +%s)
     # GNU first, and then refuse anything that is not digits. On GNU coreutils
     # `-f` is *filesystem* status and `%m` is not one of its directives, so
@@ -192,11 +207,11 @@ if [ -f "$MARKER" ]; then
     # belt: no `||` chain can ever put prose into the arithmetic again.
     THEN=$(stat -c %Y "$MARKER" 2>/dev/null || stat -f %m "$MARKER" 2>/dev/null || echo 0)
     case "$THEN" in '' | *[!0-9]*) THEN=0 ;; esac
-    [ $((NOW - THEN)) -lt 600 ] && [ -z "$HOSTED_GONE" ] && quiet_exit
+    [ $((NOW - THEN)) -lt 600 ] && [ -z "$HOSTED_GONE" ] && [ "$MARKED" = "$TAP_VER" ] && quiet_exit
 fi
 
 mkdir -p "$STATE/heal" 2>/dev/null || true
-: >"$MARKER" 2>/dev/null || true
+printf '%s' "$TAP_VER" >"$MARKER" 2>/dev/null || true
 
 # Never `exec`, and never propagate session-start.sh's status. This hook is
 # fail-open by contract, and on UserPromptSubmit an exit code of 2 BLOCKS the

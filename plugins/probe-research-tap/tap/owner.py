@@ -12,8 +12,8 @@ times in three days, each ending re-mined by the engine and each resumption
 reopened by the next prompt.
 
 This module replaces the guess with a fact. SessionStart runs as a child of the
-agent, so the hook walks up its own process tree to the first `claude` or
-`codex` process and records that process's pid plus its kernel start time. The
+agent, so the hook walks up its own process tree to the first agent process
+(`AGENT_NAMES`) and records that process's pid plus its kernel start time. The
 daemon then asks one question per tick: is that exact process still alive?
 
   alive    -> the session is live, however long it has been quiet
@@ -40,19 +40,38 @@ from pathlib import Path
 from tap import config as cfg
 from tap.service import procid
 
-#: Process names that own a session. Claude Code sets its process title to
-#: `claude` (native and npm installs alike); Codex's native binary is `codex`
-#: (its npm launcher is a `node` parent, which the walk passes through); Kimi
-#: Code 2.1.1 titles its node process kimi-code (comm and argv[0], seen under a
-#: real session), so a Kimi started from another agent's shell owns its own.
-#: Cursor's CLI is cursor-agent (or agent) by argv[0], its comm `MainThread`; the
-#: app runs hooks below its extension host: the names its hook routes' caller check takes.
-#: The escape is per line, so each line naming a harness carries it.
-AGENT_NAMES = frozenset({  # harness-literal-ok: process titles
-    "claude", "codex", "kimi-code",  # harness-literal-ok: process titles
-    "cursor-agent", "agent", "cursor", "Cursor",  # harness-literal-ok: process titles
-    "Cursor Helper (Plugin)", "Cursor Helper",
+#: Process names that own a session beside each registry harness's `binary` and
+#: `process_title`. Cursor's CLI also runs as `agent` (comm `MainThread`), and the
+#: app runs hooks below its extension host; pi titles its RPC mode `pi-rpc`.
+OWNER_ALIASES = frozenset({  # harness-literal-ok: process titles
+    "agent", "cursor", "Cursor", "Cursor Helper", "Cursor Helper (Plugin)",
+    "pi-rpc",  # harness-literal-ok: process titles
 })
+#: Added only when the registry cannot be read, so recording never stops on a
+#: half-written tap folder (the service's `caller.AGENT_NAMES` rule).
+FALLBACK_NAMES = frozenset({  # harness-literal-ok: the fallback when the registry cannot be read
+    "claude", "codex", "kimi", "kimi-code", "pi", "cursor-agent",  # harness-literal-ok: fallback
+})
+
+
+def build_agent_names() -> frozenset[str]:
+    """`OWNER_ALIASES` plus every registry harness's binary and process title.
+
+    Kimi Code on macOS is a native `kimi` (comm, argv[0] and executable); on Linux
+    its node process retitles itself. Both names come from its registry row (11-09).
+    """
+    try:
+        from tap import harness_registry
+
+        harnesses = harness_registry.get_registry().all()
+    except Exception:  # `tap owner` must never fail: the fixed names stand in
+        return OWNER_ALIASES | FALLBACK_NAMES
+    names = {n for h in harnesses for n in (h.binary, h.process_title) if n}
+    return OWNER_ALIASES | frozenset(names)
+
+
+#: Read once at import; tests monkeypatch it.
+AGENT_NAMES = build_agent_names()
 
 #: A hook sits a few shells below the agent (`sh -c` -> `bash -c` -> the hook,
 #: plus ensure-daemon.sh on the self-heal path). Past this, the chain is not a

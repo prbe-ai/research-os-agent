@@ -103,6 +103,28 @@ def test_an_expired_marker_allows_another_spawn(hook_env):
     assert hook_env["spawn_log"].read_text(encoding="utf-8").count("ran") == 2
 
 
+@pytest.mark.parametrize("written_by", ["", "0.10.1"])
+def test_a_marker_from_an_older_tap_does_not_hold_back_the_new_one(hook_env, written_by):
+    """11-09: an open chat must heal at its first prompt after a tap update, not ten minutes on.
+    A minute-old marker an older tap wrote (empty before 0.10.74, or naming its version) lets
+    this tap heal at once; this tap's own marker then holds, as before."""
+    tap = Path(hook_env["env"]["PLUGIN_ROOT"]) / "tap"
+    tap.mkdir()
+    (tap / "__init__.py").write_text('"""The tap."""\n\n__version__ = "0.10.2"\n', encoding="utf-8")
+    marker = hook_env["state"] / "heal" / SID
+    marker.parent.mkdir(parents=True)
+    marker.write_text(written_by, encoding="utf-8")
+    a_minute_ago = time.time() - 60
+    os.utime(marker, (a_minute_ago, a_minute_ago))
+    first = _run({"session_id": SID}, hook_env["env"])
+    assert first.returncode == 0, first.stderr
+    assert hook_env["spawn_log"].read_text(encoding="utf-8").count("ran") == 1
+    assert marker.read_text(encoding="utf-8") == "0.10.2"
+    second = _run({"session_id": SID}, hook_env["env"])
+    assert second.returncode == 0, second.stderr
+    assert hook_env["spawn_log"].read_text(encoding="utf-8").count("ran") == 1, "this tap's own marker holds"
+
+
 def test_no_session_id_exits_quietly(hook_env):
     result = _run({}, hook_env["env"])
     assert result.returncode == 0

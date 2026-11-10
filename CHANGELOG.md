@@ -7,6 +7,7 @@
   - **Off Harbor's event loop.** A trial's END hook journals its samples in a thread (awaited, so each trial's parts keep their order), and `run.samples.log` now stores a text spilled past 64 KiB (a long prompt, response or turns) after releasing the writer's lock, so a slow upload no longer holds other trials' hooks, or another producer thread (Miles, verl), behind it.
   - **A multi-step trial's segments read their step trajectory's continuations** (`steps/<name>/agent/trajectory.cont-N.json`), as the whole attempt's do, so a summarized step keeps all its turns.
   - **`pip install "probe-research[harbor]"` alone works.** The `harbor`, `cli` and `daemon` extras each pin `probe-research-cli` at the same version (the plugin's `harbor.plugins` entry point names `probe.connectors`, which ships there); before, `[harbor]` without `cli` installed a plugin that could not import.
+- **Kimi Code chats on macOS are recorded again and get their Probe daemon (tap 0.10.74).** On macOS Kimi runs as a process named `kimi`, and the tap looked only for `kimi-code` (its name on Linux), so the Probe service turned those chats away. The tap now takes its agent names from the harness registry. A chat the service turns away now says why, once, in the service log and the tap log, and the first prompt after a tap update tries again at once instead of up to ten minutes later.
 
 ## 0.506.0
 

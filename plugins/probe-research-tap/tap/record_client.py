@@ -212,9 +212,27 @@ def try_record(args) -> bool:
         if isinstance(answer, dict) and answer.get("recording") is True:
             _write_hosted(args.session_id, answer.get("pid"))
             return True
+        if isinstance(answer, dict) and answer.get("reason"):
+            _say_refused(args.session_id, str(answer["reason"]))
     except Exception:  # noqa: BLE001 -- not recorded: the next prompt's heal asks again
         pass
     return False
+
+
+#: Why the Probe service turned a session away, in plain words (its `RECORD_REFUSALS`).
+REFUSALS = {
+    "no_owner": "no agent process was found above this hook",
+    "owner_gone": "its agent process has exited",
+    "no_tap": "the service could not load this tap",
+    "tap_unloadable": "the service could not load this newer tap before",
+}
+
+
+def _say_refused(session_id: str, reason: str) -> None:
+    """The service's refusal on stderr, which the hook appends to the tap log (11-09)."""
+    with contextlib.suppress(Exception):
+        why = REFUSALS.get(reason, "the service gave no more detail")
+        print(f"tap: the Probe service did not record session {session_id}: {reason} ({why})", file=sys.stderr)
 
 
 def _within(args) -> float:
