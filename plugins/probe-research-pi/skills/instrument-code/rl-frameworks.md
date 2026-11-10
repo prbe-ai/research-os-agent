@@ -171,10 +171,9 @@ python -m probe.integrations.verl.launch -- python3 -m verl.trainer.main_ppo \
   Each training batch is read in memory before the actor update: no `trainer.rollout_data_dir` needed.
 - Not recorded yet: prompt groups a filter drops before the update.
 - **Run identity and resume**: `verl:<trainer.project_name>/<trainer.experiment_name>`; verl's default `gsm8k` (or an
-  empty `experiment_name`) gets a key of its own (`...@<8 hex>`). Each PPO save writes `probe_run.json` into `global_step_k/`;
+  empty `experiment_name`) gets a key of its own (`...@<8 hex>`). Each save (PPO and SFT) writes `probe_run.json` into `global_step_k/`;
   `trainer.resume_mode=auto` (or `resume_path`) reopens the attempt it names, rewound to k+1. A checkpoint
   without it (an older CLI's, a bucket path) resumes a name you chose by name; on `gsm8k` or an empty name it opens a new run.
-  SFT saves are not stamped: an SFT job on its default `test` opens a new run on every resume (name it to keep one).
 - **Worker credential**: `PROBE_VERL_WORKER_TOKEN`.
 
 ## TRL:

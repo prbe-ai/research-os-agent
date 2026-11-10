@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A verl SFT job resumes its own run.** verl's SFT trainer saves through `CheckpointHandler.save_checkpoint`, which Probe did not wrap, so its checkpoints carried no record of their run and an SFT job on its default `experiment_name: test` opened a new run on every resume. The process that logs (its session) now stamps each `global_step_N/`, before a re-save into an existing folder and after the save, as PPO saves are, and a resume reopens the run that wrote it (checkpoints saved before this release still open a new run).
+
 - **W&B file copy: a numbered list of images keeps its key and step, artifact versions count once, and the file stage's progress counts runs.** Older W&B names a list of images `<key>_<step>_<index>.png`; its index was read as the step and the step joined the key (`media/examples_122/0.png` at step 0), and now it lands as `media/examples/122_0.png` at step 122, read using the run's own media keys, else by the name's shape. "Copied ... artifact versions" counts each version once, however many runs logged it (as the "Left in W&B" line does), and `probe import status` says "65/65 runs confirmed" for the file stage, not "files". Runs copied before keep their old media names; importing one again adds the new names beside them.
 
 ## 0.507.0
