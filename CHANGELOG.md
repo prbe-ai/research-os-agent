@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Auto mode's guide fits computers where the agent records its own work.** Where no Probe daemon runs (who records is `agent`: chosen, set before the daemon was the default, or the team said no to it), CLAUDE.md / AGENTS.md said `on` meant "the daemon records it and answers `probe ask`". It now says no daemon runs there: `on` is the agent recording as it goes (`track-work`), `read` looks up through the MCP, and there is no `inline` item. The managed block's version goes to 56, so installed blocks are rewritten at the next sync.
+
 ## 0.500.0
 
 - **A Harbor job's data is first class: config, Harbor version and lock, ATIF turns, logs and outputs (T27).** Both doors (`harbor run --plugin probe` and `probe trial add <run> <jobs/job>`) now record, per job and per trial:
