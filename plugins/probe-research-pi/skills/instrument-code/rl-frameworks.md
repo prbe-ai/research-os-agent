@@ -294,11 +294,11 @@ probe watch $RUN --until samples.live:state=hung --timeout 3600   # sleep until 
 
 | framework | live samples | watch | cancel | retry |
 |---|---|---|---|---|
-| Miles | every try, before its first request (`PROBE_MILES_LIVE=0` off; not the legacy v1 rollout) | agent rollouts | generate rollouts, by an SGLang abort; **Miles then drops the sample's whole group** from training (the answer names it) | generate rollouts, in the same slot: the group still trains |
+| Miles | every try, before its first request (`PROBE_MILES_LIVE=0` off; not the legacy v1 rollout); its `engine` is Miles' router, not the SGLang worker that served it | agent rollouts | generate rollouts, by an SGLang abort; **Miles then drops the sample's whole group** from training (the answer names it) | generate rollouts, in the same slot: the group still trains |
 | Harbor | every trial, with its phases | refused | refused: it makes `harbor run` exit 1; after the job, `harbor job resume -p <job>` re-runs cancelled trials | refused |
 | ART | only rollouts you decorate (below) | refused | refused: it raises in your gather, and ART's default `max_exceptions=0` stops the step | refused |
 | SkyRL | every trajectory; Harbor inside SkyRL, every try | refused | refused: SkyRL retries a failed trial and masks its prompt group | refused |
-| verl | every agent loop | refused | refused | refused |
+| verl | every agent loop; train and validation samples both name theirs | refused | refused | refused |
 | TRL | every row of a GRPO, RLOO or distillation batch; every AsyncGRPO rollout (from its rollout process); every GKD or GOLD row a model writes (not GOLD's VLM path) | refused | refused | refused |
 
 ART awaits your own rollout coroutines, so decorate the rollout:
