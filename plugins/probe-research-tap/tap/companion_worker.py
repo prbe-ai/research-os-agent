@@ -910,9 +910,13 @@ def _names_path(text: str, path_text: str) -> bool:
 
 
 def _name_is_placeholder(name: str, row: dict) -> bool:
-    """A name nobody chose: empty, or the slug re-cased."""
+    """A name nobody chose: empty, or the slug re-cased, and not kept. A kept name (`name_customized`: a
+    script or a person gave it) reads like its slug too (`lr-sweep`), and the server refuses an agent's
+    change to it with a 409 that would take the description and notes beside it down too."""
     if not name.strip():
         return True
+    if row.get("name_customized"):
+        return False
     slug = row.get("slug")
     if not isinstance(slug, str):
         return False

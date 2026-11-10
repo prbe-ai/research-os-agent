@@ -257,6 +257,20 @@ def test_describe_only_fills_empty_fields(tmp_path):
     assert out["op"][2] == {"name": "Learning-rate sweep", "authored_by": "agent"}
 
 
+def test_describe_leaves_a_kept_name_that_reads_like_its_slug(tmp_path):
+    """A script's `probe.init(name="lr-sweep")` reads like its slug but is kept: proposing it would be refused
+    (409) and take the description with it, so only the description goes."""
+    row = {"id": RUN, "slug": "lr-sweep", "name": "lr-sweep", "name_customized": True, "description": ""}
+    api = FakeApi(entities={f"/v1/runs/{RUN}": dict(row)})
+    out = _decider(api, tmp_path).decide(_raw("describe", name="Learning-rate sweep", description="what it is"))
+    assert out["op"][2] == {"description": "what it is", "authored_by": "agent"}
+    api.entities[f"/v1/runs/{RUN}"] = dict(row)
+    worker_mod.publish(api, _proposal("describe", ["DESCRIBE", f"/v1/runs/{RUN}",
+                                                   {"name": "Learning-rate sweep", "description": "what it is",
+                                                    "authored_by": "agent"}]))
+    assert api.writes[-1][:3] == ("PATCH", f"/v1/runs/{RUN}", {"description": "what it is", "authored_by": "agent"})
+
+
 def test_tags_are_added_never_removed_built_from_a_fresh_read(tmp_path):
     api = FakeApi(entities={f"/v1/runs/{RUN}": {"id": RUN, "tags": ["baseline"]}})
     decider = _decider(api, tmp_path)
