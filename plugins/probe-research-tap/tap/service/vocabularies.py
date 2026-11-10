@@ -133,11 +133,15 @@ class Cap:
     #: `api.call` with `stream: true` (the live events' SSE, rl-next W55): a held response whose
     #: body goes into a socket the caller passed, as it comes.
     SDK_RELAY_STREAM = "sdk.relay.stream.v1"
+    #: `mailbox.post` keeps a message's `partial` (S1: `Message.from_dict` reads it). An older
+    #: service rebuilds the post without it, so a worker posts a partial answer here only when the
+    #: hello says this, and otherwise writes the file itself (R13).
+    MESSAGE_PARTIAL = "message.partial"
 
 
 CAPS = frozenset({
     Cap.ACTION_SANDBOX, Cap.UPDATE_APP, Cap.SETTINGS_KEEPER, Cap.HOOKS_PROXY, Cap.HOOKS_PROXY_V2,
-    Cap.OUTBOX_JOURNAL, Cap.SDK_RELAY, Cap.SDK_RELAY_STREAM,
+    Cap.OUTBOX_JOURNAL, Cap.SDK_RELAY, Cap.SDK_RELAY_STREAM, Cap.MESSAGE_PARTIAL,
 })
 #: What a delivery service (the SDK's own, `probe.sdk.delivery.service`) serves: the SDK's parts only.
 DELIVERY_CAPS = frozenset({Cap.OUTBOX_JOURNAL, Cap.SDK_RELAY, Cap.SDK_RELAY_STREAM})

@@ -13,7 +13,7 @@ Writes QUEUE: the daemon's answer must show it, or the run closed via
 ## READS:
 
 The Probe daemon reads the team's work for you. Ask it ONCE per drawing:
-`probe ask --wait '<question>'` with a long shell timeout - single quotes so a
+`probe ask --full '<question>'` with a long shell timeout - single quotes so a
 backtick does not run as a command, and no `'` inside the question. Name the
 project when a read gave it to you, otherwise ask about this session's work;
 never guess a name. Ask for every fact the two tables below need, each with its
