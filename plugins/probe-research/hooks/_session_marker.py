@@ -2048,6 +2048,8 @@ RECORDS_LESS_FLAGS = frozenset({"--who-records", "--no-capture", "--no-tracking"
 RECORDS_LESS_PROFILE = "runs"
 #: The commands those flags are read on.
 RECORDS_LESS_FLAG_HEADS = frozenset({"install", "wizard", "setup"})
+#: The install's Recommended: it picks auto mode (`grants_auto`).
+RECOMMENDED_FLAG = "--recommended"
 
 #: Writes `--directed` admits in every chat state, `read` and `off` included
 #: (D51 as amended by T2): bringing in past work the person consented to.
@@ -2199,9 +2201,10 @@ def records_less(args: "list[str]") -> "str | None":
 
 def grants_auto(args: "list[str]") -> "str | None":
     """What these args (after `probe`) run that turns auto mode on (`session control auto`, `--session-control
-    auto`), spelled for a refusal, else None. It hands every chat's switch to the agent, so from an agent it
-    runs only with `--directed`, after the person asked (`AUTO_CONTROL_DENY`). A word the shell still
-    expands there may be `auto`, so it counts."""
+    auto`, or `--recommended` naming no `--session-control`: Recommended picks auto since 2026-11-09), spelled for
+    a refusal, else None. It hands every chat's switch to the agent, so from an agent it runs only with
+    `--directed`, after the person asked (`AUTO_CONTROL_DENY`). A word the shell still expands there may be
+    `auto`, so it counts."""
     words = command_words(args)
     if " ".join(words[:2]) == "session control" and len(words) > 2:
         value = words[2]
@@ -2210,9 +2213,12 @@ def grants_auto(args: "list[str]") -> "str | None":
         return None
     if not words or words[0] not in RECORDS_LESS_FLAG_HEADS:
         return None
-    for value in _flag_values(args, "--session-control"):
+    controls = _flag_values(args, "--session-control")
+    for value in controls:
         if value.strip().lower() == CONTROL_AUTO or not _SHELL_EXPANSION_CHARS.isdisjoint(value):
             return "probe " + words[0] + " --session-control " + value
+    if not controls and RECOMMENDED_FLAG in args:
+        return "probe " + words[0] + " " + RECOMMENDED_FLAG
     return None
 
 
@@ -5773,20 +5779,31 @@ def write_recorder(source: str, value: str) -> Path:
 
 
 #: Who sets a chat's switch (probe auto mode, 2026-11-07): `auto`, the main agent, by
-#: the work, until the researcher types `/probe` in that chat; `manual` (the key
-#: absent), the researcher, as before. Top level, beside the new-chat default.
+#: the work, until the researcher types `/probe` in that chat; `manual`, the researcher.
+#: Auto is the default (the key absent) since 2026-11-09 (Richard: "switch everyone to
+#: default to auto mode incl existing users"); a choice is stored, manual included.
 CONTROL_KEY = "session_control"
 CONTROL_AUTO = "auto"
 CONTROL_MANUAL = "manual"
 CONTROLS = (CONTROL_AUTO, CONTROL_MANUAL)
 
 
-def load_session_control(config: "dict | None" = None) -> str:
-    """This machine's control: `auto` only when the config says so, else `manual`. Never raises."""
+def get_stored_session_control(config: "dict | None" = None) -> "str | None":
+    """The control this machine's config stores (`auto` or `manual`), or None: never chosen. A word this copy does
+    not know (a hand edit, a newer Probe's) is manual, as before auto became the default: the agent gets the switch
+    only by default or by `auto`. Never raises."""
     data = _read_config() if config is None else config
     defaults = data.get(DEFAULTS_KEY) if isinstance(data, dict) else None
     value = defaults.get(CONTROL_KEY) if isinstance(defaults, dict) else None
-    return CONTROL_AUTO if value == CONTROL_AUTO else CONTROL_MANUAL
+    if value is None:
+        return None
+    word = value.strip().lower() if isinstance(value, str) else value
+    return word if word in CONTROLS else CONTROL_MANUAL
+
+
+def load_session_control(config: "dict | None" = None) -> str:
+    """This machine's control: `manual` only when the config says so, else `auto` (the default). Never raises."""
+    return CONTROL_MANUAL if get_stored_session_control(config) == CONTROL_MANUAL else CONTROL_AUTO
 
 
 def is_auto_machine(config: "dict | None" = None) -> bool:
@@ -5795,7 +5812,18 @@ def is_auto_machine(config: "dict | None" = None) -> bool:
 
 def save_session_control(value: str) -> Path:
     """Persist the control; returns the config path. Same file, lock and loader as
-    `write_recorder`; `manual` removes the key (absent is manual)."""
+    `write_recorder`. Both values are stored: absent is the default (auto), never a choice."""
+    _store_session_control(value, is_absent_only=False)
+    return config_path()
+
+
+def save_session_control_if_absent(value: str) -> bool:
+    """`save_session_control` only while the config stores no control, decided under the config lock, so a choice
+    saved meanwhile is never written over (the Probe service's keeper). True when written."""
+    return _store_session_control(value, is_absent_only=True)
+
+
+def _store_session_control(value: str, *, is_absent_only: bool) -> bool:
     if value not in CONTROLS:
         raise ValueError(f"expected one of {CONTROLS}, got {value!r}")
     from probe.sdk.config import (  # restructure-guard-ok: released hooks run this copy against older CLIs
@@ -5815,14 +5843,13 @@ def save_session_control(value: str) -> Path:
             "current_context": DEFAULT_CONTEXT,
             "contexts": {},
         }
+        if is_absent_only and get_stored_session_control(data) is not None:
+            return False
         defaults = data.get(DEFAULTS_KEY)
         data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
-        if value == CONTROL_AUTO:
-            data[DEFAULTS_KEY][CONTROL_KEY] = CONTROL_AUTO
-        else:
-            data[DEFAULTS_KEY].pop(CONTROL_KEY, None)
+        data[DEFAULTS_KEY][CONTROL_KEY] = value
         _save_json_file(target, data, private=True, _resolved=True)
-    return path
+    return True
 
 
 #: Images pasted into a prompt upload with the captured session (2026-10-12):
