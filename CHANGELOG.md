@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.510.0
+
 - **verl validation samples link to their live samples, every verl sample says why its generation stopped, and Miles' live rows say their engine is the router (rl-scale C4-C6).**
   - **Validation links:** each validation sample now names the agent loop it came from (in `probe samples live` and on the sample), in V1 and legacy, with reward loop workers or scored colocated. The loop carries its key in `reward_extra_info`, so verl's validation metrics are unchanged, but a run with `trainer.validation_data_dir` gets two more columns in its dump: `probe_live_key` and `probe_stop_reason`.
   - **Stop reasons:** the engine's stop reason reaches each train and validation sample: `aborted` reads `finish_reason: abort` with `error_reason: engine_abort`, `stop`/`tool_calls` read `stop`, `length` reads `length`, `error` reads `error` with `error_reason: unknown`, and an unknown reason reads `other` with its text in `extras.stop_reason`. vLLM's `completed` keeps the length rule, and a response that filled `data.max_response_length` reads `length` even when the engine said `stop` or `tool_calls` (a multi-turn tool loop cut at the limit), so it counts as cut off, as in verl's own `response_length/clip_ratio`.
