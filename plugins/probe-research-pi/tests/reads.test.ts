@@ -82,6 +82,17 @@ describe("pi delivery of the daemon's messages", () => {
     expect(box.waiting().map(([, m]) => m.id)).toEqual(["m1"]);
   });
 
+  it("wakes an idle pi for an answer as late as the reader may take (its 600 s ask timeout)", () => {
+    // reads_hook's Stop wake gives up at WAKE_ASK_MAX_S (600 s); pi's poller has no ceiling of its own.
+    const now = Date.now() / 1000;
+    mkdirSync(join(tmp, "reads", "asks", SID), { recursive: true });
+    writeFileSync(join(tmp, "reads", "asks", SID, "aq1.json"), JSON.stringify({
+      id: "aq1", session: SID, question: "q", asked_at: now - 599,
+    }));
+    publish("a1", "answer", { ask: "aq1", question: "q", text: "late" }, Math.floor(now));
+    expect(box.deliver(box.currentTurn(), "pi poller", false)).toHaveLength(1);
+  });
+
   it("tells the researcher once per change of the reader's state", () => {
     status("ok");
     expect(box.researcherNotice()).toBeNull();

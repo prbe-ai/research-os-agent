@@ -24,7 +24,7 @@ same files through both.
     Stop               the wake, only in an interactive session: while an ask (or
                        a request to the writer, `probe ask --writer`) is open,
                        and while the session's daemon worker runs. Waits in the
-                       background (Claude Code's `asyncRewake`) up to WAKE_MAX_S
+                       background (Claude Code's `asyncRewake`) up to WAKE_ASK_MAX_S
                        for an open ask's end, and up to ALERT_WAKE_MAX_S for a
                        run alert or an inbox message; claims what came, writes it to stderr and exits
                        2, which wakes the model with it. A new prompt, a tool call
@@ -39,7 +39,7 @@ same files through both.
                        files every WAKE_POLL_S / ALERT_POLL_S, as before.
                        A hold (POLICY_HOLD, the service's run for a harness whose
                        turn end waits on the hook: Cursor) waits only for the
-                       agent's own asks, up to WAKE_MAX_S, never at the end of a
+                       agent's own asks, up to HOLD_MAX_S, never at the end of a
                        turn its own reply started, and writes a receipt for the
                        service to settle once that reply is built (harness-parity H8).
 
@@ -191,11 +191,16 @@ UNASKED_WINDOW_S = 10 * 60
 
 #: The Stop waiter looks this often...
 WAKE_POLL_S = 0.5
-#: ...for at most this long for an open ask's end.
-WAKE_MAX_S = 150.0
+#: ...for at most this long for an open ask's end: as long as the reader may take,
+#: its ask timeout (`daemon/lanes/reader.py` READ_ASK_TIMEOUT_S), past which the ask
+#: is closed as failed.
+WAKE_ASK_MAX_S = 600.0
+#: A hold (POLICY_HOLD: Cursor, whose turn end waits on the hook) waits at most this
+#: long: its stop hook's budget is 160 s (`cursor_agent/hook_routes.py` WAIT_TIMEOUTS).
+HOLD_MAX_S = 150.0
 #: A request to the writer (`probe ask --writer`, ids "w...") is answered or failed
 #: by the end of its run, at most twice the writer's 45-minute timeout
-#: (`requests.py`): the waiter waits for it this long, at ALERT_POLL_S past WAKE_MAX_S.
+#: (`requests.py`): the waiter waits for it this long, at ALERT_POLL_S past WAKE_ASK_MAX_S.
 REQUEST_WAKE_MAX_S = 95 * 60.0
 REQUEST_ID_PREFIX = "w"
 #: With no ask left to wait for, it looks for run alerts this often...
@@ -1733,18 +1738,21 @@ def _slice_options() -> dict:
     return {"wait_id": wait_id, "slice_s": seconds, "policy": policy}
 
 
-def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_POLL_S,
+def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE_POLL_S,
             alert_max_s: float = ALERT_WAKE_MAX_S, alert_poll_s: float = ALERT_POLL_S,
             worker_grace_s: float = WORKER_GONE_GRACE_S, request_max_s: float = REQUEST_WAKE_MAX_S,
             recheck_s: float = SERVICE_RECHECK_S, retry_s: float = SERVICE_RETRY_S,
             wait_id: "str | None" = None, slice_s: "float | None" = None, policy: str = POLICY_WAKE) -> int:
     """The Stop wake: 2 with the wake's text on stderr, else 0. A slice
     (`wait_id`, `slice_s`: the service's run of a frozen hook shim's wake) may
-    also end SLICE_OVER: nothing yet, its state kept for the next slice. `policy`
+    also end SLICE_OVER: nothing yet, its state kept for the next slice. `max_s`
+    (an ask's ceiling) defaults to WAKE_ASK_MAX_S, a hold's to HOLD_MAX_S. `policy`
     POLICY_HOLD: the agent's own asks only (no writer request, run alert, inbox
     or server message), never past `max_s`, never for a turn its reply started."""
     sid = _session(payload)
     hold = policy == POLICY_HOLD
+    if max_s is None:
+        max_s = HOLD_MAX_S if hold else WAKE_ASK_MAX_S
     # A hold's route picks its stops itself (`WaitRoutes.takes`): Cursor's headless `agent -p` fires none.
     if not sid or no_wake() or not (hold or attended()) or from_helper_agent(payload):
         return 0
