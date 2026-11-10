@@ -18,7 +18,7 @@ Never type a number. Name what to show; the server reads the values. `probe visu
 
 # Kinds
 
-- `table`: a row per run, configs and scores (`columns`). The default for a sweep.
+- `table`: a row per run, configs and scores (`columns`). The default for a sweep. Each row already shows its run's name (the Run column): never add a `run` `name` column.
 - `bar` / `stacked_bar`: one score across runs, a config or a dimension (`x`, `measures`).
 - `scatter`: one value against another, a point per run (`x`, `y`).
 - `heatmap`: a sweep grid, two configs and a score per cell (`x`, `y`, `value`).
