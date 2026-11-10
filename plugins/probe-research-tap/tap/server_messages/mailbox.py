@@ -53,7 +53,7 @@ def build_message(session_id: str, message: ServerMessage, now: float | None = N
         "kind": KIND_SERVER, "text": message.text[:MESSAGE_MAX_CHARS], "ask": None, "question": None,
         "reason": None, "made_at": made, "expires_at": made + SERVER_TTL_S, "origin_turn": None,
         "keep": False, "alerts": None, "origin": None, "daemon_instance": None,
-        "severity": message.severity.value, "audience": message.audience.value,
+        "severity": message.severity.value, "audience": message.audience.value, "partial": False,
     }
 
 
