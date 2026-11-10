@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.509.0
+
 - **A verl SFT job resumes its own run.** verl's SFT trainer saves through `CheckpointHandler.save_checkpoint`, which Probe did not wrap, so its checkpoints carried no record of their run and an SFT job on its default `experiment_name: test` opened a new run on every resume. The process that logs (its session) now stamps each `global_step_N/`, before a re-save into an existing folder and after the save, as PPO saves are, and a resume reopens the run that wrote it (checkpoints saved before this release still open a new run).
 
 ## 0.508.0
