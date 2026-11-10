@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.498.0
+
 - **`probe doctor` flags a plugin older than the auto default.** On an auto machine it names a Claude Code or Codex Probe plugin older than 0.257.0, whose hooks still read a missing `session_control` as manual (`probe update`).
 - **Launcher 0.38.0: the agent install needs CLI 0.495.0.** An older CLI's Recommended stored manual while the install pages recommend Auto; the launcher now updates the CLI first.
 - **The agent's PATH gets only `probe`.** When `probe` is missing from Claude Code's PATH, the session-start hook now adds a folder in Probe's state holding just a `probe` link (`<state>/probe/agent-bin`), not the CLI's own folder, where uv keeps Probe's python and uvicorn.
