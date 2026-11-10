@@ -1570,7 +1570,12 @@ def _make_auto_line(payload: dict, session_id: str) -> "str | None":
         return None
     word = _session_marker.get_auto_state_word(session_id, _state(session_id, _payload_cwd(payload)))
     prompt = payload.get("prompt")
-    spent = _session_marker.get_budget_inline_state(session_id, _session_marker.STATE_DAEMON) is not None
+    # Not beside a budget stretch's own notice still to come: that notice opens with the allowance.
+    marker = _session_marker.inline_marker(session_id) or {}
+    notice_names_it = (marker.get("reason") == _session_marker.BUDGET_INLINE_REASON
+                       and _session_marker.inline_notice_due(session_id) is not None)
+    spent = (_session_marker.get_budget_inline_state(session_id, _session_marker.STATE_DAEMON) is not None
+             and not notice_names_it)
     return _session_marker.make_auto_prompt_line(
         word, _session_marker.claim_first_prompt(session_id), prompt if isinstance(prompt, str) else "",
         is_allowance_spent=spent)

@@ -111,6 +111,19 @@ do
 done
 
 export PROBE_BIN="${PROBE_BIN:-probe}"
+# The agent's own shell needs `probe` too: a Claude Code started from a terminal opened before
+# the install has no ~/.local/bin on PATH, so its `probe session state on` failed "command not
+# found" (live auto-mode test, 2026-11-09). Claude Code sources $CLAUDE_ENV_FILE before each Bash
+# call: add the CLI's folder there, once, only when PATH lacks `probe`. Codex runs a login shell.
+# Only a folder found above (absolute): the bare `probe` fallback names the session's folder, which
+# the agent can write. Last on PATH: uv's tool folder holds its own python, never the agent's.
+case "$PROBE_BIN" in /*) _probe_found=1 ;; *) _probe_found="" ;; esac
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "$_probe_found" ] && [ -x "$PROBE_BIN" ] \
+  && ! command -v probe >/dev/null 2>&1; then
+  _probe_path_line="$(printf 'export PATH="${PATH:+$PATH:}"%q' "$(dirname "$PROBE_BIN")")"
+  grep -qxF "$_probe_path_line" "$CLAUDE_ENV_FILE" 2>/dev/null \
+    || printf '%s\n' "$_probe_path_line" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+fi
 # The running harness's own manifest (.claude-plugin, .codex-plugin, .kimi-plugin),
 # from the harness registry beside this script.
 MANIFEST_DIR="$("$PY" "$PLUGIN_ROOT/hooks/_hook_harness.py" manifest-dir 2>/dev/null || true)"

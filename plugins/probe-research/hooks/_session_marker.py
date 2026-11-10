@@ -2464,7 +2464,7 @@ ALLOWANCE_SPENT_INLINE = ALLOWANCE_SPENT + " Probe's `on` is inline here: you re
 
 #: The chat's first researcher prompt, at its seeded default (`{state}`).
 AUTO_FIRST_PROMPT_LINE = (
-    "Probe is {state} here (the researcher's default, auto mode). Set it before you start: ML work, data included, "
+    "Probe is {state} here (the researcher's default, auto mode). Set it first: ML work, data included, "
     "is `on`."
 )
 AUTO_OFF_LINE = "Probe is off here (auto mode). If this request is ML work, data included, run `probe session state on` first."
@@ -2615,10 +2615,11 @@ def touches_approvals(tool_name: object, tool_input: object, cwd: "str | None" =
 #: forging `on (inline)`, say -- would turn the guard off. Only the researcher's
 #: `/probe` switch moves that state.
 DENY_REASON_SESSIONS = (
-    "`{tool}` would write {path}, where Probe records which conversation this is and whether the "
+    "`{tool}` would touch {path}, where Probe records which conversation this is and whether the "
     "researcher has it recording -- the files this guard reads to decide. Changing them yourself "
-    "would turn the guard off, so it was refused before it ran. Only the researcher's `/probe` "
-    "switch moves that state; do not write there, and do not route around this."
+    "would turn the guard off, so a command naming that folder is refused before it runs, reads "
+    "included. To read this chat's state, run `probe session status`. Only the researcher's "
+    "`/probe` switch moves that state; do not write there, and do not route around this."
 )
 
 #: The sessions folder as a command's text names it.
