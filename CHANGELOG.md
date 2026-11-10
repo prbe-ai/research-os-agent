@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The writer's `run_end` trace line says how many writes the run landed (`writes`).** It counts the writes that ran during the run (logbook `status = 'ran'`, as `probe daemon status` counts them; a held write approved after the run ends belongs to no run and is not counted), 0 when nothing landed, so the server's PostHog record of each run says whether it recorded anything. The reader's run_end is unchanged.
+
 ## 0.510.0
 
 - **verl validation samples link to their live samples, every verl sample says why its generation stopped, and Miles' live rows say their engine is the router (rl-scale C4-C6).**
