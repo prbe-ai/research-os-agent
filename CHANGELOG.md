@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.495.0
+
 - **Auto mode is the default, for existing computers too.** A computer that never chose who turns Probe on in each chat is now in auto mode: the coding agent turns Probe on, off, read or inline by the work, until the researcher types `/probe` in that chat (Richard, 2026-11-09). `manual` is now stored when chosen (it used to be the missing key), and the Probe service keeps a manual choice an older CLI recorded in `settings.json` (by a person, an agent or the app, or adopted after a change) by writing it into the config before the new default can be adopted over it. `install --recommended` picks auto (it picked manual since 0.461.0); from an agent it now needs `--directed`, as `--session-control auto` does, and where the team refuses the daemon it keeps the stored switch. The managed CLAUDE.md / AGENTS.md block gains the auto guide at the next sync; the status line drops `, manual` for those chats. `probe session control manual` turns it back.
 - **Claude Code finds `probe` even when its terminal predates the install.** A Claude Code started from a shell without `~/.local/bin` on its PATH could not run `probe session state on` (`command not found`), so an auto chat stayed off and nothing was recorded (live auto-mode test, 2026-11-09). The session-start hook now adds the CLI's folder to the agent's shell through Claude Code's `CLAUDE_ENV_FILE`, once, at the end of PATH, only when PATH lacks `probe` and the CLI was found in its own folder. Codex runs a login shell and already found it.
 - **An auto chat's first prompt says "Set it first".** It said "Set it before you start", and Codex opened a web page before turning Probe on. 18 words instead of 20.
