@@ -1,6 +1,6 @@
 ---
 name: write-pane
-description: Writes a pane - one live visual (a leaderboard, before/after images or documents, a task table, a chart) on a project's or experiment's Probe page, redrawn from its runs' data each time it opens and while a run trains. Use when results would read better as a picture than as numbers, for per-task eval results across runs, and to show the PDFs or Word files a run wrote.
+description: Writes a pane - one live visual the dashboard's own charts cannot draw (before/after images or documents, a per-task table, why tasks did not finish) on a project's or experiment's Probe page, redrawn from its runs' data each time it opens and while a run trains. Use for per-task eval results across runs and to show the PDFs or Word files a run wrote. A score compared across runs is a chart in an experiment's Metrics center (overview-visuals), never a pane.
 ---
 # Write a pane
 
@@ -10,8 +10,24 @@ or the runs someone picked to compare), so new runs show up without a rewrite. P
 of the project's or experiment's page; summary rewrites never touch them.
 
 Write one when the best visual depends on the task: before/after images for a vision task, a
-leaderboard of variants, a table of tasks, why tasks did not finish. Skip it for a curve the
-dashboard already draws.
+table of tasks, why tasks did not finish.
+
+Never draw a chart in a pane: its own bar or line chart looks unlike every other chart on the page.
+A curve over steps is already in the metric section. A score compared across runs (a leaderboard, by
+a config, or by a group such as document length) is a `table` or `bar` in the Metrics-center visuals
+of the experiment whose runs recorded it (`overview-visuals`); the project page shows each
+experiment's charts too. A research project and its experiments carry no charts: scored runs belong
+in an evaluation, training or general project.
+
+1. The run records the score once per group, under its own key, with a dimension of a few values:
+   the group's mean, never one call per task and never a task id as the dimension
+   (`probe.log({"eval/score_by_length": mean}, dimensions={"length": "1-2 pages"})`; for a run that
+   already ended, `probe log RUN eval/score_by_length=0.74 --dim 'length=1-2 pages' --derived --producer <what computed it> --step <its last step>`).
+2. Then chart it: a `bar` with `x: {dimension: "length"}` (`probe visuals set`; where the daemon
+   records, ask its writer: `probe ask --writer "<the chart>"`).
+
+A pane shows per-task rows, files and the server's `totals` as they are; it never averages
+`samples` rows into a per-run or per-group score.
 
 ## 1. Record per-task results
 
@@ -37,8 +53,7 @@ From a shell, `probe span add RUN --type rollout ...` prints the span id; upload
 ```json
 {"runs": "scope",
  "data": [
-  {"id": "board", "source": "runs", "keys": ["eval/score"], "config": ["lr", "model"]},
-  {"id": "loss", "source": "series", "keys": ["train/loss"]},
+  {"id": "variants", "source": "runs", "config": ["lr", "model"]},
   {"id": "tasks", "source": "samples", "fields": ["attributes.score"], "counts": ["attributes.unfinished_reason"]},
   {"id": "after", "source": "files", "prefix": "eval/", "name": "*.png", "span": "rollout"}]}
 ```
@@ -70,8 +85,8 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
 
 ## 3. Write the code
 
-- `PROBE.runs('board')`, `PROBE.series('loss')`, `PROBE.samples('tasks')`, `PROBE.files('after')`
-  return that entry. Name each id literally and read every entry the recipe has.
+- `PROBE.runs('variants')`, `PROBE.samples('tasks')`, `PROBE.files('after')` (and `PROBE.series(id)`
+  for a `series` entry) return that entry. Name each id literally and read every entry the recipe has.
 - `PROBE.image(row)` resolves to a `data:` URL; `PROBE.text(row)` to text (CSV too);
   `PROBE.json(row)` to parsed JSON. They read only rows of the pane's own `files` entries. Each can
   reject (`budget`, `not_in_files`, `too_large`, `unavailable`): catch it and draw a placeholder, or
