@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.496.0
+
 - **Run commands to an HF Trainer or Lightning script work from the start, and a checkpoint asked for answers with its artifact.** In a run's first ~25 s, `probe run send RUN config` and `stop` were refused "no handler" while `checkpoint` was taken: the integration declared its three kinds one at a time, each sent its own beat, and the one saying only `checkpoint` could land last. A run's beats now go one at a time, each saying what is registered as it sends, and the integration declares its kinds on one beat. A commanded checkpoint is recorded first, carries `meta.command_id`, and the answer names its `artifact_id` (with its step and path); Lightning's commanded save is now recorded at all (through `ProbeLogger`, in its `checkpoints=` mode). A config asked for (`probe run send ... config`, `probe run resume --config`) no longer prints "config 'lr' changed ... pass allow_val_change=True".
 
 - **An imported W&B run's console log is its log.** `probe run logs` on a run the W&B import copied said "No log: this run didn't save any output.": W&B's `output.log` went up as a plain `probe/run.log` file. It now lands as output capture saves a live run's log (the same name and `capture` mark), so `probe run logs` and the Logs tab read it, and Files no longer lists it. A run its script logged beside W&B keeps the log it saved itself.
