@@ -472,11 +472,12 @@ run.on(CommandKind.STOP, lambda: trainer.request_stop())         # graceful; `st
 class TrainerCommand(StrEnum):
     EVAL_NOW = "eval_now"
 
-run.on(TrainerCommand.EVAL_NOW, lambda payload: evaluate(**payload))  # `probe run send RUN eval_now --json '{...}'`
+run.on(TrainerCommand.EVAL_NOW, lambda payload: evaluate(**payload))  # `probe run send RUN eval_now --args '{...}'`
 ```
 
 A kind is an enum member, never a string. An ask the script registered nothing for is
-refused at once, with why; `probe run commands RUN` lists what was asked and answered.
+refused at once, with why; `probe run commands RUN` lists what it accepts now and what
+was asked and answered.
 
 The HF Trainer callback does checkpoint, config (`lr`) and stop for you; with Lightning add
 `ProbeCommands()` (`probe.integrations.lightning_commands`) beside `ProbeLogger`. A plain

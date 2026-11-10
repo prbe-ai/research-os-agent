@@ -75,16 +75,24 @@ match images by `name`, `*.png`). Each source's rows, as the server returns them
 See what it resolves to before writing code:
 
 ```
-probe pane data <project-or-experiment> --data recipe.json [--runs <run-id>,<run-id>]
+probe pane data <project-or-experiment> --recipe recipe.json [--runs <run-id>,<run-id>]
 ```
 
-Each entry comes back with `state` (`ok`, `partial`, `too_large`) and `rows`. A samples entry adds
-`totals`: per run, `total` and `counts{"status" or field: {values: [{value, count}], other}}` over
-ALL its rollout spans, exact even when rows are cut. Spans without the field count under
-`value: null`: drop that bucket when counting reasons.
+It prints a preview: each entry's `state` (`ok`, `partial`, `too_large`), `rows_total` and first
+rows, a line's first and last points (`points_total`), long values cut; `--full` prints it all. A
+samples entry adds `totals`: per run, `total` and `counts{"status" or field: {values: [{value,
+count}], other}}` over ALL its rollout spans, exact even when rows are cut. Spans without the field
+count under `value: null`: drop that bucket when counting reasons.
+
+`unmatched` names the keys no readable run has, and a samples entry's `unseen_fields` the fields not
+in the `rows_read` rows read: a typo, or not logged yet (`state` stays `ok`). Take real names from a
+run: `probe run series <run-id>` lists its metric keys, `probe span list <run-id> --type rollout
+--limit 3` shows its samples' `attributes` (not `probe samples`: those are RL samples).
 
 ## 3. Write the code
 
+- A pane is an HTML fragment, the inside of a page: no `<!doctype>`, `<html>`, `<head>`, `<body>`
+  or `<!-- comments -->`. Start with your markup, `<style>` and `<script>` tags.
 - `PROBE.runs('variants')`, `PROBE.samples('tasks')`, `PROBE.files('after')` (and `PROBE.series(id)`
   for a `series` entry) return that entry. Name each id literally and read every entry the recipe has.
 - `PROBE.image(row)` resolves to a `data:` URL; `PROBE.text(row)` to text (CSV too);
@@ -175,17 +183,32 @@ ALL its rollout spans, exact even when rows are cut. Spans without the field cou
 
 ## 5. Push it
 
+Check first, then save:
+
 ```
-probe pane push <project-or-experiment> <slug> --html pane.html --data recipe.json [--title "Before / after"]
+probe pane push <project-or-experiment> <slug> --html pane.html --recipe recipe.json --check
+probe pane push <project-or-experiment> <slug> --html pane.html --recipe recipe.json [--title "Before / after"] [--position 0]
 ```
 
-The same slug replaces the pane, so pushing again is safe. A project or experiment holds 8. A
-refusal names the rule the page broke: fix it and push again. A push first opens the pane in a
-browser at every width; a refusal from that names the width, state and error (fix it and push
-again), and a warning means the check could not run and the pane was saved unchecked. The push
-prints the page the pane is on. `probe pane data <project-or-experiment> <slug>` reads a saved pane's data, `probe pane list
-<project-or-experiment>` lists the panes, and `probe pane get <project-or-experiment> <slug>`
-prints one's HTML and recipe.
+`--check` saves nothing and reports the same problems a push would, all at once, each with its line:
+fix them all, check again, then push without it. A refused push names the same problems.
+
+The same slug replaces the pane (the answer says `replaced`, with the `previous_updated_at`), so
+pushing again is safe. A project or experiment holds 8. A new pane goes last; `--position N` sets
+its place, 0 first. A push first opens the pane in a browser at every width; a refusal from that
+names the width, state and error (fix it and push again), and a warning means the check could not
+run and the pane was saved unchecked. The answer's `url` is the page the pane is on. Add `--json`
+to any pane command for a typed refusal (`code` and message) on stdout.
+
+To change a pane later, round-trip it: `probe pane get <project-or-experiment> <slug> --out DIR`
+writes `DIR/<slug>.html` and `DIR/<slug>.json` (its recipe); edit them and push both back. A
+re-push without `--title` keeps the title. `pane get` alone prints the pane's details without its
+HTML (`html_chars`); `--html` prints the HTML too. `probe pane data <project-or-experiment> <slug>`
+reads a saved pane's data and `probe pane list <project-or-experiment>` lists the panes.
+
+`probe pane rm <project-or-experiment> <slug> --yes` deletes a pane for good: there is no trash,
+so run `pane get ... --out DIR` first to keep a copy. Run it only when the researcher asks (an
+agent cannot answer its prompt, so it needs `--yes`). Its runs and their data are untouched.
 
 Pin a view only when the researcher asks, and once: pins sit at the top of the project for the
 whole team, 24 at most, so pinning and unpinning take `--directed`. `probe pane push ... --pin
@@ -202,3 +225,29 @@ client = probe.Client()
 client.save_pane("vision-evals", "before-after", html, recipe, title="Before / after")
 client.read_pane_data("vision-evals", recipe)  # what `probe pane data` prints
 ```
+
+## 6. Limits
+
+Past one of these a push is refused, a data read comes back `partial` or `too_large`, or a `PROBE`
+file read rejects `too_large`:
+
+| Limit | Value |
+|---|---|
+| Panes in one project or experiment | 8 |
+| A pane's HTML | 300,000 characters |
+| A pane's title | 200 characters |
+| Entries in one recipe | 16 |
+| Runs a recipe reads (a scope's newest) | 50 |
+| Keys in one `runs` or `series` entry | 32 |
+| Fields in one `samples` entry | 32 |
+| `counts` fields in one `samples` entry, beside status | 3 |
+| Sample rows in one entry | 5,000 |
+| File rows in one entry | 2,000 |
+| Points in one series line | 300 |
+| One pane's resolved data | 2 MiB |
+| Time to resolve one pane's data | 5 s |
+| One image `PROBE.image` reads | 10 MiB |
+| One file `PROBE.text` or `PROBE.json` reads | 1 MiB |
+| One file `PROBE.bytes` reads | 25 MiB |
+| Slug | `^[a-z0-9][a-z0-9-]{0,62}$`: lowercase words joined by hyphens |
+| Recipe entry `id` | `^[A-Za-z][A-Za-z0-9_-]{0,63}$` |
