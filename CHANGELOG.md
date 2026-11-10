@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The instrument-code skill says how verl and SkyRL resume.** A library-default name gets a key of its own, each save writes `global_step_k/probe_run.json`, and a resume reopens the attempt it names; an unstamped checkpoint on a default name (an older CLI's, verl SFT's: its saves are not stamped yet) opens a new run, and the warning says so. SkyRL `latest` on a bucket `ckpt_path` opens a new attempt.
+
 ## 0.498.0
 
 - **`probe doctor` flags a plugin older than the auto default.** On an auto machine it names a Claude Code or Codex Probe plugin older than 0.257.0, whose hooks still read a missing `session_control` as manual (`probe update`).
