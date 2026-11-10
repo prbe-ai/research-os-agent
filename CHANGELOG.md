@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A verl launch with no `experiment_name` gets a run key of its own.** `python -m probe.integrations.verl.launch` with an empty `trainer.experiment_name` keyed every such job `verl:<project>/`, so a resume could rewind another job's run; it now mints `verl:<project>/@<8 hex>` like a library-default name, and its checkpoints record it. A name passed in the launcher's or session's init kwargs keys the run by its text (`verl:<project>/<name>`) over no experiment or a shipped default (`gsm8k`, `test`). Resuming such a job from an unstamped checkpoint (saved before 0.497) continues in a new run, with a warning, instead of rewinding `verl:<project>/`; a 0.497-0.501 checkpoint reopens the run that saved it, except for a job that passes a name in its init kwargs over no experiment or a shipped default: its key is now the name's, so it continues in a new run. SkyRL the same way: an empty `trainer.run_name` now mints `skyrl:<project>/@<8 hex>` instead of keying `skyrl:<project>/`.
+
 ## 0.501.0
 
 - **Auto mode's guide fits computers where the agent records its own work.** Where no Probe daemon runs (who records is `agent`: chosen, set before the daemon was the default, or the team said no to it), CLAUDE.md / AGENTS.md said `on` meant "the daemon records it and answers `probe ask`". It now says no daemon runs there: `on` is the agent recording as it goes (`track-work`), `read` looks up through the MCP, and there is no `inline` item. The managed block's version goes to 56, so installed blocks are rewritten at the next sync.

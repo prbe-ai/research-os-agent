@@ -150,10 +150,10 @@ uv run --isolated --extra fsdp --with probe-research -m skyrl.train.entrypoints.
 - **Harbor inside SkyRL.** When the generator is SkyRL's `HarborGenerator`, each Harbor trial merges into its
   SkyRL sample (needs `probe-research[cli]` beside SkyRL). SkyRL's Harbor mains are not that entrypoint (above),
   so this needs a custom experiment; it is unit-tested only.
-- **Run identity and resume**: `skyrl:<trainer.project_name>/<trainer.run_name>`; SkyRL's default `test_run` gets
-  a key of its own (`...@<8 hex>`). Each save writes `probe_run.json` into `global_step_k/`; `trainer.resume_mode`
+- **Run identity and resume**: `skyrl:<trainer.project_name>/<trainer.run_name>`; SkyRL's default `test_run` (or an
+  empty `run_name`) gets a key of its own (`...@<8 hex>`). Each save writes `probe_run.json` into `global_step_k/`; `trainer.resume_mode`
   `latest` or `from_path` reopens the attempt it names, rewound to k+1. A checkpoint without it (an older CLI's,
-  a `from_path` bucket path) resumes a name you chose by name; on `test_run` it opens a new run. `latest` on a
+  a `from_path` bucket path) resumes a name you chose by name; on `test_run` or an empty name it opens a new run. `latest` on a
   bucket `ckpt_path` opens a new attempt (Probe cannot read the bucket's pointer).
 - **Worker credential**: `PROBE_SKYRL_WORKER_TOKEN`.
 
@@ -170,10 +170,10 @@ python -m probe.integrations.verl.launch -- python3 -m verl.trainer.main_ppo \
 - The launcher puts `probe` in `trainer.logger` (`['console','probe']`) and takes W&B out, with a warning.
   Each training batch is read in memory before the actor update: no `trainer.rollout_data_dir` needed.
 - Not recorded yet: prompt groups a filter drops before the update.
-- **Run identity and resume**: `verl:<trainer.project_name>/<trainer.experiment_name>`; verl's default `gsm8k` gets a
-  key of its own (`...@<8 hex>`). Each PPO save writes `probe_run.json` into `global_step_k/`;
+- **Run identity and resume**: `verl:<trainer.project_name>/<trainer.experiment_name>`; verl's default `gsm8k` (or an
+  empty `experiment_name`) gets a key of its own (`...@<8 hex>`). Each PPO save writes `probe_run.json` into `global_step_k/`;
   `trainer.resume_mode=auto` (or `resume_path`) reopens the attempt it names, rewound to k+1. A checkpoint
-  without it (an older CLI's, a bucket path) resumes a name you chose by name; on `gsm8k` it opens a new run.
+  without it (an older CLI's, a bucket path) resumes a name you chose by name; on `gsm8k` or an empty name it opens a new run.
   SFT saves are not stamped: an SFT job on its default `test` opens a new run on every resume (name it to keep one).
 - **Worker credential**: `PROBE_VERL_WORKER_TOKEN`.
 
