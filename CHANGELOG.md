@@ -7,6 +7,9 @@
   - **Off Harbor's event loop.** A trial's END hook journals its samples in a thread (awaited, so each trial's parts keep their order), and `run.samples.log` now stores a text spilled past 64 KiB (a long prompt, response or turns) after releasing the writer's lock, so a slow upload no longer holds other trials' hooks, or another producer thread (Miles, verl), behind it.
   - **A multi-step trial's segments read their step trajectory's continuations** (`steps/<name>/agent/trajectory.cont-N.json`), as the whole attempt's do, so a summarized step keeps all its turns.
   - **`pip install "probe-research[harbor]"` alone works.** The `harbor`, `cli` and `daemon` extras each pin `probe-research-cli` at the same version (the plugin's `harbor.plugins` entry point names `probe.connectors`, which ships there); before, `[harbor]` without `cli` installed a plugin that could not import.
+
+## 0.506.0
+
 - **A W&B re-import no longer promises an Undo it cannot give, and a streamed import's coverage counts what it copied (found by the 2026-11-09 prod smoke).** When an import rewrites a run (copied by an older Probe CLI, or W&B's history changed), its message and the parity report said the old points were "hidden, one Undo away". Undoing that hide is refused, because W&B's points now sit at the same steps; they now say the old points are kept, hidden, and a chart's Show hidden draws them. The run's `metadata.wandb_coverage` was written when the run was claimed, before a streamed history was read, so every `probe import` run said "0 metrics, 0 points" (and an older import's right count was overwritten). It is now written once the history is copied, from what was copied (for a resumed import, from the parity re-read of the whole run), with the rest of the run's metadata kept; a run your own script logged beside W&B is left untouched.
 
 ## 0.505.0
