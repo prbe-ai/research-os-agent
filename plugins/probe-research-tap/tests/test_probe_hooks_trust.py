@@ -124,6 +124,35 @@ def test_either_tracking_plugin_counts(codex):
     assert _record(codex) == "1"
 
 
+def test_the_scripts_plugin_names_are_both_identities_from_the_names_file():
+    """The script cannot read `install_names.json` (plain bash): its one line of names is held equal to it."""
+    import re
+
+    names = json.loads((Path(__file__).resolve().parents[3] / "src" / "probe" / "foundation" / "install_names"
+                        / "install_names.json").read_text(encoding="utf-8"))
+    wanted = [row["plugins"][role] for row in (names["identities"]["old"], names["identities"]["new"])
+              for role in ("tracking", "daemon")]
+    line = re.search(r'^PROBE_HOOKS_PLUGINS="([^"]*)"$', TRUST.read_text(encoding="utf-8"), re.M)
+    assert line and line.group(1).split() == wanted
+
+
+def test_a_codex_on_the_new_names_is_expected(tmp_path):
+    """`probe-daemon@probe` (the new names) counts as `probe-research-daemon@research-os-agent` does: a new-name
+    Codex whose hooks are not approved hears the nudge instead of staying silent."""
+    home = tmp_path / "codex"
+    cache = home / "plugins" / "cache" / "probe"
+    tap = cache / "probe-tap" / "0.10.74"
+    (tap / "hooks").mkdir(parents=True)
+    tracking = cache / "probe-daemon" / "0.300.0"
+    (tracking / ".codex-plugin").mkdir(parents=True)
+    (tracking / "hooks").mkdir()
+    (tracking / ".codex-plugin" / "plugin.json").write_text('{"name": "probe-daemon"}', encoding="utf-8")
+    (tracking / "hooks" / "dispatch.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+    (home / "config.toml").write_text('[plugins."probe-daemon@probe"]\nenabled = true\n', encoding="utf-8")
+    codex = {"home": home, "tap": tap, "state": tmp_path / "xdg" / "probe" / "hooks", "xdg": tmp_path / "xdg"}
+    assert _record(codex) == "1"
+
+
 def test_a_respawn_never_re_records(codex):
     """ensure-daemon.sh re-runs session-start.sh mid-session. A session that
     started on the old plugin must keep its 0 after the upgrade lands."""

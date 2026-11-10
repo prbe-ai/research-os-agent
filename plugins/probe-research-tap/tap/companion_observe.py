@@ -76,8 +76,10 @@ _LAUNCHERS = {"uv", "uvx", "pipx", "poetry", "pdm", "npx", "time", "sudo", "nohu
 #: blanked: `python -c 'print(1<<2)'` and `$((1<<2))` open nothing.
 _QUOTED_OR_ARITH = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\$\(\([^)]*\)\)")
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit"}
-#: A Probe MCP tool, under any harness's spelling of its name.
-_PROBE_MCP_RE = re.compile(r"probe[-_]research", re.IGNORECASE)
+#: A Probe MCP tool, under any harness's spelling of its name and either install name's: the old
+#: `probe-research` anywhere in it, the new ones by exact prefix (`install_names.json`), never another
+#: product's `mcp__probe_x__`.
+_PROBE_MCP_RE = re.compile(r"probe[-_]research|^mcp__(?:plugin_probe_probe|plugin-probe:probe|probe)__", re.IGNORECASE)
 #: Root `probe` options whose VALUE is not a command word (session_marker's
 #: ROOT_VALUE_OPTIONS; the tap cannot import it).
 _ROOT_VALUE_OPTIONS = {"--base-url", "--spool-dir"}

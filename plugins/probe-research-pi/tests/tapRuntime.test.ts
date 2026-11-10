@@ -108,6 +108,21 @@ describe("resolveTapRuntime", () => {
     expect(runtime).toEqual({ python: "/usr/bin/python3", tapRoot: siblingRoot });
   });
 
+  it("uses the sibling probe-tap checkout of the new mirror (prbe-ai/probe) first", () => {
+    const siblingRoot = join(extensionDir, "..", "probe-tap");
+    const oldRoot = join(extensionDir, "..", "probe-research-tap");
+    const existing = new Set([join(siblingRoot, "tap", "__init__.py"), join(oldRoot, "tap", "__init__.py"), "/usr/bin/python3"]);
+    const executable = new Set(["/usr/bin/python3"]);
+
+    const runtime = resolveTapRuntime({
+      ...fakeFs(existing, executable),
+      env: { PATH: "/usr/bin" },
+      extensionDir,
+    });
+
+    expect(runtime).toEqual({ python: "/usr/bin/python3", tapRoot: siblingRoot });
+  });
+
   it("falls back to a bare interpreter on PATH when no tap checkout is found anywhere (assumed pip install)", () => {
     const existing = new Set(["/usr/bin/python3"]);
     const executable = new Set(["/usr/bin/python3"]);

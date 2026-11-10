@@ -155,10 +155,10 @@ set `PROBE_TAP_SOURCE=codex` to exercise the Codex adapter; the default is
 ## Development
 
 ```bash
-pytest -q plugins/probe-research-tap/tests
+pytest -q plugins/probe-tap/tests
 PROBE_TAP_SOURCE=codex pytest -q \
-  plugins/probe-research-tap/tests/test_codex_sanitize.py \
-  plugins/probe-research-tap/tests/test_codex_research_os_contract.py
+  plugins/probe-tap/tests/test_codex_sanitize.py \
+  plugins/probe-tap/tests/test_codex_research_os_contract.py
 ```
 
 The repository-level pre-release gate also validates and installs this plugin

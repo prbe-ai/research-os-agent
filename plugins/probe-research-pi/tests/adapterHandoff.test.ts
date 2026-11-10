@@ -200,6 +200,25 @@ describe("detectAdapterHandoff — the mirror install (git source)", () => {
     }
   });
 
+  it("matches the new names' mirror, prbe-ai/probe, however it is spelled", () => {
+    for (const source of [
+      "github:prbe-ai/probe",
+      "git:github.com/prbe-ai/probe",
+      "https://github.com/prbe-ai/probe.git",
+      "git:github.com/PrBe-AI/probe#v1",
+    ]) {
+      writeJson(userSettingsPath(), { packages: ["npm:pi-mcp-adapter", source] });
+      expect(detectAdapterHandoff(baseOpts()).standDown, source).toBe(true);
+    }
+  });
+
+  it("does NOT match another owner's repo called probe", () => {
+    for (const source of ["github:someone/probe", "git:github.com/someone/probe", "https://github.com/someone/probe.git"]) {
+      writeJson(userSettingsPath(), { packages: ["npm:pi-mcp-adapter", source] });
+      expect(detectAdapterHandoff(baseOpts()).standDown, source).toBe(false);
+    }
+  });
+
   it("does NOT match a different repo that happens to be a git source", () => {
     writeJson(userSettingsPath(), {
       packages: ["npm:pi-mcp-adapter", "github:someone-else/research-os-agent-fork"],

@@ -212,3 +212,41 @@ if __name__ == "__main__":
     # `python3 _hook_harness.py manifest-dir`: for the shell hooks.
     if sys.argv[1:] == ["manifest-dir"]:
         print(manifest_dir())
+
+
+#: Probe's production MCP host; this device's own MCP is `PROBE_MCP_URL`.
+PRODUCTION_MCP_HOST = "mcp.research.prbe.ai"
+
+
+def is_mcp_key_ours(identity, env=None) -> bool:
+    """Is this hook's agent's MCP under `identity`'s key (Codex's config.toml `[mcp_servers.<key>]`) Probe's? A
+    bare `mcp__<key>__` tool is Probe's only then. With a table: its url on Probe's production MCP host or on
+    `PROBE_MCP_URL`'s. With none (an OAuth install declares its MCP in the plugin alone): Probe's tracking or
+    daemon plugin is added from `identity`'s marketplace and that marketplace names `identity.repo`. Missing or
+    unreadable: no. A line scan, not a TOML parser: the hooks run under a system python3 that may predate tomllib."""
+    import re
+    from urllib.parse import urlparse
+
+    values = os.environ if env is None else env
+    try:
+        home = current(values).home_dir(values)
+        text = (home / "config.toml").read_text(encoding="utf-8") if home else ""
+    except Exception:  # noqa: BLE001 - no record to read: not ours
+        return False
+
+    def table(*keys: str):
+        header = r"\.".join(r'"?' + re.escape(key) + r'"?' for key in keys)
+        found = re.search(r"(?m)^\[" + header + r"\][ \t]*$(.*?)(?=^\[|\Z)", text, re.S)
+        return found.group(1) if found else None
+
+    server = table("mcp_servers", identity.mcp_key)
+    if server is not None:
+        url = re.search(r"""(?m)^[ \t]*url[ \t]*=[ \t]*["']([^"']+)["']""", server)
+        host = urlparse(url.group(1)).netloc if url else ""
+        ours = {PRODUCTION_MCP_HOST, urlparse((values.get("PROBE_MCP_URL") or "").strip()).netloc} - {""}
+        return bool(host) and host in ours
+    added = any(table("plugins", identity.make_plugin_id(name)) is not None
+                for name in (identity.tracking_plugin, identity.daemon_plugin))
+    marketplace = table("marketplaces", identity.marketplace)
+    repo = r"(?i)(?<![\w-])" + re.escape(identity.repo) + r"(?![\w-])"
+    return added and marketplace is not None and re.search(repo, marketplace) is not None

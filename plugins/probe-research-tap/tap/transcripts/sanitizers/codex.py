@@ -73,7 +73,7 @@ Anthropic does, so `input_tokens` here is what is left. Codex before
   - non-dict input → returned as-is (defensive)
 
 CANONICAL: src/probe/foundation/transcripts/sanitizers/codex.py — the copy under
-plugins/probe-research-tap/tap/ is vendored by `make sync-tap-core` and must
+plugins/probe-tap/tap/ is vendored by `make sync-tap-core` and must
 stay byte-identical (tests/test_tap_core_sync.py guards it). Edit the
 canonical file, never the plugin copy.
 """
@@ -90,7 +90,7 @@ from typing import Any
 # stories and neither is comparable to the other.
 #
 # RELATIVE import, deliberately: this file is byte-identical in its two homes
-# (canonical src/probe/tap_core/, vendored plugins/probe-research-tap/tap/),
+# (canonical src/probe/tap_core/, vendored plugins/probe-tap/tap/),
 # and `.sanitize` resolves correctly inside both packages.
 from .claude_code import (
     COMMAND_MAX_LEN,

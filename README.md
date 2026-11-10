@@ -31,13 +31,13 @@ What it serves:
 - **Claude Code / Codex plugin marketplace** — `probe-research@research-os-agent`
   (experiment-tracking skills + read-only MCP wiring),
   `probe-research-daemon@research-os-agent` (the daemon profile: the Probe daemon
-  records and reads, installed by `probe wizard` in place of `probe-research`) and
+  records and reads, installed by `probe wizard` in place of `probe-research@research-os-agent`) and
   `probe-research-tap@research-os-agent` (client-sanitized transcript capture).
   Installed plugins update from this repo's `main`. pi installs the
   `plugins/probe-research-pi` package from this repo's root `package.json`, and
   Kimi Code installs these plugins from a checkout of it.
 - **`skills/instrument-code`** — the skill that wires the Probe SDK into training
-  code, on its own, for `npx skills add` (rendered from the `probe-research` plugin).
+  code, on its own, for `npx skills add` (rendered from the `probe-research@research-os-agent` plugin).
 - **`client-version.json`** — the version/staleness advisory manifest the
   Probe backend reads over GitHub raw.
 - **`CHANGELOG.md`** and the [Releases](../../releases) page — the public

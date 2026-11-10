@@ -834,11 +834,13 @@ def probe_read(command: str) -> "str | None":
     return None
 
 
-#: A Probe MCP tool call, by NAME. A regex and not a list of five names on
-#: purpose: the same tool is `mcp__probe-research__browse` under one install and
-#: `mcp__plugin_probe-research_probe-research__browse` under another, and a third
-#: harness may spell it a third way. This is the matcher `hooks.json` already
-#: uses on PostToolUse -- reuse beats inventing a list that silently misses.
+#: A Probe MCP tool call, by NAME, under either install name: the same tool is
+#: `mcp__probe-research__browse` under one install, `mcp__plugin_probe-research_probe-research__browse`
+#: under another and `mcp__plugin_probe_probe__browse` under the new names. Exact prefixes from
+#: `install_names.json` (`_install_names.py` beside this file), never a loose `probe`: another
+#: product's `mcp__probe_x__` is not Probe's. The bare new key (`mcp__probe__`) counts only where
+#: the agent names MCP tools by server key alone (Codex). The old loose match counts too, always:
+#: pi-mcp-adapter names Probe's tools `probe-research-pi__probe_browse` (no `mcp__` at all).
 _PROBE_MCP_RE = re.compile(r"probe[-_]research", re.IGNORECASE)
 
 
@@ -848,7 +850,46 @@ def is_probe_mcp_tool(tool_name: object) -> bool:
         return False
     if tool_name in ("Bash", "Skill", "SlashCommand"):
         return False
-    return bool(_PROBE_MCP_RE.search(tool_name))
+    if _PROBE_MCP_RE.search(tool_name):
+        return True
+    try:
+        names = _load_install_names().get_install_names()
+    except Exception:  # noqa: BLE001 -- no names file beside this copy: the old names' match alone
+        return False
+    if names.is_probe_mcp_tool(tool_name):
+        return True
+    # Only a bare-key name (`mcp__probe__x`) reads Codex's config.toml, never every tool call.
+    return names.is_probe_mcp_tool(tool_name, is_bare_key=True) and _names_mcp_by_key()
+
+
+def _names_mcp_by_key() -> bool:
+    """Does this hook's agent name MCP tools by their server key alone (Codex: config.toml MCP), with the new
+    key's table Probe's (`_hook_harness.is_mcp_key_ours`)? Else a bare `mcp__probe__` is another product's."""
+    try:
+        harness = _hook_harness()
+        return harness.current().mcp == "config-toml" and harness.is_mcp_key_ours(
+            _load_install_names().get_install_names().new)
+    except Exception:  # noqa: BLE001 -- unknown harness: Claude Code's plugin-namespaced names
+        return False
+
+
+def _load_install_names():
+    """The install names beside this file (`_install_names.py`), loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._install_names"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_install_names.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(key, None)
+        raise
+    return module
 
 
 #: The shapes only a RESEARCHER can produce. An ALLOWLIST, and deliberately so:

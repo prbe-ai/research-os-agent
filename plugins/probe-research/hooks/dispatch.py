@@ -190,18 +190,19 @@ MIN_SESSION_END_S = 0.1
 TOOL_LANES = ("pre-tool", "post-tool")
 
 #: Per tool lane: the exact tool names, and the substrings (the Probe MCP
-#: prefix `probe[-_]research`), that some route's matcher accepts.
+#: prefixes: `probe[-_]research`, and the new install names' `mcp__plugin_probe_probe__`,
+#: `mcp__plugin-probe:probe__`, `mcp__probe__`), that some route's matcher accepts.
 #: tests/test_hook_dispatch.py holds this equal to what routes.json's matchers
 #: accept in both plugins: a new tool route needs its name here too.
 TOOL_FILTER = {
     "pre-tool": (
         frozenset(("Bash", "AskUserQuestion", "AskQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit",
                    "WebSearch", "Skill")),
-        ("probe-research", "probe_research"),
+        ("probe-research", "probe_research", "mcp__plugin_probe_probe__", "mcp__plugin-probe:probe__", "mcp__probe__"),
     ),
     "post-tool": (
         frozenset(("Bash", "Skill", "SlashCommand", "AskUserQuestion", "AskQuestion")),
-        ("probe-research", "probe_research"),
+        ("probe-research", "probe_research", "mcp__plugin_probe_probe__", "mcp__plugin-probe:probe__", "mcp__probe__"),
     ),
 }
 

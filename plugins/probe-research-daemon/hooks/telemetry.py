@@ -136,7 +136,8 @@ RESEARCH_SKILLS = {
     "artifact-design",
     # a pane: the agent's own visual on a project or experiment (run compare + panes T12)
     "write-pane",
-    "probe-research-setup",
+    "probe-setup",
+    "probe-research-setup",  # the setup command's name before the rename to Probe
     # retired names (kept for resumed transcripts and cached installs);
     # notes-audit and pull-rules were renamed on 2026-09-17
     "notes-audit",
@@ -154,7 +155,47 @@ RESEARCH_SKILLS = {
     "read-rules",
 }
 
+#: The old names' loose match (main's), kept beside the exact prefixes (`is_probe_mcp_tool`).
 MCP_TOOL_RE = re.compile(r"^mcp__.*probe[-_]research")
+
+
+def is_probe_mcp_tool(tool_name: str) -> bool:
+    """A Probe MCP tool, under either install name: exact prefixes (`install_names.json`), never another
+    product's `mcp__probe_x__`; the bare new key (`mcp__probe__`) only where the agent names MCP by key."""
+    if MCP_TOOL_RE.match(tool_name):
+        return True
+    try:
+        names = _load_install_names().get_install_names()
+    except Exception:  # noqa: BLE001
+        return False
+    if names.is_probe_mcp_tool(tool_name):
+        return True
+    if not names.is_probe_mcp_tool(tool_name, is_bare_key=True):
+        return False  # only a bare-key name (`mcp__probe__x`) reads Codex's config.toml
+    try:
+        harness = _hook_harness()
+        return harness.current().mcp == "config-toml" and harness.is_mcp_key_ours(names.new)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _load_install_names():
+    """The install names beside this file (`_install_names.py`), loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._install_names"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_install_names.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(key, None)
+        raise
+    return module
 
 # `probe <entity> <verb>` pairs that mutate research state. Reads (get, show,
 # list, status, check, download, versions) are deliberately not events — the
@@ -484,7 +525,7 @@ def handle_post_tool(payload: dict) -> None:
     state = load_state(session_id)
     changed = False
 
-    if MCP_TOOL_RE.match(tool_name):
+    if is_probe_mcp_tool(tool_name):
         if not state.get("mcp_used"):
             state["mcp_used"] = True
             changed = True

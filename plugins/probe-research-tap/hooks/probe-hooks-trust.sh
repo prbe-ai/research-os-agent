@@ -51,11 +51,16 @@ probe_hooks_enabled() {
     ' "$config" 2>/dev/null
 }
 
+# Probe's tracking plugins (tracking and daemon) under both install names, old then new
+# (`install_names.json`; tests/test_probe_hooks_trust.py holds this line equal to it). The
+# marketplace a name is read under comes from this plugin's own cache path.
+PROBE_HOOKS_PLUGINS="probe-research probe-research-daemon probe probe-daemon"
+
 # 0 when either Probe tracking plugin is enabled. $1 the marketplace.
 probe_hooks_any_enabled() {
     local config name
     config="${2:-}"
-    for name in probe-research probe-research-daemon; do
+    for name in $PROBE_HOOKS_PLUGINS; do
         probe_hooks_enabled "$name@$1" "$config" && return 0
     done
     return 1
@@ -74,7 +79,7 @@ probe_hooks_record() {
         cache="${tap_root%/*/*}"
         marketplace="${cache##*/}"
         config="${CODEX_HOME:-${HOME:-}/.codex}/config.toml"
-        for name in probe-research probe-research-daemon; do
+        for name in $PROBE_HOOKS_PLUGINS; do
             probe_hooks_enabled "$name@$marketplace" "$config" || continue
             # The newest installed version, by the same manifest rule the hooks'
             # stale-root recovery uses.

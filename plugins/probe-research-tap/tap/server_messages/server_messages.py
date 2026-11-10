@@ -1,5 +1,5 @@
 """ServerMessage: what the Probe server said when it answered with an error, read from any of its four
-body shapes. STDLIB ONLY: the tap carries a copy (`plugins/probe-research-tap/tap/server_messages/`)."""
+body shapes. STDLIB ONLY: the tap carries a copy (`plugins/probe-tap/tap/server_messages/`)."""
 
 from __future__ import annotations
 

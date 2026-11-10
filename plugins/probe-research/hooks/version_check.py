@@ -115,8 +115,10 @@ UPDATE_CMD_MIN_CLI = "0.8.1"
 #: (`probe.service.followup`). Anywhere else, RESTART_TO_APPLY, as before.
 PICKED_UP = "open sessions pick it up at their next prompt"
 RESTART_TO_APPLY = "restart {agent} to apply"
-#: The Probe plugins and the tap, by name, in Claude Code's install ledger.
-LEDGER_PLUGINS = ("probe-research", "probe-research-daemon", "probe-research-tap")
+#: The Probe plugins and the tap, by name, in Claude Code's install ledger: both install names'
+#: (`install_names.json`), the taps last.
+LEDGER_PLUGINS = ("probe-research", "probe-research-daemon", "probe", "probe-daemon", "probe-research-tap", "probe-tap")
+LEDGER_TAPS = ("probe-research-tap", "probe-tap")
 #: The first tap whose watcher hands its session to the Probe service (`tap/handback.py`).
 HANDBACK_TAP = "0.10.13"
 #: Where a tap keeps a session's `tap watch` files (`tap/config.py` WATCHER_DIR_ENV): `/tmp` unless set.
@@ -1223,7 +1225,7 @@ def _user_scope_installs() -> bool:
     if not isinstance(plugins, dict):
         return False
     ours = {k: v for k, v in plugins.items() if isinstance(k, str) and k.split("@", 1)[0] in LEDGER_PLUGINS}
-    if not any(k.split("@", 1)[0] != "probe-research-tap" and v for k, v in ours.items()):
+    if not any(k.split("@", 1)[0] not in LEDGER_TAPS and v for k, v in ours.items()):
         return False
     return all(isinstance(e, dict) and e.get("scope") == "user" for v in ours.values() for e in v or [])
 
@@ -1774,6 +1776,7 @@ def main() -> None:
     # otherwise the nudge names a component and then hands over commands that
     # cannot fix it. The wizard's update covers all three itself.
     tap_stale = any(label == "transcript tap" for label, _, _ in nudges + needs_update + below_min)
+    # Old install names only: a CLI older than UPDATE_CMD_MIN_CLI predates the new ones.
     cmds = (
         "uv tool upgrade probe-research && "
         "claude plugin marketplace update research-os-agent && "

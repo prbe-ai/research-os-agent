@@ -244,7 +244,7 @@ def test_the_kimi_manifest_runs_the_same_scripts_on_the_same_events() -> None:
 
 def test_the_kimi_manifest_ships_the_tap_s_version() -> None:
     claude = json.loads((TAP / ".claude-plugin" / "plugin.json").read_text())
-    assert MANIFEST["name"] == claude["name"] == "probe-research-tap"
+    assert MANIFEST["name"] == claude["name"] == "probe-tap"
     assert MANIFEST["version"] == claude["version"]
 
 

@@ -513,7 +513,16 @@ def shim_loaded_root() -> str:
         roots = _hook_harness.load_sibling("_kimi_live").recorded_roots(shim)
     except Exception:  # noqa: BLE001 -- no record: the restart line stays
         return ""
-    return roots.get(os.path.basename(os.path.dirname(_HERE)), "")
+    own = os.path.basename(os.path.dirname(_HERE))
+    # This copy's folder is named as the release names its plugin; Kimi's list may record the
+    # same plugin under the other install name (a Kimi still on the old names: rename to Probe).
+    names = [own]
+    try:
+        install_names = _hook_harness.load_sibling("_install_names").get_install_names()
+        names += [install_names.get_name_in(own, identity) for identity in install_names.get_all()]
+    except Exception:  # noqa: BLE001 -- no names file beside an old copy: its own name only
+        pass
+    return next((roots[name] for name in names if roots.get(name)), "")
 
 
 def main(argv: "list[str]") -> int:

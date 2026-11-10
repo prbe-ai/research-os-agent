@@ -83,6 +83,12 @@ const OUR_NPM_NAME = "probe-research-pi";
  * spelling needs a second identity here; the local branch matches by name.
  */
 const OUR_MIRROR_REPO = "research-os-agent";
+/**
+ * The new install names' mirror (`prbe-ai/probe`, rename to Probe). `probe` is a generic basename, so it is
+ * ours only under the owner `prbe-ai`: `someone/probe` is another package.
+ */
+const OUR_NEW_MIRROR_REPO = "probe";
+const OUR_MIRROR_OWNER = "prbe-ai";
 
 // Mirrors pi's own `isLocalPath()` (dist/utils/paths.js): a source is
 // non-local ONLY if it starts with one of these literal prefixes.
@@ -104,7 +110,7 @@ export interface AdapterHandoffResult {
 
 type ParsedSource =
   | { kind: "npm"; name: string }
-  | { kind: "git"; basename: string }
+  | { kind: "git"; owner: string; basename: string }
   | { kind: "local"; path: string };
 
 /** Mirrors `parseNpmSpec` — see module docstring. */
@@ -121,7 +127,8 @@ function parseNpmName(spec: string): string {
  * in `hosted-git-info` for host/owner/ref) — no new dependency is worth
  * adding just to answer "does the last path segment say pi-mcp-adapter."
  */
-function gitBasename(source: string): string {
+/** A git source's last two path parts, `[owner, repo]` (`.git`, a `#ref` and a `?query` dropped). */
+function gitOwnerAndBasename(source: string): [string, string] {
   let s = source.startsWith("git:") ? source.slice(4) : source;
   const hashIdx = s.indexOf("#");
   if (hashIdx !== -1) s = s.slice(0, hashIdx);
@@ -130,7 +137,7 @@ function gitBasename(source: string): string {
   const parts = s.split(/[/:]/).filter(Boolean);
   let last = parts[parts.length - 1] ?? "";
   if (last.endsWith(".git")) last = last.slice(0, -4);
-  return last;
+  return [parts[parts.length - 2] ?? "", last];
 }
 
 function parseSource(rawSource: string): ParsedSource {
@@ -139,7 +146,8 @@ function parseSource(rawSource: string): ParsedSource {
     return { kind: "npm", name: parseNpmName(source.slice(4).trim()) };
   }
   if (NON_LOCAL_PREFIXES.some((prefix) => source.startsWith(prefix))) {
-    return { kind: "git", basename: gitBasename(source) };
+    const [owner, basename] = gitOwnerAndBasename(source);
+    return { kind: "git", owner, basename };
   }
   return { kind: "local", path: source };
 }
@@ -254,7 +262,10 @@ function matchesOurs(source: string, baseDir: string, ourRealRoot: string): bool
   // that way, every mirror-installed session would fail condition (b) of D6,
   // never stand down, and register a second copy of the Probe MCP tools
   // beside pi-mcp-adapter's.
-  if (parsed.kind === "git") return parsed.basename === OUR_MIRROR_REPO;
+  if (parsed.kind === "git") {
+    return parsed.basename === OUR_MIRROR_REPO ||
+      (parsed.basename === OUR_NEW_MIRROR_REPO && parsed.owner.toLowerCase() === OUR_MIRROR_OWNER);
+  }
 
   const dir = resolveLocalSource(parsed.path, baseDir);
   if (dir === ourRealRoot) return true;

@@ -8,7 +8,7 @@ Detects truncation/rotation by comparing the current file size against
 the persisted cursor: if the file has shrunk we reset to offset 0.
 
 CANONICAL: src/probe/foundation/transcripts/transcripts.py — the copy under
-plugins/probe-research-tap/tap/ is vendored by `make sync-tap-core` and must
+plugins/probe-tap/tap/ is vendored by `make sync-tap-core` and must
 stay byte-identical (tests/test_tap_core_sync.py guards it). Edit the
 canonical file, never the plugin copy. The duplication exists because the tap
 is a separate distribution living in the agent's plugin cache — the CLI

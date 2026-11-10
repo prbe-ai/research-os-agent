@@ -169,6 +169,8 @@ export function resolveTapRuntime(deps: TapRuntimeDeps): TapRuntime | null {
   const override = deps.env[ENV_TAP_ROOT];
   // Absolute: the socket lookup starts IN the tap's folder, where a relative path would point elsewhere.
   if (override && override.trim()) candidateRoots.push(resolve(override.trim()));
+  // The tap folder beside this package: the new mirror's (`prbe-ai/probe`), then the old one's.
+  candidateRoots.push(resolve(deps.extensionDir, "..", "probe-tap"));
   candidateRoots.push(resolve(deps.extensionDir, "..", "probe-research-tap"));
 
   for (const root of candidateRoots) {

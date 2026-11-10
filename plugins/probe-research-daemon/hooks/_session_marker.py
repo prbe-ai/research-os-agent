@@ -3862,7 +3862,9 @@ HOOK_STAMP = "hook"
 TEAM_NOTE_DIRNAME = "team-note"
 TEAM_NOTE_DOCUMENT = "probe-team-note.md"
 TEAM_NOTE_CONTEXT_FILE = "context.md"
-_RULES_BEGIN = "<!-- probe-research:begin"
+#: The rules block's begin, under either install names' markers (old, then new): stdlib-only here, so
+#: spelt out; `install_names.get_rules_begin_prefixes()` holds the same (tests/test_install_names.py).
+_RULES_BEGINS = ("<!-- probe-research:begin", "<!-- probe:begin")
 
 
 def get_team_note_document() -> Path:
@@ -3881,9 +3883,10 @@ def has_hook_stamp(instruction: "Path | str") -> bool:
             text = handle.read()
     except (OSError, UnicodeDecodeError):
         return False
-    start = text.find(_RULES_BEGIN)
-    if start < 0:
+    found = [at for at in (text.find(begin) for begin in _RULES_BEGINS) if at >= 0]
+    if not found:
         return False
+    start = min(found)
     stamp = text[start:].split("\n", 2)[1:2]
     words = stamp[0].strip()[4:-3].split() if stamp and stamp[0].strip().startswith("<!-- v") else []
     return HOOK_STAMP in words[1:]

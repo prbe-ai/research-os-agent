@@ -12,9 +12,9 @@ the server cannot import ``probe`` (they ship apart from the CLI), so this file
 and the JSON are copied next to each consumer by ``make sync-harnesses``:
 
     agent/src/probe/foundation/harness_registry/{harness_registry.py,harnesses.json}     (source)
-    agent/plugins/probe-research/hooks/{_harness_registry.py,harnesses.json}
-    agent/plugins/probe-research-daemon/hooks/{_harness_registry.py,harnesses.json}
-    agent/plugins/probe-research-tap/tap/{harness_registry.py,harnesses.json}
+    agent/plugins/probe/hooks/{_harness_registry.py,harnesses.json}
+    agent/plugins/probe-daemon/hooks/{_harness_registry.py,harnesses.json}
+    agent/plugins/probe-tap/tap/{harness_registry.py,harnesses.json}
     agent/src/probe/tap_core/{harness_registry.py,harnesses.json}
     app/ingestion/{harness_registry.py,harnesses.json}
     packages/core/src/agents/generated/harnesses.json, agent/plugins/probe-research-pi/src/harnesses.json

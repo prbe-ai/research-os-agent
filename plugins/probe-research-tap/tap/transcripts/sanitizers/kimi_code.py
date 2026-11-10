@@ -92,7 +92,7 @@ REDACTION IS NOT DONE HERE (see sanitize.py): `Journal.stage` runs
 `secrets.redact_event` on this output.
 
 CANONICAL: src/probe/foundation/transcripts/sanitizers/kimi_code.py — the copy under
-plugins/probe-research-tap/tap/ is vendored by `make sync-tap-core` and must
+plugins/probe-tap/tap/ is vendored by `make sync-tap-core` and must
 stay byte-identical (tests/test_tap_core_sync.py guards it). Edit the
 canonical file, never the plugin copy.
 """

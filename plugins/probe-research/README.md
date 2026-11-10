@@ -18,7 +18,7 @@ Same backend, two entry points: humans-in-code reach for the SDK/CLI; agents-in-
 ### Codex
 
 ```bash
-codex plugin marketplace add /path/to/research-os-agent
+codex plugin marketplace add prbe-ai/research-os-agent
 codex plugin add probe-research@research-os-agent
 codex mcp login probe-research
 ```

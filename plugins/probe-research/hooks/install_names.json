@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "markers_written": "old",
+  "identities": {
+    "old": {
+      "marketplace": "research-os-agent",
+      "repo": "prbe-ai/research-os-agent",
+      "plugins": {
+        "tracking": "probe-research",
+        "daemon": "probe-research-daemon",
+        "tap": "probe-research-tap",
+        "shim": "probe-hooks"
+      },
+      "mcp_key": "probe-research",
+      "setup_command": "probe-research-setup",
+      "rules_begin": "<!-- probe-research:begin (managed by `probe wizard`) -->",
+      "rules_end": "<!-- probe-research:end -->",
+      "mcp_tool_prefixes": [
+        "mcp__plugin_probe-research_probe-research__",
+        "mcp__plugin-probe-research:probe-research__",
+        "mcp__probe-research__",
+        "mcp__probe_research__"
+      ],
+      "bare_key_mcp_tool_prefixes": []
+    },
+    "new": {
+      "marketplace": "probe",
+      "repo": "prbe-ai/probe",
+      "plugins": {
+        "tracking": "probe",
+        "daemon": "probe-daemon",
+        "tap": "probe-tap",
+        "shim": "probe-hooks"
+      },
+      "mcp_key": "probe",
+      "setup_command": "probe-setup",
+      "rules_begin": "<!-- probe:begin (managed by `probe wizard`) -->",
+      "rules_end": "<!-- probe:end -->",
+      "mcp_tool_prefixes": [
+        "mcp__plugin_probe_probe__",
+        "mcp__plugin-probe:probe__"
+      ],
+      "bare_key_mcp_tool_prefixes": [
+        "mcp__probe__"
+      ]
+    }
+  }
+}

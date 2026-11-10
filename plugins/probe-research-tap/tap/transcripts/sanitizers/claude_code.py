@@ -72,7 +72,7 @@ We KEEP enough of each tool block to reconstruct what happened:
                   shouldn't reach here, but if they do we don't mangle them)
 
 CANONICAL: src/probe/foundation/transcripts/sanitizers/claude_code.py — the copy under
-plugins/probe-research-tap/tap/ is vendored by `make sync-tap-core` and must
+plugins/probe-tap/tap/ is vendored by `make sync-tap-core` and must
 stay byte-identical (tests/test_tap_core_sync.py guards it). Edit the
 canonical file, never the plugin copy.
 """

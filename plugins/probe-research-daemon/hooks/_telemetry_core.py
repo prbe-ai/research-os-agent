@@ -9,7 +9,7 @@ property names (which also match app/core/analytics.py and the dashboard).
 TWO COPIES OF THIS FILE EXIST ON PURPOSE, and they must stay byte-identical:
 
     src/probe/analytics/core.py                     (canonical — edit here)
-    plugins/probe-research/hooks/_telemetry_core.py      (vendored — never edit)
+    plugins/probe/hooks/_telemetry_core.py      (vendored — never edit)
 
 The plugin hook runs under the SYSTEM python3 with no `probe` package
 importable, so it cannot import this module from the package; it carries a

@@ -36,6 +36,7 @@ import sys
 #: The first releases whose hooks hand every event to the installed copy.
 FIRST_FOLLOWING_PLUGIN = (0, 175, 0)
 FIRST_FOLLOWING_TAP = (0, 10, 18)
+#: The old install names' tap; `_tap_root` takes either name's (`_install_names`).
 TAP_PLUGIN = "probe-research-tap"
 MANIFEST = os.path.join(".kimi-plugin", "plugin.json")
 MANAGED = "managed"
@@ -147,7 +148,7 @@ def loaded_info(plugin_root: str, event: str, source: str = "") -> "dict | None"
     if not plugin_root or _manifest(plugin_root) is None:
         return None
     plugin = os.path.basename(os.path.realpath(plugin_root)).split("@", 1)[0]
-    tap_root = recorded_roots(plugin_root).get(TAP_PLUGIN, "")
+    tap_root = _find_tap_root(recorded_roots(plugin_root))
     managed = os.path.dirname(os.path.realpath(plugin_root))
     # What Kimi read at its start: a first record proves it only when none of
     # these changed after the process started (`record_harness_process`).
@@ -163,6 +164,35 @@ def loaded_info(plugin_root: str, event: str, source: str = "") -> "dict | None"
         "source": source if event in START_EVENTS and isinstance(source, str) else "",
         "read_at_start": read_at_start,
     }
+
+
+def _find_tap_root(roots: dict) -> str:
+    """The capture tap's root among Kimi's recorded `roots`, under either install name; "" for none."""
+    try:
+        names = [identity.tap_plugin for identity in _load_install_names().get_install_names().get_all()]
+    except Exception:  # noqa: BLE001 -- no names file beside an old hook copy: the old name
+        names = [TAP_PLUGIN]
+    return next((roots[name] for name in names if roots.get(name)), "")
+
+
+def _load_install_names():
+    """`probe.foundation.install_names`, or the copy beside the hooks (`_install_names.py`)."""
+    try:
+        from probe.foundation.install_names import install_names  # noqa: PLC0415
+
+        return install_names
+    except ImportError:
+        import importlib.util  # noqa: PLC0415
+
+        name = "_probe_hooks._install_names"
+        if name in sys.modules:
+            return sys.modules[name]
+        spec = importlib.util.spec_from_file_location(name, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                          "_install_names.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
 
 
 def _session_marker():
@@ -414,7 +444,7 @@ def why_not(record: "dict | None", env=None, recorded=None) -> "str | None":
     plugin_now = installed.get(str(loaded.get("plugin") or ""))
     if not plugin_now or manifest_fingerprint(plugin_now) != loaded.get("plugin_fp"):
         return "the plugin's manifest changed since it loaded"
-    tap_now = installed.get(TAP_PLUGIN)
+    tap_now = _find_tap_root(installed) or None
     if loaded.get("tap_root") and (not tap_now or manifest_fingerprint(tap_now) != loaded.get("tap_fp")):
         return "the tap's manifest changed since it loaded"
     session_id = record.get("session_id")

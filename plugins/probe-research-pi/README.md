@@ -278,7 +278,7 @@ there itself.
 
 This extension does not ship the capture daemon itself — it spawns
 `python3 -m tap watch`, from the separate `probe-research-tap` Python
-package (`agent/plugins/probe-research-tap/` in this monorepo; standalone,
+package (`agent/plugins/probe-tap/` in this monorepo; standalone,
 pip-installable, zero dependencies). It resolves an interpreter + that
 package in this order:
 
@@ -287,7 +287,7 @@ package in this order:
    override for any install shape outside this monorepo.**
 2. The sibling `probe-research-tap/` directory next to this package. Works
    inside this monorepo checkout AND in a mirror install: the mirror renders
-   `plugins/probe-research-pi/` and `plugins/probe-research-tap/` as siblings,
+   `plugins/probe-research-pi/` and `plugins/probe-tap/` as siblings,
    so the tap package (with its `tap/__init__.py`) is right where this step
    looks. It is only absent for an install shape that ships this package
    alone — see "Known limitation."
@@ -406,7 +406,7 @@ see "pi-mcp-adapter" below.
 path is a Probe MCP bearer token — the same `mcp_token` Claude Code's MCP
 connection already uses, minted on any device that has run the Probe wizard
 (`npx probe-research`). Resolution order mirrors
-`agent/plugins/probe-research/bin/probe-mcp-headers` exactly: `PROBE_MCP_TOKEN`
+`agent/plugins/probe/bin/probe-mcp-headers` exactly: `PROBE_MCP_TOKEN`
 env first, then the probe CLI config file's `mcp_token`, read from BOTH
 shapes (v2 named-contexts, v1 flat) — reading only v1 is the exact bug that
 script's own comments record making the fast path silently return nothing on
@@ -650,7 +650,7 @@ never prunes a pin a live record names.
 
 **The `probe-research-tap` location is solved for the mirror install, not in
 general.** A mirror install (`git:github.com/prbe-ai/research-os-agent`) clones the
-whole repo, and the mirror renders `plugins/probe-research-tap/` as a sibling
+whole repo, and the mirror renders `plugins/probe-tap/` as a sibling
 of this package — so step 2 resolves there the same way it does inside this
 monorepo, which is what closed the old "no packaging step ships a Python
 package alongside a pi extension" gap. It is closed by the SHAPE of the

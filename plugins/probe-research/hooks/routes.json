@@ -70,7 +70,7 @@
     "PreToolUse": [
       {
         "lane": "pre-tool",
-        "matcher": "^Bash$|probe[-_]research",
+        "matcher": "^Bash$|probe[-_]research|^mcp__(plugin_probe_probe|plugin-probe:probe|probe)__",
         "hooks": [
           {
             "type": "command",
@@ -127,7 +127,7 @@
     "PostToolUse": [
       {
         "lane": "post-tool",
-        "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research",
+        "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research|^mcp__(plugin_probe_probe|plugin-probe:probe|probe)__",
         "hooks": [
           {
             "type": "command",
