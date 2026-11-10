@@ -114,15 +114,28 @@ export PROBE_BIN="${PROBE_BIN:-probe}"
 # The agent's own shell needs `probe` too: a Claude Code started from a terminal opened before
 # the install has no ~/.local/bin on PATH, so its `probe session state on` failed "command not
 # found" (live auto-mode test, 2026-11-09). Claude Code sources $CLAUDE_ENV_FILE before each Bash
-# call: add the CLI's folder there, once, only when PATH lacks `probe`. Codex runs a login shell.
-# Only a folder found above (absolute): the bare `probe` fallback names the session's folder, which
-# the agent can write. Last on PATH: uv's tool folder holds its own python, never the agent's.
+# call: add a folder holding `probe` there, once, only when PATH lacks it. Codex runs a login shell.
+# Only a CLI found above (absolute): the bare `probe` fallback names the session's folder, which
+# the agent can write. Not the CLI's own folder either: uv's tool folder holds Probe's python and
+# uvicorn, which would fill in for an agent that has none. A folder in Probe's state holding only a
+# `probe` link goes on PATH, last.
 case "$PROBE_BIN" in /*) _probe_found=1 ;; *) _probe_found="" ;; esac
+_probe_link_dir="${XDG_STATE_HOME:-$HOME/.local/state}/probe/agent-bin"
+# A relative folder would follow cwd; a `:` would split it into PATH entries, the part after it relative.
+case "$_probe_link_dir" in *:* | [!/]*) _probe_found="" ;; esac
+_probe_link="$_probe_link_dir/probe"
 if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "$_probe_found" ] && [ -x "$PROBE_BIN" ] \
   && ! command -v probe >/dev/null 2>&1; then
-  _probe_path_line="$(printf 'export PATH="${PATH:+$PATH:}"%q' "$(dirname "$PROBE_BIN")")"
-  grep -qxF "$_probe_path_line" "$CLAUDE_ENV_FILE" 2>/dev/null \
-    || printf '%s\n' "$_probe_path_line" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+  # Relinked only when it names another CLI: BSD `ln -sf` unlinks first, so a rewrite on every start
+  # would leave other chats without `probe` for a moment, and two starts at once could fail it.
+  # Read back after `ln` whatever it said: a start racing this one writes the same link.
+  [ "$(readlink "$_probe_link" 2>/dev/null)" = "$PROBE_BIN" ] \
+    || { mkdir -p "$_probe_link_dir" && ln -sfn "$PROBE_BIN" "$_probe_link"; } 2>/dev/null
+  if [ "$(readlink "$_probe_link" 2>/dev/null)" = "$PROBE_BIN" ]; then
+    _probe_path_line="$(printf 'export PATH="${PATH:+$PATH:}"%q' "$_probe_link_dir")"
+    grep -qxF "$_probe_path_line" "$CLAUDE_ENV_FILE" 2>/dev/null \
+      || printf '%s\n' "$_probe_path_line" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+  fi
 fi
 # The running harness's own manifest (.claude-plugin, .codex-plugin, .kimi-plugin),
 # from the harness registry beside this script.
