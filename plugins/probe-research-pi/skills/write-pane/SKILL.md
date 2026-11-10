@@ -180,8 +180,10 @@ probe pane push <project-or-experiment> <slug> --html pane.html --data recipe.js
 ```
 
 The same slug replaces the pane, so pushing again is safe. A project or experiment holds 8. A
-refusal names the rule the page broke: fix it and push again. The push prints the page the pane is
-on. `probe pane data <project-or-experiment> <slug>` reads a saved pane's data, `probe pane list
+refusal names the rule the page broke: fix it and push again. A push first opens the pane in a
+browser at every width; a refusal from that names the width, state and error (fix it and push
+again), and a warning means the check could not run and the pane was saved unchecked. The push
+prints the page the pane is on. `probe pane data <project-or-experiment> <slug>` reads a saved pane's data, `probe pane list
 <project-or-experiment>` lists the panes, and `probe pane get <project-or-experiment> <slug>`
 prints one's HTML and recipe.
 
