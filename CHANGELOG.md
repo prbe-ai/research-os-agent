@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **TRL AsyncGRPO, GKD and GOLD rollouts are live samples, and GOLD with dataloader workers keeps each row's task (rl-scale C1-C3).**
+  - **AsyncGRPO:** each rollout shows in `probe samples live` from its dispatch to its reward, recorded in TRL's spawned rollout process as producer `trl-rollout` (key `{version}:{group}:r{n}`). It reads `generating`, then `scoring`; it ends `passed`/`failed` by its reward, `error` when no reward function scored it, and `dropped` when TRL drops its group or training stops first. Each finished sample names the rollout it came from. The rollout process joins with your Probe settings (the environment it inherits); a `client=` passed to `track()` stays in the trainer.
+  - **GKD and GOLD:** each row a model writes (GKD's student or teacher, GOLD's student) is live while it generates and ends `ungraded` (the loss grades it), under its sample's own key. GOLD's VLM path still records its samples, without live rows.
+  - **GOLD with `dataloader_num_workers > 0`:** samples keep their dataset row's `task_id`, scenario and label instead of the prompt's hash, also after a mid-epoch resume. A dataloader with `in_order=False` keeps the prompt hash and says so once.
+
 ## 0.509.0
 
 - **A verl SFT job resumes its own run.** verl's SFT trainer saves through `CheckpointHandler.save_checkpoint`, which Probe did not wrap, so its checkpoints carried no record of their run and an SFT job on its default `experiment_name: test` opened a new run on every resume. The process that logs (its session) now stamps each `global_step_N/`, before a re-save into an existing folder and after the save, as PPO saves are, and a resume reopens the run that wrote it (checkpoints saved before this release still open a new run).

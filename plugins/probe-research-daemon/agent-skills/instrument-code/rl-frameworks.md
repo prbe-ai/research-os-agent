@@ -299,7 +299,7 @@ probe watch $RUN --until samples.live:state=hung --timeout 3600   # sleep until 
 | ART | only rollouts you decorate (below) | refused | refused: it raises in your gather, and ART's default `max_exceptions=0` stops the step | refused |
 | SkyRL | every trajectory; Harbor inside SkyRL, every try | refused | refused: SkyRL retries a failed trial and masks its prompt group | refused |
 | verl | every agent loop | refused | refused | refused |
-| TRL | every row of a GRPO, RLOO or distillation batch; none in AsyncGRPO, GKD, GOLD | refused | refused | refused |
+| TRL | every row of a GRPO, RLOO or distillation batch; every AsyncGRPO rollout (from its rollout process); every GKD or GOLD row a model writes (not GOLD's VLM path) | refused | refused | refused |
 
 ART awaits your own rollout coroutines, so decorate the rollout:
 
