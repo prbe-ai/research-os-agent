@@ -19,7 +19,8 @@
         "mcp__plugin_probe-research_probe-research__",
         "mcp__plugin-probe-research:probe-research__",
         "mcp__probe-research__",
-        "mcp__probe_research__"
+        "mcp__probe_research__",
+        "mcp__plugin-probe-research-probe-research__"
       ],
       "bare_key_mcp_tool_prefixes": []
     },
@@ -38,7 +39,8 @@
       "rules_end": "<!-- probe:end -->",
       "mcp_tool_prefixes": [
         "mcp__plugin_probe_probe__",
-        "mcp__plugin-probe:probe__"
+        "mcp__plugin-probe:probe__",
+        "mcp__plugin-probe-probe__"
       ],
       "bare_key_mcp_tool_prefixes": [
         "mcp__probe__"

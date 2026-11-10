@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Cursor CLI: a chat with Probe off now refuses Probe's tools.** The Cursor CLI names an MCP tool without its server when it asks hooks about a call (`MCP:browse`), so a chat with Probe off, or one the daemon reads for, never refused Probe's MCP tools there, under either install name. Probe now also answers Cursor's `beforeMCPExecution`, which names the server, and refuses only Probe's (`plugin-probe-research-probe-research`, `plugin-probe-probe`), in the same words other agents get; a chat with Probe on and every other server's tools are untouched. The Cursor app is not confirmed yet: it may skip that hook. An existing Cursor install gets the new hook at its next `probe update`; until then `probe doctor` lists it as missing.
+
 ## 0.511.0
 
 - **The writer's `run_end` trace line says how many writes the run landed (`writes`).** It counts the writes that ran during the run (logbook `status = 'ran'`, as `probe daemon status` counts them; a held write approved after the run ends belongs to no run and is not counted), 0 when nothing landed, so the server's PostHog record of each run says whether it recorded anything. The reader's run_end is unchanged.
