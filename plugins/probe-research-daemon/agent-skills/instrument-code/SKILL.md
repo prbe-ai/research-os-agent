@@ -288,6 +288,10 @@ with probe.span("rollout", name=task.id, external_key=task.id) as span:
     probe.log_artifact(f"eval/{task.id}/output.png", path=out.image, span_id=span)
 ```
 
+A run that writes its results to files attaches them too (`probe.log_artifact`, its own result
+files by name, never secrets), so a pane (`write-pane`) can show what the built-in charts and tables
+can't.
+
 ## NAME WHAT A CRASH WAS PROCESSING:
 
 Wrap each batch or sample of the loop so a crash email names what it died on.

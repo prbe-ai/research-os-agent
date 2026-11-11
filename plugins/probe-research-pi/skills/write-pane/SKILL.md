@@ -1,6 +1,6 @@
 ---
 name: write-pane
-description: Writes a pane - one live visual the dashboard's own charts cannot draw (before/after images or documents, a per-task table, why tasks did not finish) on a project's or experiment's Probe page, redrawn from its runs' data each time it opens and while a run trains. Use for per-task eval results across runs and to show the PDFs or Word files a run wrote. A score compared across runs is a chart in an experiment's Metrics center (overview-visuals), never a pane.
+description: Write a pane - a live visual on a project or experiment page. Use it unasked whenever a run, experiment or project has important data the built-in charts and tables can't show; never for what they can. When you report such results, put them in a pane too, without asking, since the researcher wants them on the page.
 ---
 # Write a pane
 
@@ -9,15 +9,15 @@ the recipe every time the pane opens, for the runs in view (an experiment's, a p
 or the runs someone picked to compare), so new runs show up without a rewrite. Panes sit at the top
 of the project's or experiment's page; summary rewrites never touch them.
 
-Write one when the best visual depends on the task: before/after images for a vision task, a
-table of tasks, why tasks did not finish.
+First ask whether a built-in view shows it: a curve over steps is in the metric section; a score
+per run, per config or per group (a leaderboard, by a config, or by a group such as document length)
+is a table or chart in the Metrics-center visuals of the experiment whose runs recorded it
+(`overview-visuals`); the project page shows each experiment's charts too. A pane
+is for whatever important data is left, chart or not: for example each frame's score under two
+models, before/after images, the PDFs a run wrote, why tasks did not finish. A research project and
+its experiments carry no charts: scored runs belong in an evaluation, training or general project.
 
-Never draw a chart in a pane: its own bar or line chart looks unlike every other chart on the page.
-A curve over steps is already in the metric section. A score compared across runs (a leaderboard, by
-a config, or by a group such as document length) is a `table` or `bar` in the Metrics-center visuals
-of the experiment whose runs recorded it (`overview-visuals`); the project page shows each
-experiment's charts too. A research project and its experiments carry no charts: scored runs belong
-in an evaluation, training or general project.
+A score per group that no run has logged yet is still a built-in chart:
 
 1. The run records the score once per group, under its own key, with a dimension of a few values:
    the group's mean, never one call per task and never a task id as the dimension
@@ -26,12 +26,39 @@ in an evaluation, training or general project.
 2. Then chart it: a `bar` with `x: {dimension: "length"}` (`probe visuals set`; where the daemon
    records, ask its writer: `probe ask --writer "<the chart>"`).
 
-A pane shows per-task rows, files and the server's `totals` as they are; it never averages
-`samples` rows into a per-run or per-group score.
+A pane shows rows, files and the server's `totals` as they are; it never averages `samples` rows
+into a per-run or per-group score.
 
-## 1. Record per-task results
+## When to write one
 
-One rollout span per task, its scores in `attributes`, its output files linked to it:
+- When results land, before you report them: if something important can't be shown by a built-in
+  view, write a pane. Nobody needs to ask for it. Only while Probe records this chat (the daemon
+  records it, or you took over inline): while Probe is `read` or `off`, or after it refuses a pane
+  command, skip it and say in one line that a pane would help. Never add `--directed` to a pane
+  nobody asked for.
+- Run `probe pane list <project-or-experiment>` first. Replace only a pane whose slug you pushed in
+  this chat; every other pane is someone else's (when unsure, it is) and stays as it is, and a new
+  pane shows only what it doesn't. A new pane's slug must not be in the list: a push to a taken slug
+  replaces that pane for good. One new pane per question.
+- Push only when `probe pane data` shows the rows the pane reads, each file by its name on its run.
+  A writer's reply, or an ask that is still looking, is not proof. Then tell the researcher in one
+  line, with the `url` the push printed. If the attach or the push fails, report the results in text
+  and say the pane wasn't made; never give a link for it.
+- When the project or experiment already holds 8, ask the researcher which one to replace; with
+  nobody to ask (a script or a sweep), skip the pane and say so.
+
+## 1. Put the data on the runs
+
+A pane reads only what its runs hold: their metrics, spans and attached files. A run that writes
+its results to files attaches them (`probe.log_artifact("eval/results.jsonl", path=...)` in the
+script). Results still only on disk from a run that ended: where the daemon records, ask its writer
+to attach them and wait for its answer (`probe ask --writer --wait "attach results/frames.jsonl to run <run-id>"`);
+otherwise `probe artifact add <run-id> <path>`. Whichever way it is attached, attach only result
+files the run wrote, each by name: never env, config or key files, logs, or results holding secrets
+or data the researcher hasn't shared with the team.
+
+Per-task results are best as one rollout span per task, its scores in `attributes`, its output
+files linked to it:
 
 ```python
 with probe.span("rollout", name=task.id, external_key=task.id) as span:
@@ -55,7 +82,8 @@ From a shell, `probe span add RUN --type rollout ...` prints the span id; upload
  "data": [
   {"id": "variants", "source": "runs", "config": ["lr", "model"]},
   {"id": "tasks", "source": "samples", "fields": ["attributes.score"], "counts": ["attributes.unfinished_reason"]},
-  {"id": "after", "source": "files", "prefix": "eval/", "name": "*.png", "span": "rollout"}]}
+  {"id": "after", "source": "files", "prefix": "eval/", "name": "*.png", "span": "rollout"},
+  {"id": "results", "source": "files", "name": "*.jsonl"}]}
 ```
 
 `runs` is `"scope"` (the runs in view) or a list of run ids. `files` filters by `prefix`, `name`
@@ -95,10 +123,11 @@ run: `probe run series <run-id>` lists its metric keys, `probe span list <run-id
   or `<!-- comments -->`. Start with your markup, `<style>` and `<script>` tags.
 - `PROBE.runs('variants')`, `PROBE.samples('tasks')`, `PROBE.files('after')` (and `PROBE.series(id)`
   for a `series` entry) return that entry. Name each id literally and read every entry the recipe has.
-- `PROBE.image(row)` resolves to a `data:` URL; `PROBE.text(row)` to text (CSV too);
+- `PROBE.image(row)` resolves to a `data:` URL; `PROBE.text(row)` to text (CSV and JSONL too);
   `PROBE.json(row)` to parsed JSON. They read only rows of the pane's own `files` entries. Each can
   reject (`budget`, `not_in_files`, `too_large`, `unavailable`): catch it and draw a placeholder, or
-  the whole pane shows as failed.
+  the whole pane shows as failed. Text and JSON stop at 1 MiB: read a bigger result file with
+  `PROBE.bytes(row)` and `new TextDecoder().decode(bytes)`.
 - `PROBE.bytes(row)` resolves to an `ArrayBuffer` of the file's original bytes (a PDF, a Word
   file, any binary up to 25 MiB; bigger rejects `too_large`, unread when its `size_bytes` is known)
   for a library to draw.

@@ -27,6 +27,7 @@ Never type a number. Name what to show; the server reads the values. `probe visu
 - `parallel`: many configs and scores, a line per run (`axes`).
 - `metric_grid`: one run's scores keyed `{row}/{column}` (`rows`, `columns` with `label`, `value`), instead of a one-row table. The newest run unless `runs` names it; `group_reduce` folds several.
 - No `line`: the metric section already charts every metric over steps. One number or a summary is the page's job.
+- Important data none of these can show goes in a pane (`write-pane`).
 
 Every `table` and `metric_grid` has a readable `title` and a `description` of one or two short sentences (at most 600 characters), shown just below the title. Explain what the rows compare, what the measures mean, and the checkpoint or evaluation scope when known. Describe the table, without inventing results or typing numeric scores; the server supplies those. Add a description to existing captionless tables when updating their overview. For example: "Compare the recipes at their final dev checkpoint. Each row reports clean-row rate, reward, and fully judged rows."
 
