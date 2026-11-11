@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The daemon reader's `send_partial` tool reads in Richard's approved wording.** Its description is now "Send the main agent a partial answer to the ask. This might be useful if you want to feed the main agent a half answer before giving it the full answer. Sending a partial answer does not end your turn." What the tool does is unchanged: once per ask, never on a `--full` ask, and the full answer still follows. The reader's tool list changes, so its prompt cache is rebuilt once on the first turn after the update.
+
 ## 0.522.0
 
 ## 0.521.0
