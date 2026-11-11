@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.520.0
+
 - **Mac: every `probe exec` in a burst starts its program.** With 20 started at once, 1-4 failed with "error: the probe shim did not start the program" while the shim had in fact started it. macOS can collect a unix socket whose only reference is in flight, and the shim closed its copy of the command's end of the launcher channel right after sending it to the service. The command's end then read EOF before the program's pid arrived. The shim now keeps that copy until the command's first message shows it arrived, as the service already does for the host's socket (#4470).
 - **The daemon's reader sends an early partial answer to an ask while it keeps looking (daemon-speed T6b).** On a `probe ask` (not `--full`) that takes more than one search, the reader may send what its first look found once, with its new `send_partial` tool; the main agent gets it on its next prompt or tool call (or `--wait` prints it), and the full answer follows. The full answer takes back a partial not yet delivered; after a delivered partial, an empty or failed ending says nothing more came instead of "nothing in the team's records"; the stale sweep never drops a partial. The store gains `read_asks.full` and `read_messages.partial` (an earlier CLI ignores both), and the reader's `run_end` trace line gains `partial_at`. The reader's job text gains one line (plan A.3), so each live reader conversation starts fresh once after the update.
 

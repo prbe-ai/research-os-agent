@@ -1,6 +1,6 @@
 {
   "cli": {
-    "latest": "0.519.0",
+    "latest": "0.520.0",
     "min": "0.226.2",
     "recommended": "0.303.0",
     "message": "This Probe CLI is missing a security fix and has stopped updating itself. Ask your agent to update Probe (`npx -y probe-research update --json`); if it says a setup is running, restart the computer first."
