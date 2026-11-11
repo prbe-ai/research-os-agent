@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A daemon reader that ends its turn with `final_result` under the wrong field is sent back, not read as "nothing" (daemon speed T20 follow-up).** In T20's bench, 1 of 40 claude-sonnet-5-5 asks ended with `final_result(answer=...)`: the reader's result ignored the unknown field, so the ask was told "nothing in the team's records" and the answer was lost. `ReadResult` and the writer's `BiteResult` now refuse fields they do not have, so the model gets the schema error back (at most twice); past that, a reader turn's wrong-shaped `final_result` words count as its prose, which is an ask's answer.
+
 ## 0.518.0
 
 - **A daemon reader that comes back to its conversation after the prompt cache is gone starts it fresh (daemon cost T17).** A live reader conversation idle longer than the writer's pushed `writerColdFreshS` (1800 s in prod; 0 keeps resuming) whose saved history is at least `READ_FRESH_FLOOR_TOKENS` (30K estimated tokens) ends with "idle N min: the prompt cache is gone", and the turn starts a fresh one told what was already sent, as a turn over the size does. Resuming re-read the whole conversation cold: p50 61K input tokens on the first round against 17K for a fresh start, 416 times a week. The reader trace's `run_start` says `fresh: "cold"`. Only turns that answer no ask start fresh this way (check-ins, prompt wakes, peer messages): an answer to an ask after an idle resumes the conversation, since a fresh start re-looked things up and made those answers slower (median 13 s before, 34.5 s with it).
