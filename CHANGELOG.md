@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.524.0
+
 - **A Claude Code project folder that never answers no longer holds an update for 10 minutes.** Claude Code's move to Probe's new plugin names reads the settings of every project Claude Code knows. A folder on a stalled network or cloud drive could block that read for good. Since 0.513.0 that cost one machine its whole 10-minute plugin step on every update (`Claude Code's plugin update did not finish within 10 min`), so its plugin and tap never updated. The walk now runs on its own thread, and each folder gets 30 s to answer. One that does not answer fails the move for now and is named; a long walk that keeps moving is not cut off. Claude Code's own plugin update then runs as before. The failure counts toward the move's back-off (three in a row, then once a day), and `probe doctor` names the folder, not an earlier project's advice that was already followed. An update step that runs past its deadline now also says which step it was in, for example `(it was moving Probe's plugins to their new name)`, so a report shows where it hung.
 
 ## 0.523.0
