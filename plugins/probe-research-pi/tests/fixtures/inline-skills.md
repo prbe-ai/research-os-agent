@@ -86,7 +86,7 @@ Every run needs an owner that keeps it alive:
 2. `probe exec -- CMD` for code you can't edit; a submit-only launcher (`sbatch`, `ray job submit`, `modal deploy`) opens it awaiting attach (unknown launcher: `--detached-launcher`).
 3. W&B: the project attached in the dashboard, or `probe wandb import-local|import-hosted`.
 
-- When a run starts, name and describe it: `probe run set RUN --name "<title>" --description "<what it tests, one sentence>"`. Leave out a field `probe run get RUN` shows locked (`name_customized`, `description_customized` true): the server refuses an agent's change to it (409) and writes nothing from that call. `--slug` only when you must find one by hand.
+- Name and describe every run when it starts, each one when many start together: `probe run set RUN --name "<title>" --description "<what it tests, one sentence>"`. Leave out a field `probe run get RUN` shows locked (`name_customized`, `description_customized` true): the server refuses an agent's change to it (409) and writes nothing from that call. `--slug` only when you must find one by hand.
 - Under a CLI `run start`, run the work with `probe exec RUN -- cmd` or nothing it reads or writes is recorded.
 - Inputs: what the run read that changes its result (dataset, checkpoint, tokenizer, outside config): `probe snapshot RUN --include`, `inputs-decision.json`, `snapshot-restore --verify-only` (reference §3).
     - What it trained on: `probe dataset use REF --run R --role train`, or `run.use_dataset(REF)`. Weights it started or resumed from: `probe checkpoint use REF --run R`; a checkpoint it evaluates: `--role eval`. Name the exact version or save (`dataset:N@3`, `checkpoint:RUN@step400`). A mix: `run.use_mixture({REF: share, ...})`, shares summing to 1.
