@@ -1306,6 +1306,8 @@ READ_VERBS = frozenset(
         "audit-advisory",
         # `probe checkpoint best` prints the best save by a named metric.
         "best",
+        # `probe run count` prints how many runs a listing's filters match.
+        "count",
         # Print what is already recorded: `artifact tree|pin-impact`,
         # `experiment|paper edges`, `run metrics|series`, `views data|preview`
         # (a preview evaluates a spec without saving it).
