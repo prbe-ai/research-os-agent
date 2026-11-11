@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **A daemon reader that ends its turn with `final_result` under the wrong field is sent back, not read as "nothing" (daemon speed T20 follow-up).** In T20's bench, 1 of 40 claude-sonnet-5-5 asks ended with `final_result(answer=...)`: the reader's result ignored the unknown field, so the ask was told "nothing in the team's records" and the answer was lost. `ReadResult` and the writer's `BiteResult` now refuse fields they do not have, so the model gets the schema error back (at most twice); past that, a reader turn's wrong-shaped `final_result` words count as its prose, which is an ask's answer.
+- **PyPI's Repository and Changelog links and npm's issues link open the renamed public mirror, `prbe-ai/probe`.** They pointed at `prbe-ai/research-os-agent`, which is being archived. npm's `repository` stays `prbe-ai/research-os`: trusted publishing needs the repo that publishes. Launcher 0.40.0 carries the npm link; nothing it does changes.
 
 ## 0.518.0
 
