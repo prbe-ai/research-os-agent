@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.521.0
+
 - **Agents write a pane on their own when a run, experiment or project has important data the built-in charts and tables can't show (plan pane-nudge).** The `write-pane` skill's description is now that rule, so the agent reaches for it during normal work instead of only when asked. It checks the built-in views first, runs `probe pane list`, replaces only a pane it pushed in that chat and never pushes to a slug already taken, pushes only once `probe pane data` shows the files it reads, and tells the researcher the pane's link; it skips the pane while Probe is `read` or `off`, and reports in text when a push or attach fails. "Never draw a chart in a pane" is gone: a chart the dashboard can't draw (each frame's score under two models) belongs in one; a score per run, config or group stays a built-in visual. The skill also covers result files a run wrote (JSON, JSONL, CSV; over 1 MiB through `PROBE.bytes`), that a pane reads only files attached to the run, and which files to attach (the run's own results, by name; never env, config, key or log files). `instrument-code` says to attach result files; `overview-visuals` points to panes for what its views can't show. Synced to the plugin, daemon and pi copies.
 
 ## 0.520.0
