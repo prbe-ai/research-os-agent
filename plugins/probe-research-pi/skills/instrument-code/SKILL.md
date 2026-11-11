@@ -456,6 +456,10 @@ it - the SDK preflights `GET /v1/server/features` and refuses loudly on an older
 deployment. Never work around that by deleting and re-uploading the run;
 upgrade, or fork.
 
+Logging a run that already happened keeps its real times (ISO 8601 with an offset):
+`probe run start --started-at 2026-11-08T09:30:00Z` and `probe run end <run> --ended-at ...`,
+or `client.run(..., started_at=...)` then `run.set_status("completed", ended_at=...)`.
+
 ## TAKE COMMANDS WHILE IT RUNS:
 
 Register what the script can be asked; `probe run send RUN <kind>` asks it, and the
