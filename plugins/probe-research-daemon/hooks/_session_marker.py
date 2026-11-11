@@ -1629,7 +1629,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: Probe's own docs, an outside source too and not the team's records: the same
 #: rule, and the only way this profile reaches them (it has no MCP). `feedback send`
 #: holds feedback for the Probe team as a question for the researcher
-#: (`probe.feedback`); nothing leaves without their yes. `approvals` lists the
+#: (`probe.feedback`); nothing leaves without their yes. `feedback install` sends the
+#: install's note once the person picked Send on the install page (its text may hold
+#: `$` or braces, which upkeep refuses). `approvals` lists the
 #: questions the daemon holds for the researcher: in an agent's shell the CLI
 #: only lists them and answers nothing (`daemon_cli.approvals_cmd`). Never
 #: `deny`: a no is the researcher's.
@@ -1676,7 +1678,7 @@ DAEMON_PROFILE_ALLOWED = frozenset(
      "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
      "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
      "access-group list", "notes sync", "agent-rules refresh", "draft edit",
-     "file preview", "feedback flush", "capy sync", "capy disconnect", "session owed", "session home show",
+     "file preview", "feedback flush", "feedback install", "capy sync", "capy disconnect", "session owed", "session home show",
      "pin add", "pin list", "pin rm"}
 )
 
