@@ -87,7 +87,7 @@ count under `value: null`: drop that bucket when counting reasons.
 `unmatched` names the keys no readable run has, and a samples entry's `unseen_fields` the fields not
 in the `rows_read` rows read: a typo, or not logged yet (`state` stays `ok`). Take real names from a
 run: `probe run series <run-id>` lists its metric keys, `probe span list <run-id> --type rollout
---limit 3` shows its samples' `attributes` (not `probe samples`: those are RL samples).
+--limit 3` shows its samples' `attributes` (not the RL samples command: those are RL samples).
 
 ## 3. Write the code
 
