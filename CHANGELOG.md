@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.518.0
+
 - **A daemon reader that comes back to its conversation after the prompt cache is gone starts it fresh (daemon cost T17).** A live reader conversation idle longer than the writer's pushed `writerColdFreshS` (1800 s in prod; 0 keeps resuming) whose saved history is at least `READ_FRESH_FLOOR_TOKENS` (30K estimated tokens) ends with "idle N min: the prompt cache is gone", and the turn starts a fresh one told what was already sent, as a turn over the size does. Resuming re-read the whole conversation cold: p50 61K input tokens on the first round against 17K for a fresh start, 416 times a week. The reader trace's `run_start` says `fresh: "cold"`. Only turns that answer no ask start fresh this way (check-ins, prompt wakes, peer messages): an answer to an ask after an idle resumes the conversation, since a fresh start re-looked things up and made those answers slower (median 13 s before, 34.5 s with it).
 
 ## 0.517.0
