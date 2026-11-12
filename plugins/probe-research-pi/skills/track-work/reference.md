@@ -17,8 +17,8 @@ Lookup only; judgment is in the skill.
 ## 1. ENTITY COMMANDS
 
 ```
-probe project create SLUG --kind K [--part-of P --reason "..."] [--tag T] | list | get | use | set | move | delete
-probe experiment create SLUG --project P --question "..." | set [--question|--conclusion] | freeze --label L | delete | edges
+probe project create SLUG --kind K --name "..." [--part-of P --reason "..."] [--tag T] | list | get | use | set | move | delete
+probe experiment create SLUG --project P --name "..." --question "..." | set [--question|--conclusion] | freeze --label L | delete | edges
 probe experiment fork SRC NEW --question "..." | inherited EXP [--runs]
 probe exec [--project P | --experiment E] [--parent RUN --relation R] -- CMD
 probe run fork SRC --step N | end --status S | check | reproduce | tag | set RUN --name --description

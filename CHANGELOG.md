@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **The reader tells your own work from your team's.** A `search` card for a GitHub hit now names its `author` (the GitHub login; never the engine's "unknown", never on other sources). The daemon reader calls a record your session's own only when the session shows it being made, searching the whole session (`probe daemon session search`); a newer record the session never mentions is "owner unclear"; anything else is the team's, called recent or parallel when newer than the session. A GitHub login names a person, never a session. Needs a server that sends `author_id`; an older one shows no `author`.
+- **Projects and experiments are created with a real name.** `track-work`, `record-runs` and the daemon writer now create them with `--name "<plain title>"`, so a new one reads as a title, not its slug.
 
 ## 0.528.0
 

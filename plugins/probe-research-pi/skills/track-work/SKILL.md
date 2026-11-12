@@ -66,7 +66,7 @@ Put each fact on the lowest entity it is true of. Tracking on means everything i
 
 ## Project and experiment
 
-Create both first; `run start` never creates them, and a typo'd slug makes a second one.
+Create both first, each with `--name "<plain title>"`; `run start` never creates them, and a typo'd slug makes a second one.
 
 | kind | for |
 |---|---|
@@ -76,7 +76,7 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 | `general` | anything else |
 | `experiment` | one question (`--question`) under one of the above; holds runs; its answer is `--conclusion` |
 
-- Projects are flat. A phase of a bigger effort is its own project: `probe project create SLUG --kind K --part-of P --reason "..."`. To link related work or an existing project: `probe project reference add --to P [--part-of] --reason "..."`. A repo: `project code attach PROJECT OWNER/REPO`.
+- Projects are flat. A phase of a bigger effort is its own project: `probe project create SLUG --kind K --name "..." --part-of P --reason "..."`. To link related work or an existing project: `probe project reference add --to P [--part-of] --reason "..."`. A repo: `project code attach PROJECT OWNER/REPO`.
 - No question: a project-direct run. `freeze` pins an experiment's runs.
 - No headline metric yet? Choose one from the code and runs, set it (`probe project set P --metric KEY --goal max|min`), and tell the researcher in one line.
 - A project's description comes from its summary's first line.
