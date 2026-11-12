@@ -3655,6 +3655,62 @@ def is_auto_chat(session_id: str, config: "dict | None" = None) -> bool:
     return move is not None and move["auto"]
 
 
+# ---------------------------------------------------------------------------
+# THE SWITCH, AS EVERY WRITE REPORTS IT (`X-Probe-Agent-Switch`)
+# ---------------------------------------------------------------------------
+#
+# The server keeps the newest report on the session's activity row
+# (app/capture/sessions/switch_report.py), so "is this chat inline, and who put it
+# there" is a query rather than an inference. `by`, the last move:
+#   person      a typed `/probe ...` / `probe session state` (the environment override too)
+#   agent       the agent, when the person asked (`--directed`)
+#   auto        the agent, in probe auto mode
+#   default     the machine's (the wizard's) or the shipped default; nobody moved it
+#   unrecorded  an older client wrote the state and left no source
+
+SWITCH_BY_PERSON = "person"
+SWITCH_BY_AGENT = "agent"
+SWITCH_BY_AUTO = "auto"
+SWITCH_BY_DEFAULT = "default"
+SWITCH_BY_UNRECORDED = "unrecorded"
+
+
+def _load_last_move(session_id: str) -> "tuple[str, float | None]":
+    move = load_agent_move(session_id)
+    if move is not None:
+        return (SWITCH_BY_AUTO if move["auto"] else SWITCH_BY_AGENT), move["at"]
+    source = state_source_label(session_id)
+    by = {SOURCE_DEFAULT: SWITCH_BY_DEFAULT, SOURCE_UNRECORDED: SWITCH_BY_UNRECORDED}.get(source, SWITCH_BY_PERSON)
+    try:
+        return by, state_path(session_id).stat().st_mtime
+    except OSError:
+        return by, None
+
+
+def switch_report(session_id: str) -> "dict | None":
+    """`{"state", "control", "by", "recorder", "at"}` for this chat, or None when this machine holds
+    no switch for it (undecided, or a remote job's forwarded chat: never a guessed default). `state`: on | read |
+    off | daemon | inline (the agent holds a daemon chat); `control`: auto | manual (`is_auto_chat`);
+    `by`: the last move (above); `recorder`: who reads and records now (`is_daemon_mode`); `at`: epoch
+    seconds of that move. Never raises."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        stored = session_state(session_id)
+        if stored is None:
+            return None
+        by, at = _load_last_move(session_id)
+        return {
+            "state": INLINE_WORD if is_inline(session_id, stored) else STATE_LABELS.get(stored, str(stored)),
+            "control": CONTROL_AUTO if is_auto_chat(session_id) else CONTROL_MANUAL,
+            "by": by,
+            "recorder": RECORDER_DAEMON if is_daemon_mode(session_id, stored) else RECORDER_AGENT,
+            "at": at,
+        }
+    except Exception:
+        return None
+
+
 #: An auto chat's first researcher prompt has had its line (`claim_first_prompt`).
 AUTO_PROMPTED_SUFFIX = ".auto-prompted"
 
