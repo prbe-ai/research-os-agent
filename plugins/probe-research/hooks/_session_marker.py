@@ -2478,8 +2478,8 @@ ALLOWANCE_SPENT_INLINE = ALLOWANCE_SPENT + " Probe's `on` is inline here: you re
 
 #: The chat's first researcher prompt, at its seeded default (`{state}`).
 AUTO_FIRST_PROMPT_LINE = (
-    "Probe is {state} here (the researcher's default, auto mode). Set it first: ML work, data included, "
-    "is `on`."
+    "Probe is {state} here (the researcher's default, auto mode). If this is ML work, data included, set `on` "
+    "first."
 )
 AUTO_OFF_LINE = "Probe is off here (auto mode). If this request is ML work, data included, run `probe session state on` first."
 AUTO_READ_LINE = (
