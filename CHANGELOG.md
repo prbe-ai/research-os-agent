@@ -5,6 +5,7 @@
 ## 0.535.0
 
 - **After `/probe auto`, the next prompt gets the chat's own state line, not the first-prompt line** (in an `on` chat, that line again says to run `off` once the work has clearly left ML).
+- **`run.samples.log_metrics(sample_key, metrics, step=, update=)` logs any metric per sample, like `run.log`, with a weight per value; `probe samples points` reads them (rl-trajectory-metrics T1).** Nested dicts flatten to `/` keys, `agg` is sent, `weights=` says what each value averages over. Inside an optimizer update (or an eval pass, `split="eval", eval_pass=`) a row carries how the sample entered the loss (token count, mask digest, loss sum, contribution and its terms); `log_metrics_many` takes a hook's whole micro-batch and `log_update` each update's own record (ranks, micro-batches, rows, padding, reported loss, applied, lr and grad norm). They go to `POST /v1/runs/{id}/samples/points` as their own ops, never merged with `/samples/batch` (an older server's 404 costs only them), and fail open like every `run.samples` method. `probe.sdk.run.samples.points.summarize_rows` turns a loss hook's per-token tensors (any names), mask and weights into per-row values, weights and contributions (by autograd of the framework's own reduction, or an explicit normalizer) with one device-to-host copy per micro-batch. `summarize_tokens` adds `masked_tokens`. `probe samples points RUN [--key K] [--by step|update|run] [--sample ID] [--capture]` and the MCP `samples` views `points` and `points_capture` read them.
 
 ## 0.534.0
 

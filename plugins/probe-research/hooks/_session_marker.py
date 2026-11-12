@@ -1702,7 +1702,7 @@ DAEMON_PROFILE_RUN_READS = frozenset(
      "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
      "snapshot-show", "samples capture", "samples stats", "samples list", "samples show", "samples logs",
      "samples tokens", "samples tasks", "samples task", "samples weights", "samples compare", "checkpoint best",
-     "samples live", "samples tail", "samples commands"}
+     "samples live", "samples tail", "samples commands", "samples points"}
 )
 
 #: Reads of the panes the agent writes (`write-pane`), in the one project or
