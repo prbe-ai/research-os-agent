@@ -92,7 +92,7 @@ def lowered_lines(marker, session_id: str) -> "list[str]":
         text = marker.get_agent_move_notice(move["state"])
         if text:
             lines.append(text)
-        marker.mark_agent_move_told(session_id)
+        marker.mark_agent_move_told(session_id, at=move["at"])
     for entry in marker.take_untold(marker.TOLD_IN_CHAT, session=session_id):
         if entry.get("notice"):
             lines.append(entry["notice"])

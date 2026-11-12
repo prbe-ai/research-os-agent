@@ -3797,7 +3797,8 @@ def hand_chat_to_auto(session_id: str, *, is_agent: bool = False, is_directed: b
     which the stamp is checked against (`load_agent_move`), and loses it again when the stamp is not written:
     a failure changes nothing. From the agent's shell (`is_agent`) it runs only when the person asked
     (`is_directed`), decided again inside the lock as `set_state_by_agent` does, so a `/probe` the researcher
-    typed after the agent's gate is never undone (REFUSED). One of the HAND_BACK_* outcomes."""
+    typed after the agent's gate is never undone (REFUSED). A handed-back chat's first prompt counts as
+    claimed (`claim_first_prompt`). One of the HAND_BACK_* outcomes."""
     if not valid_session_id(session_id):
         return HAND_BACK_FAILED
     with _StateLock(session_id):
@@ -3824,6 +3825,8 @@ def hand_chat_to_auto(session_id: str, *, is_agent: bool = False, is_directed: b
                 except OSError:
                     pass
             return HAND_BACK_FAILED
+    # The chat's first prompt is behind it: the next one gets the state's own line, not the first-prompt line.
+    claim_first_prompt(session_id)
     return HAND_BACK_DONE
 
 
@@ -3847,15 +3850,19 @@ def _hand_switch_to_researcher(session_id: str) -> None:
     _remove_agent_move(session_id)
 
 
-def mark_agent_move_told(session_id: str) -> None:
-    """The person was told of the agent's move (`load_agent_move`'s `told`). Best effort."""
-    try:
-        stamp = json.loads(get_moved_by_path(session_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    if isinstance(stamp, dict):
-        stamp["told"] = True
-        _publish_atomically(get_moved_by_path(session_id), json.dumps(stamp) + "\n")
+def mark_agent_move_told(session_id: str, at: "float | None" = None) -> None:
+    """The person was told of the agent's move (`load_agent_move`'s `told`). Best effort. Read and rewritten under
+    the chat's lock, so a newer stamp written meanwhile (a `/probe auto` hand-back, the agent's next move) is never
+    replaced by the older one this caller showed. `at`: the shown move's (`load_agent_move`'s `at`); a newer move
+    stamped since stays untold, so the person still hears of it. None marks whatever stamp is there."""
+    with _StateLock(session_id):
+        try:
+            stamp = json.loads(get_moved_by_path(session_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(stamp, dict) and (at is None or _finite(stamp.get("at")) == at):
+            stamp["told"] = True
+            _publish_atomically(get_moved_by_path(session_id), json.dumps(stamp) + "\n")
 
 
 def get_kept_out_dir(root: "Path | None" = None) -> Path:

@@ -1445,7 +1445,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
     }
 
     let applied = false;
-    // What the service told the person about a `/probe auto` (handed back, already auto, manual computer).
+    // What the service told the person about a `/probe auto` (handed back, already auto, manual computer,
+    // could not hand back).
     let handBackLines: string[] = [];
     if (intent.direction !== null) {
       const sessionId = ctx.sessionManager.getSessionId();

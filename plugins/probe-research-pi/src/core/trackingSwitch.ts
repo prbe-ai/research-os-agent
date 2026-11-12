@@ -172,9 +172,10 @@ export function switchAppliedNotice(direction: SwitchDirection): string {
 
 /**
  * The line appended to a typed `/probe auto` after the service ran it: what the
- * service told the person (handed back, already auto, or a computer in manual
- * mode), so the model hears the same outcome and never that a switch moved.
- * Empty when the service said nothing (its write failed).
+ * service told the person (handed back, already auto, a computer in manual mode,
+ * or could not hand back), so the model hears the same outcome and never that a
+ * switch moved. Empty only when the service gave no outcome (an older service
+ * without `auto`).
  */
 export function handBackNotice(lines: readonly string[]): string {
   return lines.length ? `\n\n(${lines.join(" ")})` : "";
