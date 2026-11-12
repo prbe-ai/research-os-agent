@@ -176,7 +176,8 @@ DAEMON_REASON_WORDS = _session_marker.DAEMON_REASON_WORDS
 MESSAGE_DAEMON = (
     "The Probe daemon is recording this conversation, but `{matched}` just wrote to Probe "
     "directly. The daemon sees that write in the transcript and will not repeat it. From here, "
-    "launch and instrument runs in a project (`probe project create <slug>` if none fits) and "
+    "launch and instrument runs in a project (`probe project create <slug> --kind <kind> "
+    "--name \"...\"` if none fits) and "
     "leave the rest to the daemon: it files runs in an experiment and group, renames or moves "
     "projects and runs, and writes the notes, artifacts, papers, tags and descriptions. A write "
     "the researcher asks for takes `--directed`."
