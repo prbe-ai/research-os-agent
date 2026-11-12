@@ -154,7 +154,8 @@ the lines to paste, the task and scenario fields, the worker token, resume.
 | Harbor | `harbor run ... --plugin probe --pk run=RUN` (`probe-research[cli,harbor]`) |
 
 A per-sample number of an RL attempt is a sample's, never a labeled metric
-point. Then prove the capture on a two-step run: `probe samples capture RUN`
+point. A custom RL loop that records rollouts with `run.samples` is marked `rl`
+on its own; otherwise open its run with `probe.init(run_type="rl")`. Then prove the capture on a two-step run: `probe samples capture RUN`
 says yes, or no with its reasons. While it trains, `probe samples live RUN`
 shows which samples run, are slow, hung or failing, and cancel or retry one
 where its framework allows (`rl-frameworks.md`, LIVE; a harness with no

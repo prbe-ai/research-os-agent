@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **A run can say it is an RL run: `probe.init(run_type="rl")`, `probe run start/set --type rl|general`, `run.set_run_type()`.** The run page shows its RL workspace, Rollouts, Compute timeline and Trials only for `rl` runs (server 0495). Every RL adapter (Miles, verl, ART, SkyRL, TRL, Harbor) creates its runs as `rl`; Harbor's `capture_trial` marks a run `rl` unless someone chose its type; under `probe exec` the script's `run_type` reaches the launcher's run from rank 0 instead of being ignored; offline runs carry it to `probe sync`. `run.run_type` reads it (an undeclared run reads `general`). A bad value (`"RL"`, `"eval"`) is refused before any request.
+
+## 0.532.0
 
 ## 0.531.0
 - **Summary pages lead with where the work is headed and why, numbers last (Miguel's feedback; `~/plans/summary-direction-first/PLAN.md`).** `write-summary` now holds the page's content and order in one place, since it is the one page skill both the daemon and an inline agent always see whole: a TL;DR in plain words with no numbers (up to 5 short bullets: where it's headed, each key decision and why, how far it has moved from what it set out to do), then Next, then the evidence. A reason comes only from what the work recorded. `overview-page` keeps how a page is built. Both skills are shorter than before. Blind benchmark on two projects: the new pages ranked above every page written with the old skills.
