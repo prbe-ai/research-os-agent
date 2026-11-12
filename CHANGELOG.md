@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Summary pages lead with where the work is headed and why, numbers last (Miguel's feedback; `~/plans/summary-direction-first/PLAN.md`).** `write-summary` now holds the page's content and order in one place, since it is the one page skill both the daemon and an inline agent always see whole: a TL;DR in plain words with no numbers (up to 5 short bullets: where it's headed, each key decision and why, how far it has moved from what it set out to do), then Next, then the evidence. A reason comes only from what the work recorded. `overview-page` keeps how a page is built. Both skills are shorter than before. Blind benchmark on two projects: the new pages ranked above every page written with the old skills.
 
 ## 0.530.0
 
