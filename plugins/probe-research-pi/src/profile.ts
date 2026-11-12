@@ -65,6 +65,8 @@ export const PACKAGE_SKILLS: ReadonlySet<string> = new Set([
   "artifact-design",
   // A pane: the agent's own visual on a project or experiment (run compare + panes T12).
   "write-pane",
+  // A project's canvas preview (project-preview T8).
+  "write-preview",
 ]);
 
 /** Where the daemon's own skills live inside this package. Never named in package.json. */

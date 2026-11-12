@@ -1249,7 +1249,7 @@ WRITE_GROUPS = frozenset(
         # `status` reads, `keep` and `delete` end it. The agent runs them in every recorder mode.
         "example",
         # Panes (run compare + panes T11): `pane push` records; `data`, `get` and `list` read;
-        # `rm` removes.
+        # `rm` removes. `pane preview` (SUBGROUPS): `show` and `checkout` read; `set` and `clear` record.
         "pane",
         # Chart layouts (team flag chart_layouts): `chart set` and `chart layout` record.
         "chart",
@@ -1263,7 +1263,9 @@ WRITE_GROUPS = frozenset(
 #: so `project code list` reads while `project code attach` writes; read two words
 #: deep, every `project code` command looked like one write. Keys in the tables
 #: below name the three words (`wandb key set`); a bare subgroup key never matches.
-SUBGROUPS = frozenset({"project code", "project reference", "run input", "wandb key", "session home"})
+SUBGROUPS = frozenset(
+    {"project code", "project reference", "run input", "wandb key", "session home", "pane preview"}
+)
 
 #: Commands that only read unless given one of these flags: bare
 #: `project contributors` lists who is credited, `--add`/`--remove` change it.
@@ -1452,8 +1454,8 @@ PLUMBING_GROUP_WRITES = frozenset({"workspace set", "session home set", "session
 #: with: part of the launch (`probe exec --detached-launcher` mints one), and
 #: the run's expiry alert tells the agent to `--extend` it.
 #: `pane push` saves a pane, a visual the coding agent writes over its runs' data
-#: (`write-pane`): the agent's own work, which the daemon never writes (R10 of
-#: run-compare-and-panes; daemon-written panes are a later step). `pane rm` removes
+#: (`write-pane`): the agent's own work (R10 of run-compare-and-panes); the daemon
+#: pushes only a project's preview (`--preview`, `write-preview`). `pane rm` removes
 #: the agent's own pane beside it (agent-friendly R11): the daemon never writes one,
 #: so a removal sent its way (the profile's refusal) had nowhere to go.
 DAEMON_AGENT_WRITES = frozenset(
@@ -1709,7 +1711,9 @@ DAEMON_PROFILE_RUN_READS = frozenset(
 #: list`). A pane cannot be written without them (R10), so they are admitted
 #: though `pane data` reads a scope's runs as the pane will; searches and
 #: listings across the team's work stay the daemon's.
-DAEMON_PROFILE_PANE_READS = frozenset({"pane data", "pane get", "pane list"})
+#: A project's canvas preview too (`pane preview show`): which pane fills its box, read only; the
+#: daemon's writer writes it.
+DAEMON_PROFILE_PANE_READS = frozenset({"pane data", "pane get", "pane list", "pane preview show"})
 
 #: ...but not where a flag writes what it read: `run reproduce --materialize`
 #: restores the run's captured tree, as the kept `snapshot-restore` does, and

@@ -136,6 +136,8 @@ RESEARCH_SKILLS = {
     "artifact-design",
     # a pane: the agent's own visual on a project or experiment (run compare + panes T12)
     "write-pane",
+    # a project's canvas preview, a pane that says what the project is about (project-preview T8)
+    "write-preview",
     "probe-setup",
     "probe-research-setup",  # the setup command's name before the rename to Probe
     # retired names (kept for resumed transcripts and cached installs);

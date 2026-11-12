@@ -80,6 +80,7 @@ Create both first, each with `--name "<plain title>"`; `run start` never creates
 - No question: a project-direct run. `freeze` pins an experiment's runs.
 - No headline metric yet? Choose one from the code and runs, set it (`probe project set P --metric KEY --goal max|min`), and tell the researcher in one line.
 - A project's description comes from its summary's first line.
+- Right after a project is created, give it its preview: one plain sentence on what it is for, in the pane its canvas box shows (`write-preview`, when that skill is shown to you).
 - Pass `--project`; `project use` is machine-wide.
 
 ## Run

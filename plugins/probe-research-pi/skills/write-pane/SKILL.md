@@ -31,6 +31,7 @@ into a per-run or per-group score.
 
 ## When to write one
 
+- A project's canvas preview, the pane its box on the canvas shows, is its own job: `write-preview`.
 - When results land, before you report them: if something important can't be shown by a built-in
   view, write a pane. Nobody needs to ask for it. Only while Probe records this chat (the daemon
   records it, or you took over inline): while Probe is `read` or `off`, or after it refuses a pane
