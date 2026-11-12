@@ -249,12 +249,17 @@ STATUS_WORDS = frozenset({"status"})
 #: and the daemon stops. Honoured only from a shape that proves a person
 #: (`RESEARCHER_SHAPES`): never from a tool call the agent can make.
 INLINE_WORDS = frozenset({_session_marker.INLINE_WORD})
+#: `/probe auto`: the researcher hands this chat back to auto mode, its state unchanged
+#: (`session_marker.hand_chat_to_auto`). Not a state: kept out of the state words. Person-only, as `inline`.
+AUTO_WORDS = frozenset({"auto"})
 
 #: The relative request, kept distinct from the three absolute targets. A claim
 #: stores what a cycle RESOLVED TO, never the word -- see `_apply_direction`.
 CYCLE = "cycle"
 #: The direction (and, in the daemon profile, the announcement) of `/probe inline`.
 INLINE = _session_marker.INLINE_WORD
+#: The direction of `/probe auto`: no move of the switch (`_hand_back`).
+AUTO = "auto"
 #: Set by harness_io for a hook whose output the harness drops (Kimi's typed
 #: `/probe`): nothing said there reaches the model, so nothing is marked told.
 QUIET_ENV = "PROBE_HOOK_QUIET"
@@ -938,13 +943,15 @@ def _direction_from_words(
     lives. Typed at a legacy name it is `read-only` (what it has always done);
     typed at the new switch it is the new `off`. See LEGACY_SLUGS.
 
-    `inline` moves only when `typed` (a shape a person sends): the agent never
-    hands Probe to itself.
+    `inline` and `auto` move only when `typed` (a shape a person sends): the agent
+    never hands Probe to itself, nor its switch back to itself.
     """
     if not words:
         return CYCLE if bare_flips else None
     if words[0] in INLINE_WORDS:
         return INLINE if typed else None
+    if words[0] in AUTO_WORDS:
+        return AUTO if typed else None
     if words[0] in READ_ONLY_WORDS:
         return "read-only"
     if words[0] in DAEMON_WORDS:
@@ -1603,12 +1610,18 @@ def _rules_parts(hook_event: str, session_id: str, said: list, cwd: "str | None"
     return [text] if text else []
 
 
+#: Set by the Probe service on pi's prompt (`before_agent_start`) of a turn whose typed `/probe` ran
+#: (`pi/hook_routes.to_lane_payload`): that turn gets no auto line, as a typed `/probe` gets none elsewhere.
+TYPED_SWITCH_KEY = "probe_typed_switch"
+
+
 def _make_auto_line(payload: dict, session_id: str) -> "str | None":
     """Auto mode: the one line a researcher's prompt in an auto chat gets on where this chat's
     Probe stands (`session_marker.make_auto_prompt_line`), or None. Callers skip a helper agent's
-    prompt and a typed `/probe`. Nothing where the output reaches no model (QUIET_ENV), so the
-    first prompt's line is not spent there."""
-    if os.environ.get(QUIET_ENV) == "1" or not _session_marker.is_auto_chat(session_id):
+    prompt and a typed `/probe` (pi's: TYPED_SWITCH_KEY). Nothing where the output reaches no model
+    (QUIET_ENV), so the first prompt's line is not spent there."""
+    if (os.environ.get(QUIET_ENV) == "1" or payload.get(TYPED_SWITCH_KEY) is True
+            or not _session_marker.is_auto_chat(session_id)):
         return None
     word = _session_marker.get_auto_state_word(session_id, _state(session_id, _payload_cwd(payload)))
     prompt = payload.get("prompt")
@@ -1621,6 +1634,26 @@ def _make_auto_line(payload: dict, session_id: str) -> "str | None":
     return _session_marker.make_auto_prompt_line(
         word, _session_marker.claim_first_prompt(session_id), prompt if isinstance(prompt, str) else "",
         is_allowance_spent=spent)
+
+
+def _hand_back(hook_event: str, session_id: str) -> None:
+    """The researcher's typed `/probe auto` (`session_marker.hand_chat_to_auto`): the outcome's line, to the
+    person (`systemMessage`; pi's typed line shows it) and the model (context), and nothing else this turn:
+    no auto line, so the agent does not move the switch while answering it."""
+    text = _session_marker.HAND_BACK_LINES.get(_session_marker.hand_chat_to_auto(session_id))
+    if text:
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": hook_event, "additionalContext": text},
+                                     "systemMessage": text}))
+
+
+def _is_hand_back_block(prompt: object, shape: str, slug: str) -> bool:
+    """Codex's `<skill>` block for `$probe auto`: the model can send it, so it hands nothing back, and the
+    turn the typed line handed back gets no auto line beside it."""
+    if shape != SHAPE_SKILL_BLOCK or slug not in TOGGLE_SKILL_SLUGS or not isinstance(prompt, str):
+        return False
+    args = _COMMAND_ARGS_TAG.search(prompt) or _ARGUMENTS_LINE.search(prompt)
+    words = args.group(1).strip().lower().split() if args else []
+    return bool(words) and words[0] in AUTO_WORDS
 
 
 def _from_helper_agent(payload: dict) -> bool:
@@ -2626,12 +2659,15 @@ def main() -> None:
                        if shape == SHAPE_SKILL_BLOCK else None)
             if refused:
                 _emit_context("UserPromptSubmit", refused)  # a skill activation the model can send (T3)
+            elif direction == AUTO:
+                _hand_back("UserPromptSubmit", session_id)
             elif direction is not None:
                 landed = _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
                 _announce("UserPromptSubmit", landed, daemon=True, session_id=session_id)
             else:
-                _announce_inline_once("UserPromptSubmit", session_id, lead=_make_auto_line(payload, session_id),
-                                      cwd=_payload_cwd(payload), rules=True)
+                lead = None if _is_hand_back_block(payload.get("prompt"), shape, slug) else _make_auto_line(
+                    payload, session_id)
+                _announce_inline_once("UserPromptSubmit", session_id, lead=lead, cwd=_payload_cwd(payload), rules=True)
         elif hook_event == "PostToolUse":
             landed = None
             # A helper agent's Skill call is never the switch: its words are the main agent's.
@@ -2660,8 +2696,13 @@ def main() -> None:
         if refused:
             _emit_context("UserPromptSubmit", refused)  # a skill activation the model can send (T3)
             return
+        if direction == AUTO:
+            _hand_back("UserPromptSubmit", session_id)
+            return
         if direction is None:
-            said = [_make_auto_line(payload, session_id), _daemon_notice(session_id, _payload_cwd(payload))]
+            is_hand_back = _is_hand_back_block(payload.get("prompt"), shape, slug)
+            said = [None if is_hand_back else _make_auto_line(payload, session_id),
+                    _daemon_notice(session_id, _payload_cwd(payload))]
             if any(said):
                 _emit_context("UserPromptSubmit", "\n\n".join(text for text in said if text))
             return

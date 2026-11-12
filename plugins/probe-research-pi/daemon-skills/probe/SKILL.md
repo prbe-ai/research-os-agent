@@ -24,6 +24,7 @@ or `off`, once they said yes) and say it applies to new chats only.
 /probe read    read only (daemon): reads, files nothing      /probe status   print it, change nothing
 /probe off     off: no daemon, no Probe calls, transcript capture stops
 /probe inline  on (inline): no daemon; you read and write Probe yourself
+/probe auto    back to auto mode: the agent sets it by the work
 ```
 
 `/probe inline` is the researcher's: you go inline only when they ask

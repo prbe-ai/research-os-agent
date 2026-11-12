@@ -2478,12 +2478,11 @@ ALLOWANCE_SPENT_INLINE = ALLOWANCE_SPENT + " Probe's `on` is inline here: you re
 
 #: The chat's first researcher prompt, at its seeded default (`{state}`).
 AUTO_FIRST_PROMPT_LINE = (
-    "Probe is {state} here (the researcher's default, auto mode). If this is ML work, data included, set `on` "
-    "first."
+    "Probe is {state} here (the researcher's default, auto mode). If this is ML work, set `on` first."
 )
-AUTO_OFF_LINE = "Probe is off here (auto mode). If this request is ML work, data included, run `probe session state on` first."
+AUTO_OFF_LINE = "Probe is off here (auto mode). If this request is ML work, run `probe session state on` first."
 AUTO_READ_LINE = (
-    "Probe is read here (auto mode). To record this request's ML work, data included, run `probe session state on` first."
+    "Probe is read here (auto mode). To record this request's ML work, run `probe session state on` first."
 )
 #: On (the daemon's or the agent's) or inline (`{state}`).
 AUTO_ON_LINE = "Probe is {state} here (auto mode). If the work has clearly left ML, run `probe session state off`."
@@ -3767,6 +3766,61 @@ def set_state_by_agent(session_id: str, state: str, *, is_directed: bool) -> "tu
             return (False, is_auto)
         save_agent_move(session_id, _get_move_stamp(session_id, stored), is_auto=is_auto)
     return (True, is_auto)
+
+
+#: `hand_chat_to_auto`'s outcomes: handed back, already an auto chat, a computer in manual mode, nothing written,
+#: and an agent's undirected call on a chat the researcher set meanwhile (refused, nothing written).
+HAND_BACK_DONE = "handed"
+HAND_BACK_ALREADY = "already"
+HAND_BACK_MANUAL = "manual"
+HAND_BACK_FAILED = "failed"
+HAND_BACK_REFUSED = "refused"
+#: What the person hears for each outcome (`/probe auto`, `probe session state auto`). REFUSED has none: it is
+#: the agent's, answered with the agent's refusal (`switch.AGENT_MOVE_REFUSED`).
+HAND_BACK_LINES = {
+    HAND_BACK_DONE: "Probe: auto mode again for this chat - the agent sets Probe by the work from your next request.",
+    HAND_BACK_ALREADY: "Probe: this chat is already in auto mode.",
+    HAND_BACK_MANUAL: ("Probe: this computer is in manual mode, so this chat has no auto mode to return to. "
+                       "`probe session control auto` turns auto mode on."),
+    HAND_BACK_FAILED: "Probe: this chat could not be handed back to auto mode; nothing changed.",
+}
+
+
+def hand_chat_to_auto(session_id: str, *, is_agent: bool = False, is_directed: bool = False) -> str:
+    """The researcher's `/probe auto`: this chat's switch is the agent's again (`is_auto_chat`), its state
+    unchanged. Written under the chat's lock as the agent's auto stamp for the current state (`save_agent_move`);
+    `.state-source` and the kept-out entry stay. A legacy chat (only `.tracking`/`.off`) gets `.state` first,
+    which the stamp is checked against (`load_agent_move`), and loses it again when the stamp is not written:
+    a failure changes nothing. From the agent's shell (`is_agent`) it runs only when the person asked
+    (`is_directed`), decided again inside the lock as `set_state_by_agent` does, so a `/probe` the researcher
+    typed after the agent's gate is never undone (REFUSED). One of the HAND_BACK_* outcomes."""
+    if not valid_session_id(session_id):
+        return HAND_BACK_FAILED
+    with _StateLock(session_id):
+        if not is_auto_machine():
+            return HAND_BACK_MANUAL
+        if is_auto_chat(session_id):
+            return HAND_BACK_ALREADY
+        if is_agent and not is_directed:
+            return HAND_BACK_REFUSED
+        current = session_state(session_id)
+        if current is None:  # undecided reads as auto above; a vanished state is not handed back
+            return HAND_BACK_FAILED
+        try:
+            has_state_file = state_path(session_id).read_text(encoding="utf-8").strip().lower() in STATES
+        except OSError:
+            has_state_file = False
+        if not has_state_file and not _set_state_unlocked(session_id, current):
+            return HAND_BACK_FAILED
+        stamp = MOVED_TO_INLINE if is_inline(session_id, current) else current
+        if not save_agent_move(session_id, stamp, is_auto=True):
+            if not has_state_file:
+                try:
+                    state_path(session_id).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return HAND_BACK_FAILED
+    return HAND_BACK_DONE
 
 
 def _get_move_stamp(session_id: str, stored: str) -> str:

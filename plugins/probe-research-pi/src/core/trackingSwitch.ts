@@ -43,6 +43,10 @@ const STATUS_WORDS = new Set(["status"]);
 // and the daemon stops. `tracking_guard.py::INLINE_WORDS`; only an interactive
 // source reaches this function, so it is always the researcher's.
 const INLINE_WORDS = new Set(["inline"]);
+// `/probe auto`: the researcher hands this chat back to auto mode, its state
+// unchanged (`session_marker.hand_chat_to_auto`). Not a state, so not in the
+// state words. `tracking_guard.py::AUTO_WORDS`; interactive sources only.
+const AUTO_WORDS = new Set(["auto"]);
 
 /**
  * Slugs that predate the third state, and what `off` means when typed at one.
@@ -90,8 +94,9 @@ const LEGACY_CANONICAL = "/skill:track-work";
  * Mirrors `session_marker.SWITCH_STATES`. The daemon is not a position (Richard
  * 2026-09-29): it is chosen in `probe wizard`, and a typed `daemon` moves
  * nothing -- it canonicalises like any unrecognised word and the skill says so.
+ * `auto` moves no state: it hands the chat back to auto mode.
  */
-export type SwitchDirection = "full" | "read-only" | "off" | "cycle" | "inline";
+export type SwitchDirection = "full" | "read-only" | "off" | "cycle" | "inline" | "auto";
 
 export interface SwitchIntent {
   direction: SwitchDirection | null;
@@ -135,6 +140,7 @@ export function parseSwitchIntent(text: string): SwitchIntent | null {
   }
   if (ON_WORDS.has(first)) return { direction: "full", canonicalText };
   if (INLINE_WORDS.has(first)) return { direction: "inline", canonicalText };
+  if (AUTO_WORDS.has(first)) return { direction: "auto", canonicalText };
   if (TOGGLE_WORDS.has(first)) return { direction: "cycle", canonicalText };
   if (STATUS_WORDS.has(first)) return { direction: null, canonicalText };
   return { direction: null, canonicalText };
@@ -162,4 +168,27 @@ export function switchAppliedNotice(direction: SwitchDirection): string {
     "Read the resulting state back with `probe session status` and report that, " +
     "rather than describing what tracking does.)"
   );
+}
+
+/**
+ * The line appended to a typed `/probe auto` after the service ran it: what the
+ * service told the person (handed back, already auto, or a computer in manual
+ * mode), so the model hears the same outcome and never that a switch moved.
+ * Empty when the service said nothing (its write failed).
+ */
+export function handBackNotice(lines: readonly string[]): string {
+  return lines.length ? `\n\n(${lines.join(" ")})` : "";
+}
+
+/**
+ * Whether `prompt` (a `before_agent_start` prompt) is the turn of the line a typed `/probe auto` became
+ * (`typed`, its transformed text): that text itself, or it as pi expands a `/skill:` line (the skill's block, then
+ * the line's arguments). Any other prompt -- an earlier one still queued -- is not.
+ */
+export function isTypedSwitchPrompt(prompt: unknown, typed: string): boolean {
+  if (typeof prompt !== "string" || !typed) return false;
+  if (prompt === typed || prompt.startsWith(typed)) return true;
+  const space = typed.indexOf(" ");
+  const args = space === -1 ? "" : typed.slice(space + 1).trim();
+  return typed.startsWith("/skill:") && !!args && prompt.endsWith(`\n\n${args}`);
 }

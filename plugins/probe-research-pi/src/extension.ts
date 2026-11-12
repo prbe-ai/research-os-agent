@@ -61,7 +61,7 @@ import { boundedHookEnv, ensureService, lookupServiceSocket } from "./core/servi
 import { packageVersion } from "./packageVersion.js";
 import { answeredEffects, Forwarder, freshForwardState, ranToEnd, showNotices, wasAccepted, type ForwardState } from "./forwarding.js";
 import { callService, ForwardedEvent, ForwardOutcome, piConfigRoot } from "./serviceForward.js";
-import { parseSwitchIntent, switchAppliedNotice } from "./core/trackingSwitch.js";
+import { handBackNotice, isTypedSwitchPrompt, parseSwitchIntent, switchAppliedNotice } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
 import {
   companionKeyHeld,
@@ -1135,6 +1135,7 @@ export function prepareExtension(env: ImplEnv): Candidate {
     stopDaemon(sessionId, realDaemonDeps());
     s.capture.pending.delete(sessionId);
     s.capture.spawned.delete(sessionId);
+    typedSwitchTurns.delete(sessionId);
     // A session the Probe service records (its `.hosted` marker): on a quit the
     // service finishes it now, waited on for a few seconds; then the marker goes,
     // so a resume of this session is recorded again (daemon.ts, audit #10).
@@ -1193,14 +1194,14 @@ export function prepareExtension(env: ImplEnv): Candidate {
    * parsed; the session-start context goes into the prompt. pi keeps the person's dialogs,
    * its idle poller and the team note. Null: the service did not take it (pi's own code runs).
    */
-  async function forwardPrompt(event: any, ctx: any, sessionId: string, base: string): Promise<{ systemPrompt: string; message: string | null } | null> {
+  async function forwardPrompt(event: any, ctx: any, sessionId: string, base: string, isTypedSwitch: boolean): Promise<{ systemPrompt: string; message: string | null } | null> {
     if (!forwarder.hasContext(sessionId)) {
       // Its record-keeping was queued at the session start already: this asks only for the context.
       const late = await forwarder.send(ForwardedEvent.SessionStart, ctx, { reason: "startup" }, false);
       if (wasAccepted(late)) forwarder.keepContext(sessionId, answeredEffects(late));
     }
     await askHeldQuestions(ctx, sessionId, true);
-    const answer = await forwarder.send(ForwardedEvent.BeforeAgentStart, ctx, { prompt: event.prompt, agent_dir: piConfigRoot(process.env) });
+    const answer = await forwarder.send(ForwardedEvent.BeforeAgentStart, ctx, promptFields(event, isTypedSwitch));
     if (!wasAccepted(answer)) return null;
     const effects = answeredEffects(answer);
     const parts = [base, forwarder.getContext(sessionId), ...(effects?.systemPrompt ?? [])].filter(Boolean);
@@ -1223,8 +1224,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
    * this chat's Probe stands (the guard's prompt route), as a hidden message. Never the team note or
    * the session-start context: nothing else of Probe rides an off chat's prompt.
    */
-  async function forwardAutoLine(event: any, ctx: any, sessionId: string) {
-    const answer = await forwarder.send(ForwardedEvent.BeforeAgentStart, ctx, { prompt: event.prompt, agent_dir: piConfigRoot(process.env) });
+  async function forwardAutoLine(event: any, ctx: any, sessionId: string, isTypedSwitch: boolean) {
+    const answer = await forwarder.send(ForwardedEvent.BeforeAgentStart, ctx, promptFields(event, isTypedSwitch));
     if (!wasAccepted(answer)) return undefined;
     const effects = answeredEffects(answer);
     if (effects?.receipts.length) setImmediate(() => void forwarder.settle(effects, true));
@@ -1233,10 +1234,39 @@ export function prepareExtension(env: ImplEnv): Candidate {
     return { message: { customType: "probe-daemon", content: effects.messages.join("\n\n"), display: false } };
   }
 
+  /**
+   * The prompt's fields for the service. `typed_switch`: this turn's typed `/probe auto` ran (`onInput`), so its
+   * prompt gets no auto line (`tracking_guard.TYPED_SWITCH_KEY`): the agent never moves the switch while
+   * answering the researcher's own `/probe auto`.
+   */
+  function promptFields(event: any, isTypedSwitch: boolean): Record<string, unknown> {
+    return { prompt: event.prompt, agent_dir: piConfigRoot(process.env), ...(isTypedSwitch ? { typed_switch: true } : {}) };
+  }
+
+  /**
+   * Per session, the lines its typed `/probe auto`s became (`onInput`) whose prompts have not started yet, oldest
+   * first: each is taken by its own line's prompt only, so an earlier prompt still queued never takes a mark and a
+   * line typed after one never erases it. At most TYPED_SWITCH_TURNS_KEPT per session (the oldest go first);
+   * dropped when the session ends.
+   */
+  const typedSwitchTurns = new Map<string, string[]>();
+  const TYPED_SWITCH_TURNS_KEPT = 4;
+
+  /** Whether `prompt` is one of the session's pending `/probe auto` lines; that line's mark is taken. */
+  function takeTypedSwitch(sessionId: string | undefined, prompt: unknown): boolean {
+    const lines = sessionId ? typedSwitchTurns.get(sessionId) : undefined;
+    const at = lines ? lines.findIndex((line) => isTypedSwitchPrompt(prompt, line)) : -1;
+    if (!lines || at === -1) return false;
+    lines.splice(at, 1);
+    if (!lines.length) typedSwitchTurns.delete(sessionId!);
+    return true;
+  }
+
   const onBeforeAgentStart: EventHandler = async (event, ctx) => {
     // Not awaited: the prompt must not wait on a footer read.
     void rereadPendingCapture(ctx, "before_agent_start");
     const sessionId = ctx?.sessionManager?.getSessionId();
+    const isTypedSwitch = takeTypedSwitch(sessionId, event?.prompt);
     // `probe session state inline` from a terminal moves the switch on disk
     // without a typed `/probe`: read it back, or a cached `off` would return
     // below before the agent hears it is inline. In an auto chat the agent
@@ -1271,10 +1301,10 @@ export function prepareExtension(env: ImplEnv): Candidate {
     }
     if (!sessionId) return;
     // An off auto chat still hears the service's line on where Probe stands; nothing else rides it.
-    if (probeIsOff(s)) return isAutoChat(s, sessionId) ? await forwardAutoLine(event, ctx, sessionId) : undefined;
+    if (probeIsOff(s)) return isAutoChat(s, sessionId) ? await forwardAutoLine(event, ctx, sessionId, isTypedSwitch) : undefined;
     // The service builds the prompt's additions (the team note, daemon reads and notices included);
     // one it did not answer goes on with no change (service-only task 16).
-    const forwarded = await forwardPrompt(event, ctx, sessionId, event.systemPrompt);
+    const forwarded = await forwardPrompt(event, ctx, sessionId, event.systemPrompt, isTypedSwitch);
     if (forwarded === null || (forwarded.systemPrompt === event.systemPrompt && !forwarded.message)) return;
     return {
       ...(forwarded.systemPrompt !== event.systemPrompt ? { systemPrompt: forwarded.systemPrompt } : {}),
@@ -1415,6 +1445,8 @@ export function prepareExtension(env: ImplEnv): Candidate {
     }
 
     let applied = false;
+    // What the service told the person about a `/probe auto` (handed back, already auto, manual computer).
+    let handBackLines: string[] = [];
     if (intent.direction !== null) {
       const sessionId = ctx.sessionManager.getSessionId();
       if (!sessionId) {
@@ -1427,7 +1459,25 @@ export function prepareExtension(env: ImplEnv): Candidate {
       applied = ranToEnd(forwarded);
       logLine(`tracking switch: the Probe service ${applied ? "ran it" : `did not (${forwarded?.outcome ?? "no session"})`}`);
       if (!applied) return { action: "continue" };
+      if (intent.direction === "auto") {
+        const effects = answeredEffects(forwarded);
+        handBackLines = effects?.notices.map((notice) => notice.text) ?? [];
+        // An older Probe service has no `auto` word and answers with no hand-back line: nothing was handed
+        // back, so the line goes on as typed, unmarked, as a switch the service did not run.
+        if (!handBackLines.length) {
+          logLine("tracking switch: the Probe service gave /probe auto no outcome");
+          return { action: "continue" };
+        }
+        showNotices(ctx, effects);
+        const pending = typedSwitchTurns.get(sessionId) ?? [];
+        pending.push(intent.canonicalText + handBackNotice(handBackLines));
+        typedSwitchTurns.set(sessionId, pending.slice(-TYPED_SWITCH_TURNS_KEPT));
+      }
       await refreshTrackingStatus(s, footerClock, ctx, sessionId, ctx.cwd);
+    }
+    // `/probe auto` moves no switch: the model hears the service's outcome, never that the switch moved.
+    if (intent.direction === "auto") {
+      return { action: "transform", text: intent.canonicalText + handBackNotice(handBackLines) };
     }
     // Transform, never "handled": the researcher asked for the skill, and the
     // model still needs the manual — not least to READ THE STATE BACK and say

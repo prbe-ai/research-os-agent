@@ -10,6 +10,7 @@ This skill only changes the state of Probe - it doesn't actually track any work.
 /probe on      reads and writes        /probe          advance one step
 /probe read    search yes, record no   /probe status   print it, change nothing
 /probe off     no calls at all, transcript capture stops
+/probe auto    back to auto mode: the agent sets it by the work
 ```
 
 ## The three states

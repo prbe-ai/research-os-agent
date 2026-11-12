@@ -215,6 +215,104 @@ describe("every turn goes to the service", () => {
     expect(forwarded(fake).filter((e) => e === "input").length).toBe(before);
   });
 
+  it("tells the person /probe auto's outcome, never says the switch moved, and gives that turn no auto line", async () => {
+    let line = "Probe: auto mode again for this chat - the agent sets Probe by the work from your next request.";
+    const fake = await serve((request) => (eventOf(request) === "input"
+      ? { result: answer({ actions: [{ kind: "notify", text: line, level: "info" }] }) }
+      : { result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    const prompts = () => fake.requests.filter((r) => eventOf(r) === "before_agent_start")
+      .map((r) => JSON.parse((r.params as Record<string, unknown>).payload as string));
+    const typed = await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    expect(typed).toEqual({ action: "transform", text: `/skill:probe auto\n\n(${line})` });
+    expect(ctx.notices).toContain(line);
+    await on("before_agent_start")({ prompt: typed.text, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1)).toMatchObject({ typed_switch: true });
+    await on("before_agent_start")({ prompt: "fix the CSS", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined();
+    // A computer in manual mode refuses it: the refusal is said, and no move is claimed.
+    line = "Probe: this computer is in manual mode, so this chat has no auto mode to return to. `probe session control auto` turns auto mode on.";
+    const refused = await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    expect(refused.text).toBe(`/skill:probe auto\n\n(${line})`);
+    expect(refused.text).not.toContain("switch was just moved");
+    expect(ctx.notices).toContain(line);
+  });
+
+  it("marks only the /probe auto line's own turn, never an earlier prompt still queued", async () => {
+    const line = "Probe: auto mode again for this chat - the agent sets Probe by the work from your next request.";
+    const fake = await serve((request) => (eventOf(request) === "input"
+      ? { result: answer({ actions: [{ kind: "notify", text: line, level: "info" }] }) }
+      : { result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    const prompts = () => fake.requests.filter((r) => eventOf(r) === "before_agent_start")
+      .map((r) => JSON.parse((r.params as Record<string, unknown>).payload as string));
+    const typed = await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    // The earlier prompt's turn starts first: it keeps its auto line, and the mark waits.
+    await on("before_agent_start")({ prompt: "fix the CSS", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined();
+    // pi expands the `/skill:` line (the skill's block, then its arguments) before the turn starts.
+    const expanded = `<skill name="probe" location="/x/SKILL.md">\nbody\n</skill>\n\n${typed.text.slice("/skill:probe ".length)}`;
+    await on("before_agent_start")({ prompt: expanded, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1)).toMatchObject({ typed_switch: true });
+    await on("before_agent_start")({ prompt: expanded, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined(); // taken once
+  });
+
+  it("keeps a /probe auto line's mark through later input, and one mark per queued /probe auto line", async () => {
+    const line = "Probe: auto mode again for this chat - the agent sets Probe by the work from your next request.";
+    const fake = await serve((request) => (eventOf(request) === "input"
+      ? { result: answer({ actions: [{ kind: "notify", text: line, level: "info" }] }) }
+      : { result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    const prompts = () => fake.requests.filter((r) => eventOf(r) === "before_agent_start")
+      .map((r) => JSON.parse((r.params as Record<string, unknown>).payload as string));
+    const typed = await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    // A line typed while the `/probe auto` turn is queued: the mark stays for the `/probe auto` turn.
+    await on("input")({ text: "fix the CSS", source: "interactive" }, ctx);
+    await on("before_agent_start")({ prompt: typed.text, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1)).toMatchObject({ typed_switch: true });
+    await on("before_agent_start")({ prompt: "fix the CSS", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined();
+    // Two `/probe auto` lines queued: each turn keeps its own mark.
+    const first = await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    const second = await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    await on("before_agent_start")({ prompt: first.text, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1)).toMatchObject({ typed_switch: true });
+    await on("before_agent_start")({ prompt: second.text, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1)).toMatchObject({ typed_switch: true });
+    await on("before_agent_start")({ prompt: second.text, systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined(); // each taken once
+  });
+
+  it("treats /probe auto as not run when an older service gives it no hand-back line", async () => {
+    const fake = await serve(() => ({ result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    const prompts = () => fake.requests.filter((r) => eventOf(r) === "before_agent_start")
+      .map((r) => JSON.parse((r.params as Record<string, unknown>).payload as string));
+    expect(await on("input")({ text: "/probe auto", source: "interactive" }, ctx)).toEqual({ action: "continue" });
+    expect(ctx.notices).toEqual([]);
+    await on("before_agent_start")({ prompt: "/probe auto", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined();
+  });
+
+  it("keeps /probe on as it was: no service notice, no mark on its turn, and no mark a later line inherits", async () => {
+    const fake = await serve((request) => (eventOf(request) === "input"
+      ? { result: answer({ actions: [{ kind: "notify", text: "Probe is on here.", level: "info" }] }) }
+      : { result: answer({ actions: [] }) }));
+    const { on, ctx } = await start();
+    const prompts = () => fake.requests.filter((r) => eventOf(r) === "before_agent_start")
+      .map((r) => JSON.parse((r.params as Record<string, unknown>).payload as string));
+    await on("input")({ text: "/probe on", source: "interactive" }, ctx);
+    expect(ctx.notices).not.toContain("Probe is on here.");
+    await on("before_agent_start")({ prompt: "/skill:probe on", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined();
+    // A `/probe auto` whose line started no turn: the next line's prompt is not marked.
+    await on("input")({ text: "/probe auto", source: "interactive" }, ctx);
+    await on("input")({ text: "fix the CSS", source: "interactive" }, ctx);
+    await on("before_agent_start")({ prompt: "fix the CSS", systemPrompt: "BASE", systemPromptOptions: {} }, ctx);
+    expect(prompts().at(-1).typed_switch).toBeUndefined();
+  });
+
   it("continues a completed run the service's owed route sends back, and never a stopped one", async () => {
     const fake = await serve((request) => (eventOf(request) === "agent_before_settle"
       ? { result: answer({ actions: [{ kind: "continue", text: "write your summary first" }] }) }
