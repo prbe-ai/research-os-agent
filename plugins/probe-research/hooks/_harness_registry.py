@@ -236,6 +236,10 @@ class Harness:
     #: hooks then record "this process runs session X", and a `probe` command
     #: finds its session by walking up to that process.
     process_title: str | None = None
+    #: A variable the harness sets to its own pid in its shells (Claude Code: `CLAUDE_PID`): that
+    #: process above a command is this harness whatever its title, and not above it, this harness's
+    #: variables were inherited from elsewhere (`agent_session._find_nearest_agent_env`).
+    pid_env: str | None = None
     #: A key only this harness's hook payloads carry (Cursor: `cursor_version`). An
     #: event a hook declares for another harness whose payload carries it came from
     #: this one (Cursor runs Claude Code's plugins too), and is not run as that one's.
@@ -500,6 +504,7 @@ def _harness(row: Any, index: int) -> Harness:
         hook_output=hook_output,
         session_id_prefix=_str_or_none(row.get("session_id_prefix"), f"{where}.session_id_prefix"),
         process_title=_str_or_none(row.get("process_title"), f"{where}.process_title"),
+        pid_env=_str_or_none(row.get("pid_env"), f"{where}.pid_env"),
         hook_payload_marker=_str_or_none(row.get("hook_payload_marker"), f"{where}.hook_payload_marker"),
         app_paths=_app_paths(row.get("app_paths"), f"{where}.app_paths"),
         wake_by=wake_by,

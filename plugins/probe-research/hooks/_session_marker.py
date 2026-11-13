@@ -6432,27 +6432,53 @@ def _titled(title: str, wanted: str) -> bool:
     return os.path.basename(title) == wanted or title == wanted
 
 
+#: The machine's own pid namespace: the kernel gives it this fixed inode (PROC_PID_INIT_INO).
+_ROOT_PID_NAMESPACE = "pid:[4026531836]"
+
+
+def _is_in_child_pid_namespace() -> bool:
+    """Whether this process runs in a child pid namespace (a sandbox, a container):
+    its pid 1 is not the machine's, and a pid another agent exported means nothing
+    here. `NSpid` cannot say so where the sandbox mounted its own /proc; the
+    namespace's identity can. Elsewhere (macOS: no /proc), False."""
+    try:
+        return os.readlink("/proc/self/ns/pid") != _ROOT_PID_NAMESPACE
+    except OSError:
+        return False
+
+
 def find_agent_ancestors(
-    names: "dict[str, tuple[str, ...]]", pid: "int | None" = None
-) -> "list[tuple[str, int, bool]]":
-    """(agent id, pid, sandbox) for each ancestor titled one of `names` ({agent id:
-    the names its process goes by}), nearest first; [] when none or unreadable.
-    `sandbox`: the namespace's pid 1 under a helper's name (`<name>-…`), as a
-    sandboxed Codex shell sees only `codex-linux-sandbox` above it. Never raises."""
+    names: "dict[str, tuple[str, ...]]", pid: "int | None" = None, pids: "dict[int, str] | None" = None
+) -> "tuple[list[tuple[str, int, bool]], bool]":
+    """([(agent id, pid, sandbox)], complete): each ancestor titled one of `names`
+    ({agent id: the names its process goes by}), else whose pid `pids` names
+    ({pid: agent id}, the pid an agent exports: `CLAUDE_PID`), nearest first, and
+    whether the walk read every process up to the machine's pid 1. `sandbox`: the
+    namespace's pid 1 under a helper's name (`<name>-…`), as a sandboxed Codex
+    shell sees only `codex-linux-sandbox` above it. In a child pid namespace no
+    pid is matched and the walk is never complete. ([], False) when unreadable.
+    Never raises."""
     found = []
     try:
-        for ancestor, _start, title in _ancestors(pid):
+        nested = _is_in_child_pid_namespace()
+        pids = {} if nested else (pids or {})
+        chain = _ancestors(pid)
+        for ancestor, _start, title in chain:
             helper = os.path.basename(title) if ancestor == 1 else ""
-            for agent, wanted in names.items():
-                if any(_titled(title, name) for name in wanted):
-                    found.append((agent, ancestor, False))
-                    break
-                if any(helper.startswith(name + "-") for name in wanted):
-                    found.append((agent, ancestor, True))
-                    break
+            named = next((agent for agent, wanted in names.items()
+                          if any(_titled(title, name) for name in wanted)), None)
+            if named is not None:
+                found.append((named, ancestor, False))
+            elif ancestor in pids:
+                found.append((pids[ancestor], ancestor, False))
+            else:
+                helper_of = next((agent for agent, wanted in names.items()
+                                  if any(helper.startswith(name + "-") for name in wanted)), None)
+                if helper_of is not None:
+                    found.append((helper_of, ancestor, True))
+        return found, not nested and bool(chain) and chain[-1][0] == 1
     except Exception:  # noqa: BLE001 -- attribution must never break a command
-        return []
-    return found
+        return [], False
 
 
 def _process_record_path(pid: int, start: str) -> Path:

@@ -1,6 +1,6 @@
 {
   "name": "probe-research-tap",
-  "version": "0.10.75",
+  "version": "0.10.76",
   "description": "Ships sanitized per-session Kimi Code transcripts to Probe.",
   "author": {
     "name": "Probe",
