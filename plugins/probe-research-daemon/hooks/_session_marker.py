@@ -6391,7 +6391,8 @@ def _get_executable_path(pid: int) -> "str | None":
 def _get_walk_start(pid: "int | None") -> "tuple[int | None, bool]":
     """(the process a walk from `pid` starts at, whether it is the caller a Probe
     service child serves): `pid`, else PROBE_CALLER_PID, else the hook host's
-    PROBE_HOOK_PARENT_PID, else (None, False), this process."""
+    PROBE_HOOK_PARENT_PID, else (None, False): the caller's own default (`_ancestors`:
+    this process's parent; the namespace check: this process)."""
     if pid is not None:
         return pid, False
     caller = os.environ.get("PROBE_CALLER_PID", "")
@@ -6470,11 +6471,12 @@ def _get_pid_namespace(pid: int) -> "str | None":
 
 
 def _is_walk_in_child_pid_namespace(pid: "int | None") -> bool:
-    """Whether the walk from `pid` (default: this process, or the caller a Probe
-    service child serves, PROBE_CALLER_PID) runs in a child pid namespace. The
+    """Whether the walk from `pid` (default: this process, the caller a Probe service
+    child serves (PROBE_CALLER_PID), or the hook host's harness pid
+    (PROBE_HOOK_PARENT_PID): `_get_walk_start`) runs in a child pid namespace. The
     service child sits in the machine's namespace while its caller may be in a
-    sandbox's, where an exported pid is numbered differently; an unreadable caller
-    (another user's process) counts as one, unproven."""
+    sandbox's, where an exported pid is numbered differently; an unreadable start
+    process (another user's) counts as one, unproven."""
     if _is_in_child_pid_namespace():
         return True
     start, _is_caller = _get_walk_start(pid)
@@ -6492,7 +6494,8 @@ def find_agent_ancestors(
     whether the walk read every process up to the machine's pid 1. `sandbox`: the
     namespace's pid 1 under a helper's name (`<name>-…`), as a sandboxed Codex
     shell sees only `codex-linux-sandbox` above it. In a child pid namespace (this
-    process's or the caller's) no pid is matched and the walk is never complete.
+    process's or the walk's start process's, `_get_walk_start`) no pid is matched and
+    the walk is never complete.
     ([], False) when unreadable. Never raises."""
     found = []
     try:
