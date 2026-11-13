@@ -9,7 +9,8 @@ records this session and reads the team's work for you; you record nothing
 yourself.
 
 Typing `/probe …` moves the switch itself, before you read this. Run
-`npx -y probe-research session status` first: if their `/probe` already moved it, do nothing more.
+`npx -y probe-research session status` first: if their `/probe` already moved it, do nothing more
+than say its state in one line, and only when no `Probe:` line told them this turn.
 You move this chat's switch only when the researcher asks you to, never on your
 own: `npx -y probe-research session state <on|read|off|inline> --directed`
 (`--directed` says they asked; a refusal without it is the reminder).
