@@ -697,6 +697,12 @@ npm run typecheck
 npm test
 ```
 
+**Dependency overrides** (`package.json` `overrides`, which cannot hold comments):
+`brace-expansion` `^5.0.12` (#2238); `undici` `8.12.4` under the
+`@earendil-works/pi-coding-agent` devDependency, which pins `undici` 8.10.2, inside the
+vulnerable `< 8.12.2` range (GHSA-4w7w-5xrc-9h26, GHSA-2m5v-pch6-74hx, GHSA-qrxm-fqhp-jwvm and five
+more, #4950). Drop the `undici` override once pi-coding-agent depends on `undici >= 8.12.2`.
+
 **Layout.** `src/core/` holds the modules that re-state Probe's Python
 behaviour (paths, the capture daemon's spawn, the Probe service's session marker, the switch, the tracking state,
 pairing, the MCP token, the daemon's messages, reads and questions, the team
