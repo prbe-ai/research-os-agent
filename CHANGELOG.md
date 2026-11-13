@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.548.0
+
 - **A hint's `probe ask` question is no longer read or sent.** The server now ends each hint with `Use **probe ask** for more info` instead of suggesting a question, so the Probe service no longer stamps a hint with `suggested_question`, and the `asked` ping's `after_hint` is `{seconds}` only (no `same_question`). Needs a server from 2026-11-13 or later: an older one refuses an `asked` ping after a hint without `same_question`, so its #probe-usage line is lost. Claimed hint files an older service wrote still read.
 
 ## 0.547.0
