@@ -194,7 +194,12 @@ trainer.train()
 - **Distillation.** Name a teacher that is a Probe checkpoint: `track(trainer,
   teacher="checkpoint:<run>@step<N>")`, and the student run derives from it. GKD records teacher-written
   sequences only with `seq_kd=True`.
-- Only the main process records; W&B in `report_to` is taken out, with a warning.
+- **Call `track()` on every process** (the same script runs on each). The main process records the samples;
+  each process sends its own per-sample training metrics (GRPO's grpo/bnpo/dr_grpo/dapo loss terms and
+  diagnostics; SFT with `record_sft=True`) as `trl-train-<rank>`, finding the run through the job's own
+  torch.distributed store (no shared `output_dir` needed). A process without `track()` sends none: its updates
+  read partial. Trainers alternated in a loop: `track()` each one again before every `train()`.
+  W&B in `report_to` is taken out, with a warning.
 - **Run identity and resume**: `trl:<run_name>` (else the output folder's name);
   `trainer.train(resume_from_checkpoint=...)` at step k reopens it rewound to k+1.
 
