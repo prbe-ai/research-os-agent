@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.542.0
 - **Find work by person and time in the MCP (people and time filters A1).** `browse(mode="people")` lists teammates with the user ids `owner` takes; `browse(mode="sessions")` lists agent sessions team-wide, newest first, each with its title, whose it is, the agent, when it was last active and the projects and runs it touched (`project` narrows; the caller's own session is left out, as search leaves out its transcript). Every mode that lists work (`projects`, `runs`, `notes`, `files`, `datasets`, `checkpoints`, `sessions`) takes `owner` (a user id, an email, a name or `me`), `since` / `until` (an ISO date or `24h` / `7d` / `2w`) and `order="recent"`; `search` takes `owner`, `since`, `until` and `sort="recent"`, and its hits name their `people`. All pass to the server as given, which matches the person and says who in `owner_matched`. On a server without `people_filters` / `search_people_filters` they are refused with "not available on this server yet", never sent. The SDK's `Client.search`, `browse`, `list_runs`, `count_runs` and `list_notes` take the same arguments.
 
 ## 0.541.0
