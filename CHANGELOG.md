@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.536.0
+
 ## 0.535.0
 
 - **After `/probe auto`, the next prompt gets the chat's own state line, not the first-prompt line** (in an `on` chat, that line again says to run `off` once the work has clearly left ML).
