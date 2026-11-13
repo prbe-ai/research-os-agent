@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.538.0
+
 - **Per-sample training metrics, review follow-ups:** verl's unsupported reason names the loss function it found (never "or the critic"); a verl worker without usable torch.distributed falls back to its engine's rank; a stopped Miles actor with a critic names the critic's `train/critic-*` keys with the loss-type reason too.
 
 ## 0.537.0
