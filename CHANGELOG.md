@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.543.0
 - **ART sends each trajectory's exact training loss (RL per-sample metrics gaps T9).** Under LocalBackend's default trainer args (`gradient_accumulation_steps=1`, `logging_steps=1`), the client process reads the `loss/train` LocalBackend yields for each packed row, finds the trajectory each row holds by its content (prompt, tokens, logprobs, advantage sign), and sends it as a per-sample `loss` row at update r of the step; the plan's rollup (`run_key` `loss/train`, update then step mean) rebuilds ART's own logged value. ART's maths and results are untouched (proved bitwise on CPU against real ART). With either arg above 1, another backend, or result packing, `per_sample_loss` stays unsupported and the reason says which.
 - **A Codex or pi started from a Claude Code shell now names its own chat in two more cases (auto-mode leftovers, round 2).** Claude Code puts its own process id in `CLAUDE_PID` (new registry field `pid_env`): that process above a command is Claude Code whatever its title (a Claude Code run as `node .../cli.js` inside Codex), and when every process above was read and it is not among them, the Claude Code variables are leftovers (a tmux server started from a Claude Code shell) and go, on macOS too. The npm launcher's sign-in uses the same rule, so the approval page names the agent the sign-in runs in, not the one around it (launcher 0.42.0). The tap (0.10.76) carries the registry copy only. `@probe/core` 0.2.10 carries it for the dashboard.
 
