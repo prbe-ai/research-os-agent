@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A hint's `probe ask` question is no longer read or sent.** The server now ends each hint with `Use **probe ask** for more info` instead of suggesting a question, so the Probe service no longer stamps a hint with `suggested_question`, and the `asked` ping's `after_hint` is `{seconds}` only (no `same_question`). Needs a server from 2026-11-13 or later: an older one refuses an `asked` ping after a hint without `same_question`, so its #probe-usage line is lost. Claimed hint files an older service wrote still read.
+
 ## 0.547.0
 
 - **`browse(mode="projects")` finds projects by name or slug: `query="fourier"`**, and a text `filter` there (`filter="fourier-emergence-timing"`, which readers send) is read as that same `query` instead of a pydantic "valid dictionary" error. A text `filter` on any other mode says what to pass (mode=runs: `{"name": {"$contains": ...}}`). Sent only to a server that declares `browse_project_query`; an older one gets the old "mode=projects does not read query" refusal, re-checked every 60 s. `Client.browse(query=...)` gates on the same feature.
