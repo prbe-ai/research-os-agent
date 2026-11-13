@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.541.0
+
 - **ART, TRL, Miles and SkyRL samples keep tool calls and reasoning, and say what their framework cannot give (RL sample capture PR3).** ART keeps each call's id, name and arguments, each result's `tool_call_id` and the engine's `reasoning_content`, and files a `@record_rollout` rollout attaches land on its own sample. TRL numbers calls `probe-<turn>-<i>` and links each result by TRL's own order (sync and failed first, then async), checked by tool name (a mismatch links nothing and counts `extras.unlinked_tool_turns`); a sync GRPO tool's `probe.samples.attach_*` reaches its own sample. TRL's DistillationTrainer with tools keeps its tool loop's messages the same way. Miles maps the messages a session (v1 or v2) keeps with `--save-debug-trajectory-data`. Each adapter declares what it cannot hold with why (`plan(unsupported=)`): SkyRL every field, Miles files and (by its flags) messages and tool fields, TRL by trainer kind (GKD, GOLD and SFT every field; distillation by its tools; GRPO its numbered ids). Turns now say `turns_source` (`as_sent`; SkyRL's step-wise text `decoded`).
 
 ## 0.540.0
