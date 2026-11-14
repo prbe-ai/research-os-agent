@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.557.0
+
 - **`probe pane preview set` is gone: project previews are agent-managed for now.** The server refuses a pane picked by hand (403 `preview_agent_managed`; its next step: `pane push <project> about --preview` writes it). `probe pane preview clear <project> --directed` still turns a preview off, only when the researcher asks. The `write-preview` skill says nobody picks the preview by hand. `Client.set_preview` stays and says the server refuses it. A refused automatic push on a cleared project (`preview_opted_out`) now says only to leave it.
 
 ## 0.556.0
