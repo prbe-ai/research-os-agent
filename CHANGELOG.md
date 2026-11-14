@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fixed: a rollout's files could be lost when its span was still queued.** With async writes (the default) a rollout writes its `environment` span best-effort (`blocking=False`) and uploads its files directly; the flush before each upload looked only at blocking queued ops, so it skipped that span, the upload beat it and the server refused the file (422 `span_id not found for this run`). The SDK then kept only a reference to a temp file it deleted: 25 of 72 rollout files (patches, test output, grader logs) on a verl run, 11-13. The flush now sends the run's queued spans, best-effort ones included (only those, its drain-lock wait bounded), and a presign refused that way while a span of the run is still queued retries after 0.25, 0.5, 1, 2 and 4 s, flushing again each time. `rl-frameworks.md` lists the new capture reason `files_not_stored`.
 - **`browse(mode="people", query=...)` finds a teammate by name or email** instead of refusing `query`; the server matches it loosely, as `owner` does, and the rows come best match first. An older server ignores `query` and lists the whole team.
 
 ## 0.549.0

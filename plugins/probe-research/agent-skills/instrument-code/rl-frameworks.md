@@ -263,7 +263,8 @@ probe checkpoint best $RUN --metric eval/val                    # the checkpoint
 - Capture answers yes or no, never unknown, with reason codes: `in_progress`, `unsealed_step` (a step no
   producer closed), `missing_samples` (fewer arrived than a seal declared), `not_committed`,
   `producer_open` / `producer_silent` / `producer_gone`, `bundle_missing` (a log or token bundle),
-  `batch_refused`, `completion_unproven`.
+  `batch_refused`, `completion_unproven`, `files_not_stored` (a rollout file whose upload failed: only a
+  reference to it was kept).
 - The stats mean must equal the framework's own logged mean (Miles `rollout/raw_reward`, ART `reward`) over
   the same steps: a gap means samples went missing or were counted twice. `error` samples are left out of
   means and counted beside them.
