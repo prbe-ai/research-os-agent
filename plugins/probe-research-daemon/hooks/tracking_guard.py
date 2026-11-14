@@ -2703,6 +2703,8 @@ def main() -> None:
             is_hand_back = _is_hand_back_block(payload.get("prompt"), shape, slug)
             said = [None if is_hand_back else _make_auto_line(payload, session_id),
                     _daemon_notice(session_id, _payload_cwd(payload))]
+            # The rules file holds the rest; the previews line is owed per chat (F7, `take_owed_rules`).
+            said += _rules_parts("UserPromptSubmit", session_id, [text for text in said if text], _payload_cwd(payload))
             if any(said):
                 _emit_context("UserPromptSubmit", "\n\n".join(text for text in said if text))
             return
@@ -2732,6 +2734,11 @@ def main() -> None:
         _announce("PostToolUse", landed)
         return
     if tool_name != "Bash":
+        # Where prompt context is dropped (pi), the owed previews line lands here (F7, `take_owed_rules`).
+        if _inline_reaches_model("PostToolUse") and not _from_helper_agent(payload):
+            owed = _rules_parts("PostToolUse", session_id, [], _payload_cwd(payload))
+            if owed:
+                _emit_context("PostToolUse", owed[0])
         return
     state = _state(session_id, _payload_cwd(payload))
     if state == _session_marker.STATE_FULL:

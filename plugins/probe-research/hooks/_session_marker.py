@@ -3964,6 +3964,8 @@ RULES_LEAD = "Probe's rules for this chat, in force while Probe is on or read he
 RULES_PART_OF = " (part {n} of {of}{more})"
 RULES_MORE = "; the rest comes with your next steps"
 RULES_REST = " (the rest)"
+#: Above the previews line when it comes alone (a rules file holds the rest).
+ONE_MORE_RULE_LEAD = "One more Probe rule for this chat:"
 #: The team note in a chat (pi's prompt says the same, `team_note_prompt.render_for_prompt`).
 TEAM_NOTE_CONTEXT = (
     "## Probe team note\n\n"
@@ -4021,19 +4023,106 @@ def has_hook_stamp(instruction: "Path | str") -> bool:
     return HOOK_STAMP in words[1:]
 
 
+#: The team-features cache (project-preview fixes F7): one entry per server + credential digest, written by the
+#: daemon's 300 s read and the CLI's reads of `GET /v1/teams/features`; the rules read it, never the network.
+TEAM_FEATURES_FILENAME = "team-features.json"
+#: An entry this old is dropped on the next write (a sign-in long gone).
+TEAM_FEATURES_KEEP_S = 30 * 24 * 3600.0
+#: Entries kept, newest first: run-scoped SDK tokens each add one, and every prompt hook parses the file.
+TEAM_FEATURES_MAX_ENTRIES = 16
+#: The team switch (`PROJECT_PREVIEWS_FEATURE` in sdk/client/resources/projects/panes.py).
+PROJECT_PREVIEWS_FEATURE = "project_previews"
+PREVIEWS_RULES_LINE = "Previews: after `probe project create`, write its preview (`write-preview`)."
+
+
+def get_team_features_path() -> Path:
+    return state_dir() / TEAM_FEATURES_FILENAME
+
+
+def get_team_features_key(base_url: str, token: str) -> str:
+    """An entry's key: the daemon's (`probe_api.fetch_team_features`), never the token itself."""
+    import hashlib  # noqa: PLC0415 -- off the status line's path
+
+    return hashlib.sha256(f"{base_url.rstrip('/')}\0{token}".encode()).hexdigest()
+
+
+def _load_team_features_file() -> dict:
+    try:
+        data = json.loads(get_team_features_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_team_features(base_url: str, token: str, features: "frozenset[str] | list[str]",
+                       now: "float | None" = None) -> bool:
+    """Record what the server turns on for this credential's team. Best effort: True when written, never raises."""
+    if not token:
+        return False
+    at = time.time() if now is None else now
+    try:
+        entries = {key: entry for key, entry in _load_team_features_file().items()
+                   if isinstance(entry, dict) and at - (_finite(entry.get("at")) or 0.0) < TEAM_FEATURES_KEEP_S}
+        entries[get_team_features_key(base_url, token)] = {"features": sorted(set(features)), "at": at}
+        # Lock-free: two writers racing may drop an entry, and the next read of the switch refills it.
+        newest = sorted(entries, key=lambda key: _finite(entries[key].get("at")) or 0.0, reverse=True)
+        entries = {key: entries[key] for key in newest[:TEAM_FEATURES_MAX_ENTRIES]}
+        return _publish_atomically(get_team_features_path(), json.dumps(entries, sort_keys=True) + "\n")
+    except Exception:  # noqa: BLE001 -- a cache miss only costs the next chat its previews line
+        return False
+
+
+def _get_active_credentials() -> "list[tuple[str, str]]":
+    """The chat's server and credentials: the active context's key and daemon key, and PROBE_TOKEN when set."""
+    data = _read_config()
+    contexts = data.get("contexts")
+    row = contexts.get(data.get("current_context") or "default") if isinstance(contexts, dict) else data
+    row = row if isinstance(row, dict) else {}
+    url = row.get("base_url")
+    base = url if isinstance(url, str) and url.strip() else DEFAULT_SERVER
+    pairs = [(base, row.get(name)) for name in ("token", "companion_token")]
+    if os.environ.get("PROBE_TOKEN"):
+        pairs.append((os.environ.get("PROBE_BASE_URL") or base, os.environ["PROBE_TOKEN"]))
+    return [(server, token) for server, token in pairs if isinstance(token, str) and token]
+
+
+def has_project_previews() -> bool:
+    """Does the cache say the active context's team has previews on? A missing entry says no."""
+    try:
+        entries = _load_team_features_file()
+        keys = [get_team_features_key(base, token) for base, token in _get_active_credentials()]
+    except Exception:  # noqa: BLE001 -- the rules still go out, without the line
+        return False
+    for key in keys:
+        entry = entries.get(key)
+        features = entry.get("features") if isinstance(entry, dict) else None
+        if isinstance(features, list) and PROJECT_PREVIEWS_FEATURE in features:
+            return True
+    return False
+
+
+def get_team_note_room() -> int:
+    """Characters the note may take beside the rules and its heading, the previews line always counted:
+    whether it fits never hangs on the team's switch, so its health (`team_note.render`) agrees with chats."""
+    heading = "\n" + TEAM_NOTE_CONTEXT.format(document=get_team_note_document(), note="")
+    return RULES_MAX_CHARS - len(DAEMON_RULES) - len("\n" + PREVIEWS_RULES_LINE + "\n") - len(heading)
+
+
 def make_rules_text() -> str:
-    """The rules and the team note, as a chat that is on or read gets them."""
+    """The rules and the team note, as a chat that is on or read gets them; the previews line only for a team
+    with previews on (`has_project_previews`)."""
+    rules = DAEMON_RULES + ("\n" + PREVIEWS_RULES_LINE + "\n" if has_project_previews() else "")
     try:
         note = get_team_note_context_path().read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         note = ""
     if not note:
-        return DAEMON_RULES.rstrip("\n")
+        return rules.rstrip("\n")
     document = str(get_team_note_document())
     piece = TEAM_NOTE_CONTEXT.format(document=document, note=note)
-    if len(DAEMON_RULES) + len(piece) > RULES_MAX_CHARS:
+    if len(note) > get_team_note_room():
         piece = TEAM_NOTE_TOO_LONG.format(document=document)
-    return DAEMON_RULES + "\n" + piece
+    return rules + "\n" + piece
 
 
 def _get_rules_path(session_id: str) -> Path:
@@ -4054,21 +4143,24 @@ def _load_given_rules(session_id: str) -> "tuple[int, int | None]":
 def take_owed_rules(session_id: str, state: "str | None", instruction: "Path | str", *,
                     room: int = RULES_PART_CHARS, is_whole: bool = False) -> "str | None":
     """The next part of the rules and the team note this chat's context lacks, marked given; None when none is
-    owed (off, all given, or the agent keeps them in its rules file) or the part needs more than `room`
-    characters. `is_whole`: every part left at once (the switch's answer, which no hook cap cuts)."""
+    owed (off, or all given) or the part needs more than `room` characters. An agent that keeps the rules in
+    its file (no `hook` stamp) is owed only the previews line, when its team has previews on (F7: a file
+    cannot say which account a chat runs as). `is_whole`: every part left at once (the switch's answer, which
+    no hook cap cuts)."""
     if not valid_session_id(session_id) or state in (None, STATE_OFF):
         return None
     index, total = _load_given_rules(session_id)
     if total is not None and index >= total:
         return None
-    if not has_hook_stamp(instruction):
+    is_by_hook = has_hook_stamp(instruction)
+    if not is_by_hook and not has_project_previews():
         return None
     path = _get_rules_path(session_id)
     # Locked: parallel tool calls each run the hook, and two reading part 1 as next would send it twice.
     with _StateLock(session_id, path.with_suffix(RULES_SUFFIX + "-lock")):
         index, _total = _load_given_rules(session_id)
         reserve = len(RULES_LEAD) + len(RULES_PART_OF) + len(RULES_MORE) + 8
-        parts = split_parts(make_rules_text(), RULES_PART_CHARS - reserve)
+        parts = split_parts(make_rules_text() if is_by_hook else PREVIEWS_RULES_LINE, RULES_PART_CHARS - reserve)
         if index >= len(parts):
             return None
         if is_whole:
@@ -4077,7 +4169,8 @@ def take_owed_rules(session_id: str, state: "str | None", instruction: "Path | s
             last = index + 1
             more = RULES_MORE if last < len(parts) else ""
             part = RULES_PART_OF.format(n=last, of=len(parts), more=more) if len(parts) > 1 else ""
-        text = RULES_LEAD.format(part=part) + "\n\n" + "".join(parts[index:last]).strip("\n")
+        lead = RULES_LEAD.format(part=part) if is_by_hook else ONE_MORE_RULE_LEAD
+        text = lead + "\n\n" + "".join(parts[index:last]).strip("\n")
         if not is_whole and len(text) > room:
             return None
         if not _publish_atomically(path, json.dumps({"next": last, "of": len(parts)}) + "\n"):

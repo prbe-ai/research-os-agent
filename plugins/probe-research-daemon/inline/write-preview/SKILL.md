@@ -1,89 +1,39 @@
 ---
 name: write-preview
-description: Write a project's preview - the pane in its box on the canvas that makes plain what the project is about. Use it unasked right after a project is created, and again only when what the project is about changes or something explains it better.
+description: A project's canvas preview. Use it unasked after `probe project create`.
 ---
 
 # Write a project's preview
 
-Write one only while you record this chat yourself (`probe session status` says `inline`); where the
-Probe daemon records it, its writer writes previews: leave them. Under `read` or `off`, write none.
-A sandboxed `probe` writes only in your workspace: add `--out <folder in your workspace>` to `checkout`.
+Only while you record this chat yourself (`probe session status` says `inline`); otherwise the
+daemon's writer does it. Sandboxed: add `--out <a folder in your workspace>` to `checkout`. Told to
+leave it: tell the researcher in one line.
 
-A preview is one pane (`write-pane`) chosen to fill a project's box on the canvas. Its one job: someone
-glancing at the box understands what the project is about. The box already shows the project's title,
-kind and activity time; write only what goes under them.
+The preview is one custom pane, `about`, showing what the project is about. Pick one:
 
-## When
+1. A real example from its runs: the model's input beside its output, two models on one input, or
+   an output with no input shown two ways (a protein's 3D structure beside its sequence). Several
+   examples: a `<select>` that redraws every view. Read it through the recipe, even when its files
+   are locked or expired for you today: others, or newer runs, load them.
+2. No run has an example file yet: a small SVG drawing of the setup, its 2-4 steps and one worked
+   example in numbers, marked "illustration" in Source.
+3. Only if no picture is clearer: one line of 6-8 plain words, `<p class="about">`.
 
-- Right after `probe project create`: one plain sentence on what the project is for. Every project gets
-  one.
-- Later, rewrite it only when what the project is about changes, or when something explains it better
-  (the first real example, once runs hold one). Never for a new score, a new run or a heartbeat.
-- Projects only: an experiment's preview is its project's.
-- `probe pane preview checkout <project>` writes nothing and says why when you may not choose (someone
-  else chose one, or previews are off here) or the project holds 8 panes: leave it, and say so to the
-  researcher in one line. When a command says previews are not on for this team, skip previews and say
-  nothing.
+Label each output: generated, predicted or the reference. Where it came from (run, file,
+"illustration") goes behind a small Source button, never in a caption. Fonts: only `var(--ov-font)`,
+and `var(--ov-mono)` for code.
 
-## What goes in it
+No charts, scores, tables, captions or title. A picture that reads run data also keeps the line
+from 3, shown only when no example loads, with everything else hidden.
 
-Whatever makes the project plainest:
-- A visual, when it explains better than words: a diagram of the setup, one real input next to its
-  output (a question and the SQL the model wrote; one frame under two models' masks; a designed protein's
-  3D structure beside its sequence), a sample image.
-- Words: what it is for, what goes in, what comes out.
-- At least one plain sentence on what the project is for. Alone, it is the preview of a project whose
-  runs hold nothing to show yet, a static pane (`"data": []`); once they hold a real example, show one,
-  and when they hold several, a `<select>` picks which one shows.
+Write it after `probe project create`, or when `probe pane preview show <project>` says `none`.
+Rewrite it when `show` says `is_static` and runs now hold an example, or `is_floor` and a drawing is
+clearer.
 
-A result appears only to explain the task, never as a scoreboard, best run, progress or status. Never
-a report, a results table, a list of experiments, a metric chart, captions or footnotes, the project's
-title, kind or time, or an outer card.
+Run `probe pane preview checkout <project>` and follow its `next`. On a refusal, do what it says,
+at most twice.
 
-A real example comes from this project's own runs, read through the recipe; never type in values you
-did not read. Both halves of a pair are one sample (the same file, or files with the same name under
-each run). Give each sample shown a short label, never a caption: generated, predicted or measured; a
-model's output or the reference. An illustration you drew or a question you reworded says so in its Source panel.
+Only when the researcher asks: `probe pane preview set <project> <slug> --directed` or `probe pane
+preview clear <project> --directed`.
 
-## How it looks
-
-- 18-24px padding; 320-480px wide and as tall as the content; no fixed heights, no empty space.
-- Text: `font-family: var(--ov-font)`, 14px, labels 11-12px, semibold only for headings;
-  `var(--ov-mono)` only for code, sequences and math. No other font, no uppercase eyebrows, no
-  letter-spacing.
-- Colors: the host's `--ov-bg`, `--ov-surface`, `--ov-surface-2`, `--ov-fg`, `--ov-muted`, `--ov-line`
-  and accent tokens; neutral chrome, the example carries the color. Badges: 4px radius.
-- Picking a sample: a plain `<select>` with a `change` handler; the frame turns it into the product's
-  own dropdown. Never style it or build your own menu.
-- Where an example came from (run, file, "illustration"): behind a small "Source" button that opens a
-  short panel, never a caption.
-- Every file read can fail (`PROBE.image` and `PROBE.text` reject; a run past retention is `locked`):
-  catch it and keep the sentence.
-
-## Budget
-
-- Recipe: `"runs"` = the 1-3 run ids the example comes from; at most 3 entries; `files` by exact
-  `prefix` or `name`, `limit` 6 or less.
-- HTML under 40,000 characters; at most one exact-version cdnjs library.
-- No `PROBE.onData`: a preview does not change while a run is live.
-
-## Write it and push it
-
-`probe pane preview checkout <project>` writes the preview you may change, or a one-sentence starter,
-as two draft files and prints their paths and the slug to push (`about` for a new one). Replace the
-starter sentence, edit both, then:
-
-    probe pane push <project> <slug> --html <html> --recipe <recipe> --preview --check
-    probe pane push <project> <slug> --html <html> --recipe <recipe> --preview
-
-`--preview` saves the pane and makes it the project's preview in one step, only if nobody else chose
-one; a refusal saves nothing:
-- `preview_opted_out`, `preview_chosen` or `project_previews_off`: leave it.
-- `pane_taken`: run `probe pane preview checkout <project> --new` and push to the slug it prints.
-- `pane_refused`: fix what it names and push again, twice at most.
-
-Only when the researcher asks: `probe pane preview set <project> <slug> --directed` makes one of the
-project's panes its preview (also after previews were turned off), and `probe pane preview clear
-<project> --directed` turns them off here; the panes stay.
-
-Recipes, files and `PROBE` calls: `write-pane` §2-§3.
+Recipes and data calls: `write-pane`.

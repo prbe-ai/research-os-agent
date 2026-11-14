@@ -77,7 +77,6 @@ Create both first, each with `--name "<plain title>"`; `run start` never creates
 - No question: a project-direct run. `freeze` pins an experiment's runs.
 - No headline metric yet? Choose one from the code and runs, set it (`probe project set P --metric KEY --goal max|min`), and tell the researcher in one line.
 - A project's description comes from its summary's first line.
-- Right after a project is created, give it its preview: one plain sentence on what it is for, in the pane its canvas box shows (`write-preview`, when that skill is shown to you).
 - Pass `--project`; `project use` is machine-wide.
 
 ## Run
@@ -146,7 +145,7 @@ Log every paper read onto the `research` project, during the review and at the e
 
 Each project and experiment the work touches has a page, a custom Claude artifact in the dashboard's Summary pane. Write it only to its draft and `probe summary push` it; never publish it elsewhere.
 
-The draft is checked out for you when work first lands on one (the path is printed); `probe summary checkout --project <slug>` (or `--experiment <slug>`) loads one by hand. Edit it, then push once with the same flag. Write the first page when you create one; update it on a result, a decision or a change of direction. Linking a project `--part-of` another: update that page to name the new part. When what a project is about changes, or its runs first hold a real example, rewrite its canvas preview too (`write-preview`, when that skill is shown to you). A `.md` draft (older CLI) takes Markdown, never html.
+The draft is checked out for you when work first lands on one (the path is printed); `probe summary checkout --project <slug>` (or `--experiment <slug>`) loads one by hand. Edit it, then push once with the same flag. Write the first page when you create one; update it on a result, a decision or a change of direction. Linking a project `--part-of` another: update that page to name the new part. When what a project is about changes, or its runs first hold a real example, rewrite its canvas preview too (`write-preview`, when shown to you). A `.md` draft (older CLI) takes Markdown, never html.
 
 Before editing, read `overview-page`, `overview-contract`, `artifact-design`, `artifact-diagramming` and, with metrics, `overview-charts` (beside this file), unless shown to you whole.
 

@@ -1111,7 +1111,9 @@ def _final(obj: dict) -> NoReturn:
         if context:
             obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(context)}
         _emit(obj)
-    for ctx in (_start_context(), *notices.agent_lines, *lowered_agent):
+    said = [c for c in (_start_context(), *notices.agent_lines, *lowered_agent) if c]
+    # A file keeps the Full profile's rules; the hook owes only the previews line (F7, `take_owed_rules`).
+    for ctx in (*said, _owed_rules(said)):
         if not ctx:
             continue
         hso = obj.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
