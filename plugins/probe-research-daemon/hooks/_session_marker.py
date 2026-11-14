@@ -1249,7 +1249,7 @@ WRITE_GROUPS = frozenset(
         # `status` reads, `keep` and `delete` end it. The agent runs them in every recorder mode.
         "example",
         # Panes (run compare + panes T11): `pane push` records; `data`, `get` and `list` read;
-        # `rm` removes. `pane preview` (SUBGROUPS): `show` and `checkout` read; `set` and `clear` record.
+        # `rm` removes. `pane preview` (SUBGROUPS): `show` and `checkout` read; `clear` records.
         "pane",
         # Chart layouts (team flag chart_layouts): `chart set` and `chart layout` record.
         "chart",

@@ -33,7 +33,7 @@ clearer.
 Run `probe pane preview checkout <project>` and follow its `next`. On a refusal, do what it says,
 at most twice.
 
-Only when the researcher asks: `probe pane preview set <project> <slug> --directed` or `probe pane
-preview clear <project> --directed`.
+Nobody picks the preview by hand. Only when the researcher asks to turn it off: `probe pane preview
+clear <project> --directed`.
 
 Recipes and data calls: `write-pane`.

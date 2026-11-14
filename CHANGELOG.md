@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **`probe` now refuses to run when its CLI and SDK are different releases, and prints the one command that matches them.** `probe-research-cli` pins `probe-research` at its own version, but pip upgrading the SDK alone only warns, so the old CLI ran on the new SDK and crashed reading what had moved: `probe outbox drain` on a 0.545 CLI over a 0.550 SDK failed with `'DrainReport' object has no attribute 'superseded'` after delivering everything (11-13). `probe` now stops first: `the CLI (probe-research-cli 0.545.0) and the Python SDK (probe-research 0.550.0) are different releases`, then `pip install 'probe-research-cli==0.550.0'` (a uv tool install: `uv tool install 'probe-research[all]'`). The check lives in the SDK's `probe` entry, so it also catches a CLI older than this release once the SDK is upgraded. It reads only the folder `probe` loads from, so a source tree or an editable install (whose code is the checkout, whatever wheel metadata an older install left) is never refused.
+- **`probe pane preview set` is gone: project previews are agent-managed for now.** The server refuses a pane picked by hand (403 `preview_agent_managed`; its next step: `pane push <project> about --preview` writes it). `probe pane preview clear <project> --directed` still turns a preview off, only when the researcher asks. The `write-preview` skill says nobody picks the preview by hand. `Client.set_preview` stays and says the server refuses it. A refused automatic push on a cleared project (`preview_opted_out`) now says only to leave it.
 
 ## 0.555.0
 
