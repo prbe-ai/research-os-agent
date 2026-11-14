@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **An update no longer reports "failed" when a `probe` script on PATH that Probe did not make already starts the current Probe.** The updater leaves a regular file in `~/.local/bin` (`probe`, `probe-research-mcp`, ...) alone, and until now named it as being in the way. An update that had finished was then marked failed on every run, and the failure was reported again each time. A file whose interpreter is the Python of uv's `probe-research` tool (or of the version it points at), whether written as `#!` or as pip's and uv's `/bin/sh` launcher, now counts as working and is still left untouched. Any other file is named as before.
+
 ## 0.557.0
 
 - **`probe pane preview set` is gone: project previews are agent-managed for now.** The server refuses a pane picked by hand (403 `preview_agent_managed`; its next step: `pane push <project> about --preview` writes it). `probe pane preview clear <project> --directed` still turns a preview off, only when the researcher asks. The `write-preview` skill says nobody picks the preview by hand. `Client.set_preview` stays and says the server refuses it. A refused automatic push on a cleared project (`preview_opted_out`) now says only to leave it.
