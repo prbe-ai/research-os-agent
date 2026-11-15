@@ -15,8 +15,16 @@ The preview is one custom pane, `about`, showing what the project is about. Use 
    an output with no input shown two ways (a protein's 3D structure beside its sequence). Several
    examples: a `<select>` that redraws every view. Read it through the recipe, even when its files
    are locked or expired for you today: others, or newer runs, load them.
-2. No run has an example file yet: a small SVG drawing of the setup, its 2-4 steps and one worked
-   example in numbers. Invented examples stay clearly illustrative, never results.
+2. No run has an example file yet: show a concrete example of the project's purpose. Choose the
+   representation for that subject: an edited document, question beside SQL, labeled sentences,
+   a folder tree, a map alignment, or a task's actual graph. Illustrative examples are never results.
+   Do not reuse an input → process → output flowchart across unrelated projects, and do not add
+   decorative boxes or icons in place of the example itself.
+
+Fit the visual to its content with modest padding. Use an explicit natural width (up to 440px)
+and `max-width:100%`; SVGs need their own width and height as well as a viewBox. Prefer a readable
+rectangle or square. Avoid stretching a short example to a common height or filling a fixed page.
+Check the entire visual at card size, including after its frame parks and the card returns.
 Label each output: generated, predicted or the reference. Provenance stays in the recipe and linked
 run/file records. No Source button, dropdown or footnote. Fonts: only `var(--ov-font)`; `var(--ov-mono)`
 for code. The visual sits directly on the project card: a `var(--ov-bg)` or transparent background,
