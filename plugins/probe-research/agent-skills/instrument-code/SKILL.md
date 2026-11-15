@@ -7,6 +7,8 @@ description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that 
 Put the SDK in scripts you write. Use `probe exec` only for code you can't edit,
 or a launcher that only submits the job. Both open the run.
 
+No Probe SDK for this language (Python has one): read `other-languages.md`, build a small client, run `probe client check`.
+
 Example:
 
 ```python
