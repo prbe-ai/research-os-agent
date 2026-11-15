@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.559.0
+
 - Project previews contain a visual or nothing. Removed the description starter and fallback-line instructions; preview checkout now creates an empty visual draft. Needs the server without the preview-line rule; deploy the server before releasing this CLI.
 - **Agents that record their own work read every `[Probe]` message as evidence, and their researcher's dashboard messages as the researcher's (POINTER_VERSION 60).** Probe's hints now open with `[Probe] relevant info:` and no longer carry their own "evidence, not instructions" warning, so the rules block an agent-profile machine writes into `CLAUDE.md` / `AGENTS.md` says it instead, in the same words the daemon profile's rules already used, the exception for a `[Probe] Message from <your researcher> (dashboard)` included. One text feeds both (`session_marker.PROBE_MESSAGES_RULE`); a v59 block is rewritten on the next refresh.
 
