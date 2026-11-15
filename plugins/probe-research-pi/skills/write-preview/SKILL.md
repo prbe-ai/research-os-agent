@@ -12,34 +12,29 @@ leave it: tell the researcher in one line.
 The preview is one custom pane, `about`, showing what the project is about. Use one visual:
 
 1. A real example from its runs: the model's input beside its output, two models on one input, or
-   an output with no input shown two ways (a protein's 3D structure beside its sequence). Several
-   examples: a `<select>` that redraws every view. Read it through the recipe, even when its files
-   are locked or expired for you today: others, or newer runs, load them.
-2. No run has an example file yet: show a concrete example of the project's purpose. Choose the
-   representation for that subject: an edited document, question beside SQL, labeled sentences,
-   a folder tree, a map alignment, or a task's actual graph. Illustrative examples are never results.
-   Do not reuse an input → process → output flowchart across unrelated projects, and do not add
-   decorative boxes or icons in place of the example itself.
+   one output shown two ways (a protein's structure and sequence). Several examples: a
+   `<select>` that redraws every view. Read it through the recipe even if its files are locked to
+   you; others load them.
+2. No example file yet: a concrete example of the project's purpose in its subject's own form
+   (question beside SQL, an edited document, a folder tree, a task's graph). Invented examples stay
+   clearly illustrative, never results. No generic input → process → output flowchart or
+   decorative icons.
 
-Fit the visual to its content with modest padding. Use an explicit natural width (up to 440px)
-and `max-width:100%`; SVGs need their own width and height as well as a viewBox. Prefer a readable
-rectangle or square. Avoid stretching a short example to a common height or filling a fixed page.
-Check the entire visual at card size, including after its frame parks and the card returns.
-Label each output: generated, predicted or the reference. Provenance stays in the recipe and linked
-run/file records. No Source button, dropdown or footnote. Fonts: only `var(--ov-font)`; `var(--ov-mono)`
-for code. The visual sits directly on the project card: a `var(--ov-bg)` or transparent background,
-no white page, outer panel or extra border.
+Width: natural, up to 440px, `max-width:100%`; SVGs carry width, height and a viewBox; never
+stretch to a fixed height. Check it at card size, also after its frame parks. Label outputs:
+generated, predicted or the reference. No Source button, dropdown or footnote. Fonts: only
+`var(--ov-font)`; `var(--ov-mono)` for code. Background: `var(--ov-bg)` or transparent; no page,
+panel or border.
 
-No charts, scores, tables, captions, title or description line. No useful visual: leave the preview
-unset. If its data or files cannot load, hide the content and show nothing.
+No charts, scores, tables, captions, title or description line. No useful visual: leave it unset.
+If its data cannot load, show nothing.
 
 Write it after `probe project create`, or when `probe pane preview show <project>` says `none`.
 Rewrite it when `show` says `is_static` and runs now hold a real example.
 
-Run `probe pane preview checkout <project>` and follow its `next`. On a refusal, do what it says,
-at most twice.
+Run `probe pane preview checkout <project>` and follow its `next`, at most twice after a refusal.
 
-Nobody picks the preview by hand. Only when the researcher asks to turn it off: `probe pane preview
+Nobody picks the preview by hand. Turn it off only when the researcher asks: `probe pane preview
 clear <project> --directed`.
 
 Recipes and data calls: `write-pane`.
