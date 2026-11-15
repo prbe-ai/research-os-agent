@@ -10,6 +10,7 @@
 ## 0.566.0
 
 - **Clients in other languages: exit timings match the Python SDK, and a metrics-only client needs no trace code (vespper-fixes T-S5).** `other-languages.md` now says to flush and finish within one 600 s deadline (the Python SDK's `FINISH_TIMEOUT_DEFAULT_SECONDS`; 5 s kept for the finish, 30 s per answer, retry waits up to 4 s) instead of 4 s + 1 s, which lost the tail of the curve and left runs `running` when prod answered a metrics write in 5-7 s; only a host killed sooner (serverless) uses a short budget. `probe client check` holds each metrics and finish answer of the create run for 7 s (`--write-delay`, 0 turns it off) and fails `metrics` or `finish` for a client that exits before the answer. The `traces` rule reads `not used` and passes when the client sent no agent call. The TypeScript reference client uses the doc's numbers.
+- **Only a CLI release writes the daemon's command index now (research-os-speedup T3).** `cli_spec.json`'s source hash changed on every CLI edit, so PRs conflicted on it and main went red when one merged stale. `release.yml` writes it before the gate and lands it with the version bump; deploy-mcp writes it before its checks. Its freshness tests run only under `PROBE_RELEASE_CHECK=1`, which those jobs set, and `make sync-probe-upkeep` reads the CLI's tree directly. A checkout's stale copy is rebuilt into the daemon's state folder as before. `test-suites.json` merges with `merge=union`.
 
 ## 0.565.0
 
