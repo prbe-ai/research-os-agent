@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fixed: after `probe update`, the Probe service comes back on the new version at once while a `probe exec` program runs (vespper U-D6).** The 0.566.0 container smoke ran `npx -y probe-research update --json` while a `probe exec` program ran: the update said the service restarts as it ends, the old service stopped, and no new one started for 4 min 44 s, until the program ended (the keeper starts a service only for a recorded session whose agent still runs, so with no agent live the service stayed down on any machine until something next called `probe`). An update's stop started the next service only while an agent or a recorder was live. It now also does while a person's `probe exec` run is live and when a caller asked for the restart (`service.stop when_idle`: `probe update`, `probe repair`).
+
 ## 0.566.0
 
 - **Clients in other languages: exit timings match the Python SDK, and a metrics-only client needs no trace code (vespper-fixes T-S5).** `other-languages.md` now says to flush and finish within one 600 s deadline (the Python SDK's `FINISH_TIMEOUT_DEFAULT_SECONDS`; 5 s kept for the finish, 30 s per answer, retry waits up to 4 s) instead of 4 s + 1 s, which lost the tail of the curve and left runs `running` when prod answered a metrics write in 5-7 s; only a host killed sooner (serverless) uses a short budget. `probe client check` holds each metrics and finish answer of the create run for 7 s (`--write-delay`, 0 turns it off) and fails `metrics` or `finish` for a client that exits before the answer. The `traces` rule reads `not used` and passes when the client sent no agent call. The TypeScript reference client uses the doc's numbers.
