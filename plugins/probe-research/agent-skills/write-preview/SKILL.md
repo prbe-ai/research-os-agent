@@ -16,10 +16,11 @@ The preview is one custom pane, `about`, showing what the project is about. Use 
    examples: a `<select>` that redraws every view. Read it through the recipe, even when its files
    are locked or expired for you today: others, or newer runs, load them.
 2. No run has an example file yet: a small SVG drawing of the setup, its 2-4 steps and one worked
-   example in numbers, marked "illustration" in Source.
-Label each output: generated, predicted or the reference. Where it came from (run, file,
-"illustration") goes behind a small Source button, never in a caption. Fonts: only `var(--ov-font)`,
-and `var(--ov-mono)` for code.
+   example in numbers. Keep invented examples clearly illustrative; never present them as results.
+Label each output: generated, predicted or the reference. Keep provenance in the recipe and linked
+run/file records. No Source button, dropdown, footnote or caption. Fonts: only `var(--ov-font)`, and
+`var(--ov-mono)` for code. The visual belongs directly on the project card: use its supplied
+`var(--ov-bg)` surface or transparency, with no white page background, outer panel or extra border.
 
 No charts, scores, tables, captions, title or description line. If no useful visual is available,
 leave the preview unset. If its data or files cannot load, hide the content and show nothing.
