@@ -261,10 +261,19 @@ class CheckTrigger:
     #: The lifeboat, from the keeper unit, when no check ran for 6 h: a machine
     #: with no session (and so no service) is still checked (plan fool-proof-updates B2).
     KEEPER = "keeper"
+    #: The service saw every Codex close while Codex's plugin update waited for that (`agent_close.py`).
+    AGENT_CLOSED = "agent_closed"
 
 
 CHECK_TRIGGERS = frozenset(
-    {CheckTrigger.APP, CheckTrigger.CLI, CheckTrigger.SESSION, CheckTrigger.SCHEDULE, CheckTrigger.KEEPER}
+    {
+        CheckTrigger.APP,
+        CheckTrigger.CLI,
+        CheckTrigger.SESSION,
+        CheckTrigger.SCHEDULE,
+        CheckTrigger.KEEPER,
+        CheckTrigger.AGENT_CLOSED,
+    }
 )
 
 
@@ -277,9 +286,12 @@ class ReportTrigger:
     SESSION_START = "session_start"
     CLI = "cli"
     MANUAL = "manual"
+    AGENT_CLOSED = "agent_closed"
 
 
-REPORT_TRIGGERS = frozenset({ReportTrigger.SESSION_START, ReportTrigger.CLI, ReportTrigger.MANUAL})
+REPORT_TRIGGERS = frozenset(
+    {ReportTrigger.SESSION_START, ReportTrigger.CLI, ReportTrigger.MANUAL, ReportTrigger.AGENT_CLOSED}
+)
 
 #: A cycle's trigger as the server's report names it, until the server learns
 #: `app`, `schedule` and `keeper`: all automatic and tied to no agent session.
@@ -289,6 +301,7 @@ REPORT_FOR_CHECK = {
     CheckTrigger.SESSION: ReportTrigger.SESSION_START,
     CheckTrigger.SCHEDULE: ReportTrigger.CLI,
     CheckTrigger.KEEPER: ReportTrigger.CLI,
+    CheckTrigger.AGENT_CLOSED: ReportTrigger.AGENT_CLOSED,
 }
 
 

@@ -23,6 +23,7 @@
       ],
       "session_env": "CLAUDE_CODE_SESSION_ID",
       "version_env": "CLAUDE_CODE_VERSION",
+      "pid_env": "CLAUDE_PID",
       "min_version": [
         2,
         1,
@@ -106,6 +107,7 @@
       ],
       "session_env": "CODEX_THREAD_ID",
       "version_env": null,
+      "pid_env": null,
       "min_version": null,
       "home": {
         "path": ".codex",
@@ -186,6 +188,7 @@
       ],
       "session_env": "PI_SESSION_ID",
       "version_env": null,
+      "pid_env": null,
       "min_version": null,
       "home": {
         "path": ".pi/agent",
@@ -254,6 +257,7 @@
       ],
       "session_env": "PROBE_KIMI_SESSION_ID",
       "version_env": null,
+      "pid_env": null,
       "min_version": [
         2,
         1,
@@ -334,6 +338,7 @@
       ],
       "session_env": "CURSOR_CONVERSATION_ID",
       "version_env": null,
+      "pid_env": null,
       "min_version": null,
       "home": {
         "path": ".cursor",
