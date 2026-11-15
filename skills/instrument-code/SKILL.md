@@ -1,6 +1,6 @@
 ---
 name: instrument-code
-description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that trains, evaluates, sweeps or serves, so that it records run-level metrics, and an RL trainer (Miles, ART, SkyRL, verl, TRL) or a Harbor job, so that it records every rollout as a sample. Use when writing or changing any such script, launching a training script on another machine, when a trainer already has its own integration (Miles, ART, SkyRL, verl, TRL, Harbor, Ray), and when a run finished green but recorded nothing, less than expected, or onto the wrong run. HARD TRIGGER - ENSURE YOU READ BEFORE ANY PAID GPU HOURS.
+description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that trains, evaluates, sweeps or serves, so that it records run-level metrics, and an RL trainer (Miles, ART, SkyRL, verl, TRL) or a Harbor job, so that it records every rollout as a sample. Use when writing or changing any such script, launching a training script on another machine, when a trainer already has its own integration (Miles, ART, SkyRL, verl, TRL, Harbor, Ray), when an agent or training or eval code in any other language (TypeScript, Rust, Go, ...) should record its runs or agent calls, and when a run finished green but recorded nothing, less than expected, or onto the wrong run. HARD TRIGGER - ENSURE YOU READ BEFORE ANY PAID GPU HOURS.
 ---
 # Instrument code
 
