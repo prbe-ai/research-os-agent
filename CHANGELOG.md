@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.567.0
+
 - **Fixed: after `probe update`, the Probe service comes back on the new version at once while a `probe exec` program runs (vespper U-D6).** The 0.566.0 container smoke ran `npx -y probe-research update --json` while a `probe exec` program ran: the update said the service restarts as it ends, the old service stopped, and no new one started for 4 min 44 s, until the program ended (the keeper starts a service only for a recorded session whose agent still runs, so with no agent live the service stayed down on any machine until something next called `probe`). An update's stop started the next service only while an agent or a recorder was live. It now also does while a person's `probe exec` run is live and when a caller asked for the restart (`service.stop when_idle`: `probe update`, `probe repair`).
 
 ## 0.566.0
