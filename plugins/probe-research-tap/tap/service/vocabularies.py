@@ -320,7 +320,8 @@ class DeferReason:
     """Why an update cycle did not apply anything (`update.deferred`)."""
 
     AUTO_UPDATE_OFF = "auto_update_off"
-    #: A Probe daemon worker holds its session lock (`<state>/daemon/<sid>.lock`).
+    #: A Probe daemon worker held its session lock. Sent by no service since
+    #: vespper U-D6 (workers are stopped, never waited for); kept because API v1 only grows.
     DAEMON_RECORDING = "daemon_recording"
     #: A training run holds a run lock (`<state>/runs/`).
     RUN_IN_FLIGHT = "run_in_flight"

@@ -228,11 +228,9 @@ def build_batch_body(
 def build_finalize_body(*, session_id: str) -> bytes:
     """Construct the body for the gateway's SessionFinalizeRequest.
 
-    Says "this session is over, mine it now". Until one of these arrives the
-    engine keeps coalescing the session's batches into a live document and
-    never runs the completion path — which is the only thing that produces the
-    extracted knowledge units (qa / code_change / decision / file_ref). A
-    session nobody finalizes is captured but never mined.
+    Says "this session is over". Until one of these arrives the engine keeps
+    coalescing the session's batches into a live document and never runs the
+    completion path, so a session nobody finalizes never reads as ended.
 
     Deliberately minimal. The gateway validates against a model with exactly
     two fields and rebuilds the forwarded body from them, so anything else here

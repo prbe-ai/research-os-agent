@@ -582,10 +582,10 @@ def _edit_stats(name: str, value: dict) -> dict[str, Any] | None:
     commands are its method section. Edit and Write are the same claim and got
     the opposite treatment: measured over a real 1,660-call session, Edit keeps
     7.3% of its input and Write keeps 2.2% — the file path and nothing else.
-    The engine's extraction LLM is then asked for `code_change.before` and
-    `after`, which it can only produce by RECALLING content the tap deleted.
-    Reconstructed diffs are the worst of both worlds: they cost tokens, they
-    cannot be trusted, and the real numbers were free at capture time.
+    Anything that then reads the change (a teammate's agent, search) can only
+    RECALL content the tap deleted. Reconstructed diffs are the worst of both
+    worlds: they cost tokens, they cannot be trusted, and the real numbers were
+    free at capture time.
 
     So compute the change instead of describing it. These are COUNTS, never
     content — no new bytes of the user's code leave the machine, which keeps

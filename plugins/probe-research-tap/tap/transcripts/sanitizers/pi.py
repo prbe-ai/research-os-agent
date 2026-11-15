@@ -367,10 +367,9 @@ def _summarize_arguments(value: Any) -> str:
 def _edit_stats(name: str, arguments: Any) -> dict | None:
     """Counts for a file-mutating pi tool. Never content.
 
-    Same reasoning as sanitize.py's version for Claude Code: the engine's
-    extraction LLM is asked for code_change.before/after, and without real
-    numbers it reconstructs them from memory. These counts are free at capture
-    time and ship no new bytes of the user's code.
+    Same reasoning as sanitize.py's version for Claude Code: without real
+    numbers a reader reconstructs a change from memory. These counts are free
+    at capture time and ship no new bytes of the user's code.
     """
     if not isinstance(arguments, dict):
         return None
