@@ -471,7 +471,7 @@ class BackgroundRefusal:
     """`{accepted: false, reason}`: nothing started; the journal waits for the next ask."""
 
     SANDBOXED = "sandboxed"  # an older service's refusal of a fenced caller (outbox.drain and box.watch are served now)
-    BUSY = "busy"  # this service runs as many as it takes
+    BUSY = "busy"  # this service runs as many as it takes, or the lease was blocked by a paused check
     FAILING = "failing"  # a child for it exited at its start lately
     STOPPING = "stopping"  # this service is on its way out
     UNUSABLE = "unusable"  # the folder or interpreter named is not this user's to run
