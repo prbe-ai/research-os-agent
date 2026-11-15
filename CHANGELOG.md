@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A run SIGTERMed while its framework's own stop hangs (Lightning on a node preempted alone) now reaches the server closed `failed`/preempted before the process ends, also at a short `PROBE_SIGTERM_FLUSH_SECONDS`.** Its close went out through the Probe service's drain, which had often exited by then: a new one spent about 1 s (more on a loaded node) importing its client before its first send, while the close had about 1.4 s left of a 6 s budget, so the close landed only after the process was gone (25 of 30 runs of the Lightning rank-0 test). The SIGTERM's grace now starts the close's delivery when it begins: the run is named in the outbox's want markers, a drain is asked for if none runs, and a drain with nothing to send stays while a close is announced. The close is then sent within about half a second of being queued. No new server request.
+
 ## 0.559.0
 
 - Project previews contain a visual or nothing. Removed the description starter and fallback-line instructions; preview checkout now creates an empty visual draft. Needs the server without the preview-line rule; deploy the server before releasing this CLI.
