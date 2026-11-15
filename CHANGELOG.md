@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project previews contain a visual or nothing. Removed the description starter and fallback-line instructions; preview checkout now creates an empty visual draft. Needs the server without the preview-line rule; deploy the server before releasing this CLI.
+
 ## 0.558.0
 
 - **A close that waits for the outbox worker now returns within half a second of its last write landing, instead of waiting out up to 5 s.** The wait re-counted the outbox folder at most every 5 s, also once the worker's records said nothing was left, so a close delivered in 0.3 s still waited about 5 s, and a SIGTERM close with a short grace spent all of it. Once the records say the run's writes are all sent, the folder is now counted every poll (0.5 s). A wait that runs out of time now says how many writes the folder still holds: "stopped waiting with 0 write(s) still queued" came from the worker's records, which lag the folder (it held 1).
