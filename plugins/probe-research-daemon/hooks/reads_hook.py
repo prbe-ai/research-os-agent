@@ -29,10 +29,12 @@ same files through both.
                        background (Claude Code's `asyncRewake`) up to WAKE_ASK_MAX_S
                        for an open ask's end, and up to ALERT_WAKE_MAX_S for a
                        run alert or an inbox message; claims what came, writes it to stderr and exits
-                       2, which wakes the model with it. A new prompt, a tool call
+                       2, which wakes the model with it. Claude Code runs one waiter per kind of
+                       message (GROUP_ENV: run alert, answer, message), so its chat line names
+                       the kind. A new prompt, a tool call
                        that took the answer first, the worker gone (the session
                        closed: nobody would read a claimed alert), or a newer
-                       Stop's waiter (one waits per session), and it exits 0
+                       Stop's waiter (one waits per session and kind), and it exits 0
                        quietly. A writer's receipt or a partial answer never wakes it.
                        It sleeps on the Probe service's `mailbox.changed` watch
                        of this session's files (`ServiceWatch`; the service looks
@@ -265,6 +267,14 @@ POLICY_WAKE = "wake"
 POLICY_HOLD = "hold"
 #: Set by the Probe service on the routes it runs (`_hook_switches.VIA_ENV`).
 VIA_ENV = "PROBE_HOOK_VIA"
+#: The kind of message this Stop waiter wakes for: Claude Code runs one waiter per kind
+#: (`claude-reads.json` through `stop-wake.sh`), each with its own chat label (`rewakeSummary`).
+#: Unset (Cursor's hold, a claude-reads.json from before the split): every kind, in one waiter.
+GROUP_ENV = "PROBE_READS_GROUP"
+GROUP_ALERT = "alert"  # run alerts: "Probe run alert"
+GROUP_ANSWER = "answer"  # the end of the agent's own ask or writer request: "Probe answer"
+GROUP_MESSAGE = "message"  # inbox and server messages for the agent: "Probe message"
+GROUPS = (GROUP_ALERT, GROUP_ANSWER, GROUP_MESSAGE)
 #: `probe.service.protocol.Topic.MAILBOX_CHANGED`.
 TOPIC_MAILBOX_CHANGED = "mailbox.changed"
 #: A claim through the service (`mailbox.claim`) carries a deadline this far
@@ -793,26 +803,27 @@ def harness_gone() -> bool:
         return False  # no poll() here, or no stderr to watch: assume it is there
 
 
-def _waiter_path(sid: str) -> Path:
-    return _turn_path(sid).with_name(f"{_safe(sid)}.waiter")
+def _waiter_path(sid: str, group: "str | None" = None) -> Path:
+    """One waiter per session, or per session and GROUP_ENV kind: the kinds never replace each other."""
+    return _turn_path(sid).with_name(f"{_safe(sid)}.waiter" + (f"-{group}" if group else ""))
 
 
-def _take_waiter(sid: str) -> str:
-    """This Stop's waiter is the session's waiter from now on: a turn the agent
+def _take_waiter(sid: str, group: "str | None" = None) -> str:
+    """This Stop's waiter is the session's waiter (for `group`'s kind) from now on: a turn the agent
     starts without a prompt (a background task's notice, the wake itself) ends
     in a Stop of its own, and with alerts a waiter waits for days -- older ones
     leave instead of piling up. Every waiter reads asks and alerts afresh."""
     me = secrets.token_hex(8)
     try:
-        _write_atomic(_waiter_path(sid), me)
+        _write_atomic(_waiter_path(sid, group), me)
     except OSError:
         pass
     return me
 
 
-def _superseded(sid: str, me: str) -> bool:
+def _superseded(sid: str, me: str, group: "str | None" = None) -> bool:
     try:
-        return _waiter_path(sid).read_text(encoding="utf-8").strip() != me
+        return _waiter_path(sid, group).read_text(encoding="utf-8").strip() != me
     except OSError:
         return False  # the marker could not be written or was swept: no newer waiter is known
 
@@ -1744,6 +1755,21 @@ def _end_wait(sid: str, wait_id: "str | None") -> None:
             pass
 
 
+def get_wake_group(msg: dict) -> str:
+    """The GROUP_ENV kind whose waiter wakes the agent for `msg`."""
+    if msg["kind"] == KIND_ALERT:
+        return GROUP_ALERT
+    if msg["kind"] in (KIND_ANSWER, KIND_NOTHING, KIND_FAILED) or _is_partial(msg):
+        return GROUP_ANSWER
+    return GROUP_MESSAGE
+
+
+def _wake_group() -> "str | None":
+    """This waiter's GROUP_ENV kind, or None: every kind."""
+    group = os.environ.get(GROUP_ENV)
+    return group if group in GROUPS else None
+
+
 def _slice_options() -> dict:
     """`on_stop`'s slice options from the service's environment (WAIT_ID_ENV,
     SLICE_ENV, POLICY_ENV), or none: the whole wait in this process, as Claude
@@ -1763,8 +1789,10 @@ def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE
             alert_max_s: float = ALERT_WAKE_MAX_S, alert_poll_s: float = ALERT_POLL_S,
             worker_grace_s: float = WORKER_GONE_GRACE_S, request_max_s: float = REQUEST_WAKE_MAX_S,
             recheck_s: float = SERVICE_RECHECK_S, retry_s: float = SERVICE_RETRY_S,
-            wait_id: "str | None" = None, slice_s: "float | None" = None, policy: str = POLICY_WAKE) -> int:
-    """The Stop wake: 2 with the wake's text on stderr, else 0. A slice
+            wait_id: "str | None" = None, slice_s: "float | None" = None, policy: str = POLICY_WAKE,
+            group: "str | None" = None) -> int:
+    """The Stop wake: 2 with the wake's text on stderr, else 0. `group`: only that GROUP_ENV
+    kind is waited for, claimed and woken for (a hold takes every kind). A slice
     (`wait_id`, `slice_s`: the service's run of a frozen hook shim's wake) may
     also end SLICE_OVER: nothing yet, its state kept for the next slice. `max_s`
     (an ask's ceiling) defaults to WAKE_ASK_MAX_S, a hold's to HOLD_MAX_S. `policy`
@@ -1785,8 +1813,13 @@ def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE
     # serves. A worker restarting right now still counts: the loop gives it
     # WORKER_GONE_GRACE_S.
     alerts = not hold and _served(sid)
-    if not asks and not alerts and (hold or not any(m["kind"] == KIND_SERVER and _is_for_agent(m)
-                                                    for _p, m in waiting(sid))):
+    group = None if hold else group
+    if group == GROUP_ANSWER:
+        alerts = False
+    elif group is not None:
+        asks = set()
+    if not asks and not alerts and (group not in (None, GROUP_MESSAGE) or hold or not any(
+            m["kind"] == KIND_SERVER and _is_for_agent(m) for _p, m in waiting(sid))):
         _end_wait(sid, wait_id)
         return 0  # a server message waiting is told at once, whoever else waits
     if hold and _owes_reminder(sid):
@@ -1796,7 +1829,7 @@ def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE
     # (routes.json); the folder must exist for that write to land.
     _turn_path(sid).parent.mkdir(parents=True, exist_ok=True)
     if state is None:
-        state = {"turn": current_turn(sid), "me": _take_waiter(sid), "started": time.time(), "gone": None}
+        state = {"turn": current_turn(sid), "me": _take_waiter(sid, group), "started": time.time(), "gone": None}
     # Subscribed before the first look: what lands after the service's
     # baseline is an event, what landed before it this first look finds.
     holder = [ServiceWatch.open(sid)]
@@ -1804,7 +1837,7 @@ def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE
         code = _wait(sid, state["turn"], state["me"], asks, alerts, holder, max_s=max_s, poll_s=poll_s,
                      alert_max_s=alert_max_s, alert_poll_s=alert_poll_s, worker_grace_s=worker_grace_s,
                      request_max_s=request_max_s, recheck_s=recheck_s, retry_s=retry_s,
-                     carry=state if wait_id else None, slice_s=slice_s, hold=hold)
+                     carry=state if wait_id else None, slice_s=slice_s, hold=hold, group=group)
     finally:
         if holder[0] is not None:
             holder[0].close()
@@ -1821,7 +1854,7 @@ def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE
 def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: list, *, max_s: float,
           poll_s: float, alert_max_s: float, alert_poll_s: float, worker_grace_s: float, request_max_s: float,
           recheck_s: float, retry_s: float, carry: "dict | None" = None, slice_s: "float | None" = None,
-          hold: bool = False) -> int:
+          hold: bool = False, group: "str | None" = None) -> int:
     """The Stop waiter's loop. Each pass looks at the files; between passes it
     sleeps on the service's watch (`holder[0]`) when it has one: woken by
     `mailbox.changed`, at most `recheck_s`, never past a hold's lapse or a
@@ -1842,10 +1875,12 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             return 0  # Claude Code is gone: nothing claimed now would be read
         if current_turn(sid) != turn:
             return 0  # a new prompt: its hooks deliver from here
-        if _superseded(sid, me):
+        if _superseded(sid, me, group):
             return 0  # a newer Stop's waiter waits for this session now
         picks = []
         for path, msg in waiting(sid):
+            if group is not None and get_wake_group(msg) != group:
+                continue  # another kind's waiter takes it
             if msg["kind"] == KIND_SERVER:
                 if hold or not _is_for_agent(msg):
                     continue  # the person's banner alone: a prompt or a tool call shows it
@@ -1857,9 +1892,10 @@ def _wait(sid: str, turn: str, me: str, asks: "set[str]", alerts: bool, holder: 
             picks.append(path)
         got = claim_all(sid, picks, "Stop")
         delivered = deliver_orphans(
-            sid, "Stop", lambda m: ((m["kind"] == KIND_ALERT or _inbox(m)) and alerts)
-            or (m["kind"] == KIND_SERVER and _is_for_agent(m) and not hold)
-            or (m["kind"] != KIND_MESSAGE and m["ask"] in asks))
+            sid, "Stop", lambda m: (group is None or get_wake_group(m) == group) and (
+                ((m["kind"] == KIND_ALERT or _inbox(m)) and alerts)
+                or (m["kind"] == KIND_SERVER and _is_for_agent(m) and not hold)
+                or (m["kind"] != KIND_MESSAGE and m["ask"] in asks)))
         delivered += [got[path] for path in picks if path in got]
         # A hold's text is the next turn's user line: every body line quoted, only its label tagged.
         items = [(msg["id"], inbox_safe(rendered(msg)) if hold else rendered(msg)) for msg in delivered]
@@ -2059,7 +2095,7 @@ def main() -> int:
             return on_tool(payload)
         if event == "Stop":
             if _run_by_service():
-                return on_stop(payload, **_slice_options())
+                return on_stop(payload, **_slice_options(), group=_wake_group())
             if _yields_to_shim():
                 return 0  # the frozen hook shim's wake runs for this process
             hand_over_stop(raw)
