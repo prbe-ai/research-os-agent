@@ -11,9 +11,11 @@ use it there. Build a small client in the program's own language from this page,
    process made it first: find it again.
 2. Create the run once, with a `creation_key`.
 3. Heartbeat once the run exists, then every 60 s until the run ends.
-4. Send metric points and agent calls as they happen.
+4. Send metric points and agent calls as they happen. Every metrics `POST` carries
+   `X-Probe-Async-Ack: 1` (below).
 5. Finish: once every queued write is answered, `PATCH` the run's `status` (`completed`, `failed`
    or `canceled`) and `ended_at`. A write still queued at the finish is lost when the program exits.
+   Probe may answer the finish `503` while it stores queued points: wait and send it again (below).
 
 Every field you send and read is in ENDPOINTS below, generated from the server's schema.
 
@@ -79,6 +81,20 @@ beating.
   stored is dropped (first write wins, counted in `deduped`), so a retried batch is never counted
   twice, and a second value logged at the same step is lost. Skip a NaN or infinite value: JSON has
   none, and one makes the whole batch `422`.
+
+## METRICS ARE ACKED EARLY
+
+Probe stores metric points through a queue. Send `X-Probe-Async-Ack: 1` on every metrics `POST`:
+Probe then answers `202` as soon as the batch is safe in the queue, and stores it a moment later.
+Without the header each write waits for the store: 10-20 s on prod, and `probe client check` fails
+`metrics`.
+
+- `202` is success, like `201`: never retry it, the batch is kept. Read nothing from its body.
+- A finish sent while queued points are still being stored can answer `503` with
+  `detail.code == "data_pending"` (and `detail.pending_points`) and a `Retry-After`. That is waiting,
+  not failing: send the SAME finish again, never sooner than `Retry-After` and with waits of at most
+  4 s, until it is answered or the 600 s exit deadline ends. Do not stop after a few tries, as for
+  other `5xx`.
 
 ## AGENT CALLS ARE TRIALS
 
@@ -200,17 +216,20 @@ calls), finish, exit 0. Then run
 It starts a local stand-in for the server and runs the command three times with `PROBE_BASE_URL`
 and a throwaway `PROBE_TOKEN` set (nothing reaches Probe):
 
-1. create: Probe answers one `409` (project create), `503` (run create), `500` (metrics) and `413`
-   (the first call of 2 or more spans) along the way, and holds every metrics and finish answer
-   for 7 s (`--write-delay`, 0 turns it off), so a client that exits before those answers fails
-   `metrics` or `finish`;
+1. create: Probe answers one `409` (project create), `503` (run create), `500` (metrics), `503
+   data_pending` (the finish) and `413` (the first call of 2 or more spans) along the way, answers
+   `202` to a metrics write that carries `X-Probe-Async-Ack: 1`, and holds every metrics and finish
+   answer for 7 s (`--write-delay`, 0 turns it off), so a client that exits before those answers
+   fails `metrics` or `finish`;
 2. join: `PROBE_RUN_ID` and a run token are set;
 3. refused: every answer is `401`.
 
 It prints pass or FAIL per rule, with the reason: the project found by its slug (created with a
 `kind`), the run created once, metrics, the call split after its `413`, heartbeats, the finish
 after every write, retries after `5xx`, stopping after `401`, the `Probe-Client` header, and
-joining `PROBE_RUN_ID`. Exit 0 means every rule passes.
+joining `PROBE_RUN_ID`. `metrics` also fails a write without `X-Probe-Async-Ack: 1` or one sent
+again after its `202`, and `finish` a client that gives up on the `data_pending` `503` or sends
+the finish again sooner than its `Retry-After`. Exit 0 means every rule passes.
 
 Which rules apply depends on the client. A client that records only runs and metrics (a training
 loop) sends no agent call: its `traces` rule reads `not used` and passes, and it needs no trace
