@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.573.0
+
+- **The Intel Mac build of the compiled CLI is now made on Apple Silicon.** `probe-research-cli`'s macOS x86_64 wheel is cross-compiled on Apple Silicon and smoke-tested there under Rosetta, and every release reuses the extensions the last change already compiled, so a release takes minutes instead of half an hour. Nothing changes for an install.
+
 ## 0.572.0
 
 - **A Miles sample whose agent function named its own error now keeps it.** An agent function cannot set a Miles sample's status, so the reason it names in `metadata["error_reason"]` (with `metadata["error"]` as the message) was read only on a `failed` sample; a completed or truncated one now records it too (and a live try nothing graded ends with that reason instead of `reward_fn`), so an agent-server or sandbox outage shows its `error_reason` and message instead of reading as an ordinary failure. An aborted sample stays `engine_abort`, and a reward the sample was graded with still decides its result.
