@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.574.0
+
+- **A run's saved log no longer holds Probe's own "N write(s) left" lines.** A `finish()` that waits more than 5 s on its delivery worker prints a progress line every 5 s. That line was saved as if the script had printed it after the run finished: the run's log got a second version holding it, or the next run in the same process started its log with it. In a script whose own `probe.init()` captures its output, the line now goes to the terminal only.
+- **A server that takes the service's run-alert poll and says nothing no longer holds it 10 s more.** The poll's 15 s cutoff ended the request, which then read as a dropped connection and was sent once more with no cutoff, waiting out the 10 s socket timeout. A request cut at its deadline is no longer retried.
+- **`probe wandb import-local` and `probe wandb import-hosted` are gone; W&B runs come in through the import.**
+  Use `probe import review --wandb-project ENTITY/PROJECT` (or `--wandb-folder FOLDER` for run folders on this
+  computer), then `probe import start <id>`: it shows what will come in first, runs in the background, and does not
+  hold a whole run's history in memory. The old commands now print that instead of importing.
+- **`probe import wandb` now follows the same rules as the import.** Mirroring one W&B run into an existing Probe run
+  gives the same history points a W&B import would: true/false values as 1/0, nested values flattened, and rows
+  without a W&B time given the previous row's time (they used to be skipped). It does not copy W&B's hardware charts
+  into the existing run, which keeps its own. It no longer needs the `wandb` package installed beside Probe (it uses
+  the same reader the import does), and it still lands a still-running W&B run as `untracked`, never `running`.
+- **A self-hosted W&B finds its own key.** With `WANDB_BASE_URL` set (as `wandb login --host` uses), the W&B import
+  and `probe import wandb` read the `~/.netrc` key saved for that server, and never send a wandb.ai key to it.
+- **A W&B run whose hardware W&B cannot serve is still imported.** Its history comes in and the import notes that
+  its hardware samples could not be read, instead of stopping.
+- **A stopped W&B import leaves nothing running.** Cancelling an import (or a read that ends early) now stops W&B's
+  reader and the Python it started, not only the first of them.
+
 ## 0.573.0
 
 - **The Intel Mac build of the compiled CLI is now made on Apple Silicon.** `probe-research-cli`'s macOS x86_64 wheel is cross-compiled on Apple Silicon and smoke-tested there under Rosetta, and every release reuses the extensions the last change already compiled, so a release takes minutes instead of half an hour. Nothing changes for an install.
