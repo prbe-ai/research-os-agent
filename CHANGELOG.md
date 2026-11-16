@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.575.0
+
+- **The guard hook reads `-h` on the removed `probe wandb import-local|import-hosted` as an argument.** Those stubs take any old command line and only print what replaced them, so `-h` there runs the stub (one line, no writes) rather than counting as asking for help.
+- **Miles runs with Harbor-backed rollouts now record what the trainer did with each sample.** Each sample a Harbor trial produced stayed `generated`, with no consumed step, weight version or normalized reward, and per-step mean reward read `-`. The train ranks now key their records by the sample's trial, so samples read `consumed`, then `trained`.
+
 ## 0.574.0
 
 - **A run's saved log no longer holds Probe's own "N write(s) left" lines.** A `finish()` that waits more than 5 s on its delivery worker prints a progress line every 5 s. That line was saved as if the script had printed it after the run finished: the run's log got a second version holding it, or the next run in the same process started its log with it. In a script whose own `probe.init()` captures its output, the line now goes to the terminal only.
