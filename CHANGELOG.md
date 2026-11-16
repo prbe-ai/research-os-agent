@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.584.0
+
+- **Miles samples run as Harbor trials that ran out of context say so.** The Harbor agent function sends the
+  trial's exception with the sample, so a graded rollout that overflowed the model's context reads "Ran out of
+  context" instead of "Hit a length limit".
+- **Harbor runs on a later Harbor read context overflows right too.** `MaxSeqLenExceededError` ("Sequence length
+  exceeded: N > M") counts as ending at the length limit, like Harbor's other context errors.
+- **`probe samples list` prints each sample's whole id**, the one `probe samples show` and `probe samples logs`
+  take; it printed the first 8 characters, which `show` refused.
+- **Failed rollouts say why.** A Harbor job's sample carries the one line its checker writes to
+  `verifier/reason.txt`; your own loop sends `failure_reason` on a sample part (or `run.samples.score(...,
+  failure_reason=)` on a regrade). Only the first line is kept, at most 200 characters.
+- **Miles samples run as Harbor trials say why too.** The Harbor agent function reads the trial's
+  `verifier/reason.txt`, and the sample's graded part carries it.
+- **Samples record how they were sampled.** Miles (every generate function while its live wrap is on, the default, and the Harbor agent function), SkyRL
+  (the call's own sampling params) and TRL GRPO / RLOO (temperature, top_p, top_k, max completion length) send
+  temperature, top-p, top-k and the token cap per rollout, so a rollout compare can show them; your own loop sends
+  `sampling`. An older server ignores both fields.
+- **`instrument-code` wires the reason in and checks it at setup.**
+- **The SDK's sample models know `failure_reason` and `sampling`.** Generated from the contracts; nothing sends them
+  yet, and an older SDK reading a sample that carries them ignores both.
+
 ## 0.583.0
 
 - **Harbor task folders retry a refused file once.** A task file refused once (changed mid-upload, a read hiccup) is tried again at once and stored; one the upload gate refuses again while it is readable (a credential-shaped path or content, an opaque or oversized file) is listed as skipped and the rest of the task is captured; one this host cannot read fails the try, and the task's next trial uploads it again.
