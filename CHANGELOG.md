@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.577.0
+
+- **A W&B import that resumes after a dropped connection reports all of its work.** Runs an earlier attempt of the
+  same import copied were reported as "already in Probe", and the parity line covered only the runs copied after the
+  resume (a 12-run project read "Imported 2 W&B runs … 10 already in Probe", parity 2 runs). Each run's outcome and
+  check is now saved with the import's progress, so the report counts every run it copied as imported, keeps "already
+  in Probe" for runs that were there before the import started, and checks every run it copied. While it runs, a run
+  skipped on resume says so ("copied by this import's earlier attempt") instead of "Read W&B run <id>".
+- **The W&B import's "About N min left" holds steady.** It was worked out from history rows a second since the attempt
+  began, so small first runs and the reader's start-up swung it (138, 91, 147, then 16 min on a 13 min import) and a
+  resume started it over. It now waits for 3 copied runs, then multiplies their average time by the runs still to
+  copy, counting earlier attempts' runs. The review's size now says its GB leaves out artifacts, which W&B's runs page
+  does not size.
+
 ## 0.576.0
 
 - **W&B onboarding is shorter and clearer.** The W&B "Start?" question shows only what is copied and how long it takes (runs, history rows, files, minutes), not a paragraph on where runs land and how they are read. When a W&B key can't see a project, `import review` now lists the 10 projects with the newest runs it can see (`projects`, the shape of `wandb_project_choice_needed`), so the person can pick one instead of the agent asking W&B itself; a list W&B cut short says so, and one it would not give says that instead of "it sees no project". `sign-in --wait` that installs Probe with too little time left to save the sign-in now says "You're approved and Probe is installed: run the same command once more to finish signing in" instead of "too little time left".
