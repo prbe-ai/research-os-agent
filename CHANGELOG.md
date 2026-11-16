@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.587.0
+
+- **Agents link the runs, experiments and projects they tell you about, instead of printing ids (POINTER_VERSION 62).** Probe's rules in every profile now say: "To the researcher, write a run, experiment or project as `[name](url)` with the `url` Probe gave, never a bare id. No `url`: its name." The daemon's reader and writer answer the main agent with `[name](url)` (the id when no link was given), `track-work` ends with what it created or closed as `[name](url)`, and the MCP instructions say to link an entity's name to its `url`. So the agent has a link to give: `probe run get`, `probe project get` and `probe experiment get` print the page's `url`, MCP `search` hits for runs, experiments and projects carry one (as `browse` already did), and the daemon's writer sees each new run's `url`. No link is made up: when Probe cannot tell which dashboard serves your API, there is no `url` (`--fields url` reads `null`). A v61 block is rewritten on the next refresh.
+
 ## 0.586.0
 
 - **Reading a run's files no longer skips one that changes mid-read.** `list_run_artifacts` and the other complete run file
