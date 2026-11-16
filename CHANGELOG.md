@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.580.0
+
+- **A Miles rollout's Compute tab shows the GPUs that served it.** The SGLang engines and session server Miles launches now carry Probe's hook: each model call's reply brings back readings of its own engine's GPUs (its DP group's, when SGLang routes requests), the rollout collects them for its try, and they are logged with the finished sample. Agent rollouts get theirs through Miles' session server. A call that came back without readings, a multi-node or prefill/decode engine, or a full store marks the sample's GPU capture incomplete instead of showing partial charts as whole. Runs whose engines Probe is not inside (external engine addresses, a custom engine provider, a deploy that does not launch its own engines, Miles' legacy rollout, `PROBE_MILES_LIVE=0`) declare `gpu_readings` with why; TRL GRPO and distillation, and verl off its vLLM server, declare it too. Set `PROBE_MILES_GPU_TIMING=1` to log the time Probe adds to each engine request. The SDK's typed `client.samples.get_capture()` now leaves out a capture field a newer server declares, instead of failing the read.
+- **A Miles + Harbor sample now shows its trial's files, logs and turns.** `probe trial watch` (and `trial export` /
+  `trial drain`) sends each joined sample its `harbor` link part after the trial's capture, tracked in the staged
+  ledger, so a crash between the two is linked on the retry with the same payload.
+- **`probe trial expand RUN --all [--dry-run]` reads every stored trial again.** It re-expands each trial's spans and
+  sends its sample its turns as a `reread` part, plus its trial files where it has none, under the epoch that wrote
+  the sample; keys with no sample or a sample in two epochs are skipped and counted. `--dry-run` prints the counts.
+- **`probe samples export` writes complete turns, and ATIF.** It reads the server's export: `--format probe` (default)
+  rows now carry their full turns, `--format atif --out DIR` writes one ATIF trajectory file per sample (Harbor's
+  shape), `--format atif-jsonl` one a line. New `--outcome` and `--task` filters; a run no trainer consumed needs
+  `--outcome generated` or `--include all`.
+
 ## 0.579.0
 
 - **Miles + Harbor rollouts land as one sample per trial.** Miles' Harbor agent function returns no trial, so each Miles sample and its Harbor trial showed up as two unrelated records. Pass `--custom-agent-function-path probe.connectors.miles.harbor_agent.run` in place of `swe_agent_function.run` (with the 2-field agent-server patch in the instrument-code skill): each sample is keyed by its `TrialResult.id`, carries Harbor's task key, and its trial's files are staged for `probe trial watch`. It never fails a rollout.
