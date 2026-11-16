@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.585.0
+
+- **Harbor task folders keep credential-shaped file names off the run.** A task file whose name looks like a credential is never uploaded or quoted in an error; the task's manifest lists it as withheld.
+- **A task file that vanishes or cannot be read mid-upload is tried again, not dropped.** The task's next trial uploads it. A file unreadable on every attempt is skipped by name on the run's third and last attempt, so the rest of the task still lands; a task none of whose files could be read is never marked as held.
+
 ## 0.584.0
 
 - **Miles samples run as Harbor trials that ran out of context say so.** The Harbor agent function sends the
