@@ -35,14 +35,28 @@ on a two-step run before the long one.
   every read filters on it (`--where scenario.set=P2`). With no `task_id`, the task key is a hash of the
   prompt.
 
-  | framework | task key | scenario |
-  |---|---|---|
-  | Miles | `sample.metadata["task_id"]` | `sample.metadata["scenario"]`, a dict |
-  | ART | `trajectory.metadata["task_id"]` or `["scenario_id"]` | metadata keys named by `track(model, scenario=["set", "as_of"])`, or a callable `(trajectory, group) -> dict` |
-  | SkyRL | dataset column `task_id` | a dict column `scenario`, plus the columns named in `PROBE_SKYRL_SCENARIO=set,as_of` |
-  | verl | `extra_info["task_id"]` | `extra_info["scenario"]`, a dict; `reward_model.ground_truth` is the label |
-  | TRL | dataset column `task_id` | a `scenario` column, or columns named by `track(trainer, scenario=["set", "as_of"])`; `label` / `answer` / `solution` / `ground_truth` is the label |
-  | Harbor | Harbor's task id (`local:` / `git:` / `package:`) | dataset, its version and hash, the task digest: all automatic |
+  | framework | task key | task name and description | scenario |
+  |---|---|---|---|
+  | Miles | `sample.metadata["task_id"]` | `sample.metadata["task_name"]`, `["task_description"]` | `sample.metadata["scenario"]`, a dict |
+  | ART | `trajectory.metadata["task_id"]` or `["scenario_id"]` | `trajectory.metadata["task_name"]`, `["task_description"]` (else the group's) | metadata keys named by `track(model, scenario=["set", "as_of"])`, or a callable `(trajectory, group) -> dict` |
+  | SkyRL | dataset column `task_id` | dataset columns `task_name`, `task_description` | a dict column `scenario`, plus the columns named in `PROBE_SKYRL_SCENARIO=set,as_of` |
+  | verl | `extra_info["task_id"]` | `extra_info["task_name"]`, `["task_description"]` | `extra_info["scenario"]`, a dict; `reward_model.ground_truth` is the label |
+  | TRL | dataset column `task_id` | dataset columns `task_name`, `task_description` | a `scenario` column, or columns named by `track(trainer, scenario=["set", "as_of"])`; `label` / `answer` / `solution` / `ground_truth` is the label |
+  | Harbor | Harbor's task id (`local:` / `git:` / `package:`) | Harbor's task name (the task folder or package): name folders in plain words | dataset, its version and hash, the task digest: all automatic |
+
+- **Name every task when you set its `task_id`.** This is part of setup, never a later pass: the RL page
+  leads each task row with `task_name` (the key shows in grey under it) and its Summary shows
+  `task_description` (markdown, what the task tests). A name is plain words, 3-8 of them, saying what the
+  problem is about, never the key's numbers; siblings never share a name. In a dataset grouped by
+  template, name the template and add the instance number, and describe the template once:
+
+  ```python
+  row["task_id"] = f"p1:{template}:{instance}"                          # p1:58:92
+  row["task_name"] = f"{TEMPLATE_NAMES[template]} #{instance}"          # Gnomes mining ore with two pickaxes #92
+  row["task_description"] = TEMPLATE_DESCRIPTIONS[template]             # Multiplies rates over a shift, then subtracts breaks.
+  ```
+
+  A name over 256 characters is cut and newlines become spaces; a description is cut at 4,000.
 
 - **Resume.** A relaunch from a checkpoint saved at step k reopens the SAME run with `Rewind(step=k+1)`:
   metric points from k+1 on are deleted and written again, and the earlier attempt's samples past k leave
@@ -228,7 +242,8 @@ probe trial add $RUN jobs/<job> --step 0  # a job already run; --whole-run when 
 
 No adapter: write the samples with `run.samples`. Each part is checked against the sample contract
 before it queues: a part sending a field its role does not own (a generator part with `consumed_step`) is
-dropped with a warning. A generator part's `prompt` and `label` become its task's, sent once per task.
+dropped with a warning. A generator part's `prompt`, `label`, `name` and `description` become its task's, sent
+once per task: set `name` and `description` where you set `task_key`, as a dataset sets `task_name`.
 
 ```python
 run = probe.init(project="gsm-posttrain", config=cfg)
@@ -236,7 +251,7 @@ run.samples.plan(expected_steps=steps, reward_max=1.0)          # 1.0 = a passin
 for step in range(steps):
     rollouts = generate(policy, step)                           # made by the weights of version `step`
     run.samples.log([{"key": f"train:{step}:{i}", "task_key": r.task_id, "scenario": r.scenario,
-                      "prompt": r.prompt, "label": r.answer,
+                      "prompt": r.prompt, "label": r.answer, "name": r.name, "description": r.description,
                       "group_key": f"train:{step}:{r.group}", "split": "train", "scheduled_step": step,
                       "generated_by": [{"model": {"kind": "policy", "version": step}}],
                       "response": r.text, "reward": r.reward} for i, r in enumerate(rollouts)])
@@ -269,7 +284,8 @@ probe checkpoint best $RUN --metric eval/val                    # the checkpoint
   the same steps: a gap means samples went missing or were counted twice. `error` samples are left out of
   means and counted beside them.
 - `probe samples tasks $RUN` lists one task per prompt and scenario. A task per attempt means the prompt
-  the hash keys changes every time (a seed, a timestamp): set `task_id`.
+  the hash keys changes every time (a seed, a timestamp): set `task_id`. A task listed with only its key
+  (NAME `-`) means setup is not done: add `task_name` and `task_description` beside `task_id` and relaunch.
 
 ## LIVE: WHILE IT RUNS:
 
