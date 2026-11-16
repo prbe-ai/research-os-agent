@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.571.0
+
+- **The W&B reader moved into the shared W&B core.** Internal move: the CLI's W&B reading now lives in `probe.connectors.wandb.reading`, with its row rule in one file the reader child loads; the old `probe.cli.imports.wandb_runs.reader`, `graphql` and `record_printer` paths keep working for one release, and nothing you see changes.
+- **After you paste your W&B key, the install lists your W&B projects to pick from; the key page opens in your browser.** `probe wandb key request` now opens the key page in your browser the way sign-in opens its tab (on a computer with no browser, or inside the agent's sandbox, the link in its answer is still the way in; nothing waits on a browser). Its JSON is unchanged. `probe import review --wandb-key ~/.netrc` with no project or folder no longer stops with a usage error: it answers the new reason `wandb_project_choice_needed` with `projects`, that W&B login's projects with runs (your own, then up to 5 of your teams'), newest run first, at most 10, each as `{"project": "entity/name", "runs": 14, "newest_run_at": "2026-11-12T09:30:00"}`; a login with no project that has runs answers `wandb_no_projects`. W&B is asked for each project's run count in the same paged list (one request per 20 projects, not one per project), and past the agent's time limit the list is what came back ("at least N projects"). The key never appears in an answer or an error.
+- **One home for what a W&B run becomes in Probe.** Name, tags (with group and job type), config, summary, notes, status and times now come from `probe.connectors.wandb.run_fields` for both a CLI copy and the server read-through. A CLI copy now trims spaces around a W&B display name, falls back to the run id (as a name Probe may retitle) when the display name is only spaces, and leaves summary integers past 64 bits out (Probe cannot store them), so the import check no longer reports those runs as differing. `get_import_name` and `identity.make_claim_tags` are gone.
+
 ## 0.570.0
 
 - **A Harbor agent that is still working no longer reads hung.** `harbor run --plugin probe` now counts the agent's
