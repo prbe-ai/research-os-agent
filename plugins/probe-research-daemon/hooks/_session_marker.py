@@ -1401,7 +1401,9 @@ HELP_FLAGS = frozenset({HELP_FLAG, "-h"})
 #: is an argument and the command runs (`probe daemon worker -h`), so it is no help.
 #: `test_daemon_profile.py` holds this to the CLI's tree.
 UNKNOWN_OPTIONS_PASSED = frozenset(
-    {"exec", "docs", "cli search", "daemon worker", "daemon override", "daemon session", "daemon task", "run resume"}
+    {"exec", "docs", "cli search", "daemon worker", "daemon override", "daemon session", "daemon task", "run resume",
+     # The removed W&B imports take any old argv and only print what replaced them (#5245).
+     "wandb import-local", "wandb import-hosted"}
 )
 
 
