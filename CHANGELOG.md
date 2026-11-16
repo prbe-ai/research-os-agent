@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.581.0
+
+- Harbor samples count turns the way every other framework does: one turn per model reply, with the task and any
+  feedback before a reply inside that reply's turn. A sample's turn count is now its number of model calls (plus one
+  when feedback follows the last reply), not its number of trajectory steps.
+
 ## 0.580.0
 
 - **A Miles rollout's Compute tab shows the GPUs that served it.** The SGLang engines and session server Miles launches now carry Probe's hook: each model call's reply brings back readings of its own engine's GPUs (its DP group's, when SGLang routes requests), the rollout collects them for its try, and they are logged with the finished sample. Agent rollouts get theirs through Miles' session server. A call that came back without readings, a multi-node or prefill/decode engine, or a full store marks the sample's GPU capture incomplete instead of showing partial charts as whole. Runs whose engines Probe is not inside (external engine addresses, a custom engine provider, a deploy that does not launch its own engines, Miles' legacy rollout, `PROBE_MILES_LIVE=0`) declare `gpu_readings` with why; TRL GRPO and distillation, and verl off its vLLM server, declare it too. Set `PROBE_MILES_GPU_TIMING=1` to log the time Probe adds to each engine request. The SDK's typed `client.samples.get_capture()` now leaves out a capture field a newer server declares, instead of failing the read.
