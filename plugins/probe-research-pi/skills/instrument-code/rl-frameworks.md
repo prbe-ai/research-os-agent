@@ -249,6 +249,9 @@ probe trial add $RUN jobs/<job> --step 0  # a job already run; --whole-run when 
   sample per step. A reward Harbor marks invalid is no reward (`dropped(invalid_reward)`). An agent timeout
   the verifier still graded reads `failed`; a verifier that never ran reads `error`. Files upload after
   Harbor's own secret scrub.
+- **Why it failed.** When the task's checker can tell, have it write one line to `verifier/reason.txt` beside
+  `reward.txt`: a short category (`tests failed`, `no patch`, `wrong output format`), not the error message. A
+  Harbor job's sample carries it as its failure reason, a Miles run's Harbor trials too (SkyRL's not yet).
 - Only the plugin sees every retry: Harbor deletes a retried attempt's folder, so a local job folder holds
   final attempts only (`harbor jobs download --include-retries` keeps them).
 - **Library mode** (your code owns the `Trial`): `probe.connectors.harbor.instrument_trial(trial, run=run,
@@ -260,7 +263,10 @@ probe trial add $RUN jobs/<job> --step 0  # a job already run; --whole-run when 
 No adapter: write the samples with `run.samples`. Each part is checked against the sample contract
 before it queues: a part sending a field its role does not own (a generator part with `consumed_step`) is
 dropped with a warning. A generator part's `prompt`, `label`, `name` and `description` become its task's, sent
-once per task: set `name` and `description` where you set `task_key`, as a dataset sets `task_name`.
+once per task: set `name` and `description` where you set `task_key`, as a dataset sets `task_name`. When the
+grader can say why an attempt failed, add `"failure_reason"`: one short category, not the message. Add
+`"sampling": {"temperature": ..., "top_p": ..., "max_new_tokens": ...}` (the engine's own names) to compare
+settings across rollouts.
 
 ```python
 run = probe.init(project="gsm-posttrain", config=cfg)
@@ -288,6 +294,7 @@ On a two-step run, before the long one:
 probe samples capture $RUN                                      # yes, or no with the reasons
 probe samples stats $RUN --by step --measure mean_reward,count  # = the trainer's own mean reward per step
 probe samples list $RUN --result error --limit 5                # what broke; one sample's log: probe samples logs SAMPLE
+probe samples list $RUN --result failed --limit 3               # then: probe samples show SAMPLE --json | grep failure_reason
 probe samples stats $RUN --by host --where result=error         # where errors come from (also engine, worker, error_reason)
 probe checkpoint best $RUN --metric eval/val                    # the checkpoints landed, with their lineage
 ```
@@ -300,6 +307,9 @@ probe checkpoint best $RUN --metric eval/val                    # the checkpoint
 - The stats mean must equal the framework's own logged mean (Miles `rollout/raw_reward`, ART `reward`) over
   the same steps: a gap means samples went missing or were counted twice. `error` samples are left out of
   means and counted beside them.
+- A checker that writes reasons: each failed sample's `show --json` has `failure_reason`. None means
+  `verifier/reason.txt` was not written (or is empty), or the loop sent no `failure_reason`; fix that before the
+  long run, or the Failures tab says "No reason recorded".
 - `probe samples tasks $RUN` lists one task per prompt and scenario. A task per attempt means the prompt
   the hash keys changes every time (a seed, a timestamp): set `task_id`. A task listed with only its key
   (NAME `-`) means setup is not done: add `task_name` and `task_description` beside `task_id` and relaunch.
