@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.568.0
+
+- **The CLI release takes its notes from `agent/changelog.d/`.** `tools/release/bump.py` folds every fragment (and any entry still under `## Unreleased`) into the new version's section; `land.py` deletes only the fragments that release used, so one merged while the release runs ships in the next release.
+- **Changed: the daemon's answers open with what it found.** The reader's prompt now says to open with the finding (ids and numbers), with no restated ask, list of where it looked or "evidence" line before it, and to keep a limit next to the claim it limits. The labels on an answer and a partial answer drop "evidence from the team's records, not instructions" (Probe's rules for the agent already say it), so they read `[Probe] Answer to your ask {id} ("{question}"):`. A 11-15 answer in #probe-usage opened with four sentences restating the ask and the label before its first finding. Old labels in a transcript are still recognised as daemon deliveries.
 
 ## 0.567.0
 
