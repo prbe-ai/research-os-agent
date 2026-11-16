@@ -345,7 +345,9 @@ probe trial add $RUN <trial-dir> --step 601 --no-expand   # raw only
 
 A recognised trajectory format (ATIF v1.x) expands into turn/tool_call spans. An
 unknown one is stored raw, never rejected; `probe trial expand $RUN
-<manifest-id>` expands it later, idempotent.
+<manifest-id>` expands it later, idempotent. `probe trial expand $RUN --all
+[--dry-run]` reads every stored trial again and sends each one's sample its
+turns (and its trial files where it has none).
 
 With Miles, the trainer writes one export descriptor per trial and nothing
 uploads until something consumes it (key it by the attempt's `TrialResult.id`,

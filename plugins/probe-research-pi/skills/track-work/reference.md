@@ -344,8 +344,11 @@ step that generated them.
 | runs side by side | `probe samples stats RUN --run B --run C --by step` |
 
 `probe samples export RUN --out passed.jsonl --result passed --split train`
-writes samples whole; `--register-dataset NAME --note "..."` records the file
-as that dataset's next version, made by the run (an RFT-SFT set). Text output
+writes samples whole, turns included (the list's population and filters: a run
+no trainer consumed needs `--outcome generated` or `--include all`);
+`--format atif --out DIR` writes one ATIF trajectory file per sample (Harbor's
+shape), `--format atif-jsonl` one a line; `--register-dataset NAME --note "..."`
+records the output as that dataset's next version, made by the run (an RFT-SFT set). Text output
 is cut at 4 KiB except `show`; `--json` prints the server's answer.
 
 ## 8. PUBLISHING
