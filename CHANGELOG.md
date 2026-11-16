@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.576.0
+
+- **W&B onboarding is shorter and clearer.** The W&B "Start?" question shows only what is copied and how long it takes (runs, history rows, files, minutes), not a paragraph on where runs land and how they are read. When a W&B key can't see a project, `import review` now lists the 10 projects with the newest runs it can see (`projects`, the shape of `wandb_project_choice_needed`), so the person can pick one instead of the agent asking W&B itself; a list W&B cut short says so, and one it would not give says that instead of "it sees no project". `sign-in --wait` that installs Probe with too little time left to save the sign-in now says "You're approved and Probe is installed: run the same command once more to finish signing in" instead of "too little time left".
+
 ## 0.575.0
 
 - **The guard hook reads `-h` on the removed `probe wandb import-local|import-hosted` as an argument.** Those stubs take any old command line and only print what replaced them, so `-h` there runs the stub (one line, no writes) rather than counting as asking for help.
