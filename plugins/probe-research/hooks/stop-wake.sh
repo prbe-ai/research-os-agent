@@ -12,9 +12,11 @@ case "${1:-}" in
   # An open ask or writer request (taken by the worker or not): its end.
   answer) W=("$R/asks/$SID"/a*.json "$R/asks/$SID"/.taken/a*.json "$R/requests/$SID"/w*.json "$R/requests/$SID"/.taken/w*.json)
           [ ${#W[@]} -gt 0 ] || exit 0 ;;
-  # A waiting server message, or a served session: its inbox messages.
+  # A waiting server message, a served session, or an open ask or writer request (a message landing
+  # during that wait wakes the idle agent): its inbox messages.
   message) W=("$R/messages/$SID"/00000000000000000000-n*.json)
-           [ ${#W[@]} -gt 0 ] || [ -f "$R/status/$SID.json" ] || exit 0 ;;
+           A=("$R/asks/$SID"/a*.json "$R/asks/$SID"/.taken/a*.json "$R/requests/$SID"/w*.json "$R/requests/$SID"/.taken/w*.json)
+           [ ${#W[@]} -gt 0 ] || [ ${#A[@]} -gt 0 ] || [ -f "$R/status/$SID.json" ] || exit 0 ;;
   *) exit 0 ;;
 esac
 export PROBE_READS_GROUP="$1"

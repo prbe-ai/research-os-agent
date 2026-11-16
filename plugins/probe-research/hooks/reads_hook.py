@@ -1816,7 +1816,7 @@ def on_stop(payload: dict, *, max_s: "float | None" = None, poll_s: float = WAKE
     group = None if hold else group
     if group == GROUP_ANSWER:
         alerts = False
-    elif group is not None:
+    elif group == GROUP_ALERT:
         asks = set()
     if not asks and not alerts and (group not in (None, GROUP_MESSAGE) or hold or not any(
             m["kind"] == KIND_SERVER and _is_for_agent(m) for _p, m in waiting(sid))):
