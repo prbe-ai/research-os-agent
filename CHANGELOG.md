@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.579.0
+
+- **Miles + Harbor rollouts land as one sample per trial.** Miles' Harbor agent function returns no trial, so each Miles sample and its Harbor trial showed up as two unrelated records. Pass `--custom-agent-function-path probe.connectors.miles.harbor_agent.run` in place of `swe_agent_function.run` (with the 2-field agent-server patch in the instrument-code skill): each sample is keyed by its `TrialResult.id`, carries Harbor's task key, and its trial's files are staged for `probe trial watch`. It never fails a rollout.
+- **Every RL framework's attempts now read as one conversation format.** Turns Probe rebuilds from tokens (verl,
+  SkyRL, Miles) go through the model's chat template (ChatML and Llama 3), so they show user, assistant and tool
+  messages with structured tool calls, linked results and reasoning instead of raw `<|im_start|>` / `<tool_call>`
+  text; an unknown template decodes with special tokens skipped. Miles samples keep their messages even though Miles
+  drops them right after its trajectory dump, a Harbor-joined Miles sample leaves its turns to the Harbor trial, and a
+  Miles or verl single reply gets one decoded turn. Harbor turns carry each tool call on the assistant message with its
+  id, full-length arguments and results (no more 700-character cut), and trials that only have mini-swe-agent's own
+  `mini-swe-agent.trajectory.json` now give turns and spans, with a shell call's exit code as its outcome.
+
 ## 0.578.0
 
 - **Changed: a daemon answer's label no longer repeats the question.** It reads `[Probe] Answer to your ask {id}:` (and the same for a partial answer, nothing found, and a failed or stopped ask). The agent's own `probe ask` call already holds the question beside the id it printed, so repeating it was duplicated context in every answer. Older labels in a transcript are still recognised as daemon deliveries.
