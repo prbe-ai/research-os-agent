@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.586.0
+
+- **Reading a run's files no longer skips one that changes mid-read.** `list_run_artifacts` and the other complete run file
+  reads follow the server's `X-Next-Cursor`, so a file deleted or moved between two pages of 1,000 never pushes
+  another file out of the list. Against an older server they page by offset as before.
+- **`probe decision add|list|remove` records the choices that changed the work.** A decision goes on a
+  project (it changes its experiments) or an experiment (it changes only its runs), with its reason, who
+  chose (`--by researcher|agent`), what it changed (`--affects run:<id>=stopped`, repeatable), what it
+  was chosen over, the decision it follows and the session events behind it (`--evidence`). It prints
+  the new decision's id. On a team where decisions are not on yet it says so in one line and exits 0.
+  The Probe daemon's writer may run it, and `track-work` now tells every agent when to record one.
+
 ## 0.585.0
 
 - **Harbor task folders keep credential-shaped file names off the run.** A task file whose name looks like a credential is never uploaded or quoted in an error; the task's manifest lists it as withheld.
