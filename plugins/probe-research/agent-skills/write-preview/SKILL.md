@@ -9,32 +9,36 @@ Only while you record this chat yourself (`probe session status` says `inline`);
 daemon's writer does it. Sandboxed: add `--out <a folder in your workspace>` to `checkout`. Told to
 leave it: tell the researcher in one line.
 
-The preview is one custom pane, `about`, showing what the project is about. Use one visual:
+Pane `about` shows what the project is about. Use one visual:
 
-1. A real example from its runs: the model's input beside its output, two models on one input, or
-   one output shown two ways (a protein's structure and sequence). Several examples: a
-   `<select>` that redraws every view. Read it through the recipe even if its files are locked to
-   you; others load them.
-2. No example file yet: a concrete example of the project's purpose in its subject's own form
-   (question beside SQL, an edited document, a folder tree, a task's graph). Invented examples stay
-   clearly illustrative, never results. No generic input → process → output flowchart or
-   decorative icons.
+1. An example attached to its runs, read through the recipe (even locked files): input beside
+   output, two models on one input, one output two ways. Several: a `<select>` in a
+   `<foreignObject>` redrawing every view.
+2. No example attached to a run yet (files only on disk count as none): never upload, attach or
+   start runs for a preview; draw a concrete example in its subject's form (question beside SQL),
+   clearly illustrative (labelled), never results. Don't stop to ask.
 
-Width: natural, up to 440px, `max-width:100%`; SVGs carry width, height and a viewBox; never
-stretch to a fixed height. Check it at card size, also after its frame parks. Label outputs:
-generated, predicted or the reference. No Source button, dropdown or footnote. Fonts: only
-`var(--ov-font)`; `var(--ov-mono)` for code. Background: `var(--ov-bg)` or transparent; no page,
-panel or border.
+Shape: one `<svg viewBox="0 0 440 H">`, H 88-528, filling the width, no wrapper padding/margin,
+nothing visible outside it. Images: script sets each `<image>` `href` from `PROBE.image(row)`; a
+`data:` URI or path in markup is refused.
 
-No charts, scores, tables, captions, title or description line. No useful visual: leave it unset.
-If its data cannot load, show nothing.
+Code `var(--ov-mono)`. Example text 16-20px, weight 600; labels ≥12px, weight 500; text in
+`var(--ov-fg)` or `var(--ov-muted)`.
 
-Write it after `probe project create`, or when `probe pane preview show <project>` says `none`.
-Rewrite it when `show` says `is_static` and runs now hold a real example.
+Colour: fills, marks and chip tints from `var(--ov-c1)`...`var(--ov-c8)`. Chips and panels:
+`var(--ov-surface-2)` or a hue at 15% opacity, radius 8, no outline, outer border or background.
+Declare no custom properties (`--name:`, `setProperty('--…')`), not even `--ov-*` aliases. Label
+outputs: generated, predicted or reference.
 
-Run `probe pane preview checkout <project>` and follow its `next`, at most twice after a refusal.
+No charts, scores, tables, captions, title, description line, Source button, decorative icons,
+input→process→output flowchart. No useful visual: leave unset. Data fails to load: show nothing.
 
-Nobody picks the preview by hand. Turn it off only when the researcher asks: `probe pane preview
+Write it when `probe pane preview show <project>` says `none`, rewrite when `is_static` and runs
+hold one.
+
+Run `probe pane preview checkout <project>`, follow its `next`, at most twice after a refusal.
+
+Nobody picks the preview by hand. Clear it only when the researcher asks: `probe pane preview
 clear <project> --directed`.
 
-Recipes and data calls: `write-pane`.
+Recipes, data calls: `write-pane`.

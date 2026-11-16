@@ -161,7 +161,8 @@ run: `probe run series <run-id>` lists its metric keys, `probe span list <run-id
 - Look: start with the content. The dashboard prints the title above it, so don't repeat it. No
   outer border, card or box, and no inner scrollbar: the pane sits on the page and grows to its
   content. Use the host's colors (`--ov-fg`, `--ov-muted`, `--ov-line`, `--ov-accent`,
-  `--ov-good`, `--ov-bad`); for design, `artifact-design`.
+  `--ov-good`, `--ov-bad`, and the chart hues `--ov-c1`...`--ov-c8` for fills and marks, never
+  text); for design, `artifact-design`.
 
 ## 4. Live runs, documents, click-through
 
