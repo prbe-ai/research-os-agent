@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.569.0
+
+- **Clients in other languages record without waiting 10-20 s per write.** The protocol doc now tells every non-Python client to send `X-Probe-Async-Ack: 1` on metrics writes (Probe answers `202` once the batch is queued) and to retry a finish answered `503 data_pending`; `probe client check` fails a client that does neither.
+- **When Probe wakes an idle Claude Code session, the chat now says what kind of message it is.** The line reads "Probe run alert", "Probe answer" (your ask or writer request finished) or "Probe message" (a message for the session, or a notice from Probe) instead of a bare "Probe". Claude Code now runs one background waiter per kind, so an idle session the daemon serves runs two waiters and a session with an open ask runs three. When two kinds arrive at once, the agent wakes twice, once per kind.
+- **The W&B connector moved into one package, `probe.connectors.wandb`.** Internal move for the shared W&B core: the old `probe.connectors.wandb_history`, `wandb_claim`, `wandb_system` and `wandb_files` paths keep working for one release; nothing you see changes.
+
 ## 0.568.0
 
 - **The CLI release takes its notes from `agent/changelog.d/`.** `tools/release/bump.py` folds every fragment (and any entry still under `## Unreleased`) into the new version's section; `land.py` deletes only the fragments that release used, so one merged while the release runs ships in the next release.
