@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.583.0
+
+- **Harbor task folders retry a refused file once.** A task file refused once (changed mid-upload, a read hiccup) is tried again at once and stored; one the upload gate refuses again while it is readable (a credential-shaped path or content, an opaque or oversized file) is listed as skipped and the rest of the task is captured; one this host cannot read fails the try, and the task's next trial uploads it again.
+
 ## 0.582.0
 
 - **Harbor trials staged for `probe trial watch` / `drain` (the Miles agent path) now upload their task folder.**
