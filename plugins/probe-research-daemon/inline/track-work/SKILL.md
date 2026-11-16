@@ -87,7 +87,7 @@ Create both first, each with `--name "<plain title>"`; `run start` never creates
 Every run needs an owner that keeps it alive:
 1. `probe.init()` in the script (`instrument-code`; also for remote jobs).
 2. `probe exec -- CMD` for code you can't edit; a submit-only launcher (`sbatch`, `ray job submit`, `modal deploy`) opens it awaiting attach (unknown launcher: `--detached-launcher`).
-3. W&B: the project attached in the dashboard, or `probe wandb import-local|import-hosted`.
+3. W&B: the project attached in the dashboard, or `probe import review --wandb-project ENTITY/PROJECT` (a folder: `--wandb-folder`), then `probe import start <id>`.
 
 - Name and describe every run when it starts, each one when many start together: `probe run set RUN --name "<title>" --description "<what it tests, one sentence>"`. Leave out a field `probe run get RUN` shows locked (`name_customized`, `description_customized` true): the server refuses an agent's change to it (409) and writes nothing from that call. `--slug` only when you must find one by hand.
 - Under a CLI `run start`, run the work with `probe exec RUN -- cmd` or nothing it reads or writes is recorded.
