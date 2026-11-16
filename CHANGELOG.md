@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.578.0
+
+- **Changed: a daemon answer's label no longer repeats the question.** It reads `[Probe] Answer to your ask {id}:` (and the same for a partial answer, nothing found, and a failed or stopped ask). The agent's own `probe ask` call already holds the question beside the id it printed, so repeating it was duplicated context in every answer. Older labels in a transcript are still recognised as daemon deliveries.
+
 ## 0.577.0
 
 - **A W&B import that resumes after a dropped connection reports all of its work.** Runs an earlier attempt of the
