@@ -114,23 +114,22 @@ HOLD_FRESH_S = 15.0
 #: `mailbox.ALIVE_EVERY_S`: this hook's heartbeat for the session, at most this often.
 ALIVE_EVERY_S = 30.0
 ANSWER_TTL_S = 24 * 3600
-LABEL_QUESTION_CHARS = 120
 KIND_MESSAGE = "message"
 KIND_ANSWER = "answer"
 KIND_NOTHING = "nothing"
 KIND_FAILED = "failed"
 KIND_ALERT = "alert"
 TEXT_MESSAGE = "[Probe] relevant info from daemon:\n{message}"
-TEXT_ANSWER = '[Probe] Answer to your ask {id} ("{question}"):\n{message}'
-TEXT_NOTHING = '[Probe] Answer to your ask {id} ("{question}"): nothing in the team\'s records.'
-TEXT_FAILED = '[Probe] Your ask {id} ("{question}") failed: {reason}. No answer is coming for it.'
+TEXT_ANSWER = '[Probe] Answer to your ask {id}:\n{message}'
+TEXT_NOTHING = '[Probe] Answer to your ask {id}: nothing in the team\'s records.'
+TEXT_FAILED = '[Probe] Your ask {id} failed: {reason}. No answer is coming for it.'
 #: A partial answer (`partial` on a MESSAGE with `ask`) and the endings after one (S1).
-TEXT_PARTIAL = ('[Probe] Partial answer to your ask {id} ("{question}") - the daemon is still looking; the full '
+TEXT_PARTIAL = ('[Probe] Partial answer to your ask {id} - the daemon is still looking; the full '
                 "answer follows:\n{message}")
 NOTHING_MORE = "(the daemon found nothing more)"
-TEXT_NOTHING_AFTER_PARTIAL = ('[Probe] Answer to your ask {id} ("{question}"): nothing more in the team\'s '
+TEXT_NOTHING_AFTER_PARTIAL = ('[Probe] Answer to your ask {id}: nothing more in the team\'s '
                               "records beyond the partial answer.")
-TEXT_FAILED_AFTER_PARTIAL = ('[Probe] Your ask {id} ("{question}") stopped: {reason}. No fuller answer is '
+TEXT_FAILED_AFTER_PARTIAL = ('[Probe] Your ask {id} stopped: {reason}. No fuller answer is '
                              "coming; the partial answer is what there is.")
 TEXT_ALERT = "[Probe] Run alert\n{message}"
 ORIGIN_WRITER = "writer"
@@ -509,20 +508,17 @@ def _framed(msg: dict) -> str:
         if kind == KIND_MESSAGE:
             return TEXT_WRITER_RECEIPT.format(message=msg.get("text") or "")
         return TEXT_WRITER_REPLY.format(message=msg.get("text") or "")
-    question = msg.get("question") or ""
-    if len(question) > LABEL_QUESTION_CHARS:
-        question = question[:LABEL_QUESTION_CHARS - 3].rstrip() + "..."
     after = bool(msg.get("partial"))  # an ask's end after a partial answer
     if _is_partial(msg):
-        return TEXT_PARTIAL.format(id=msg.get("ask"), question=question, message=text)
+        return TEXT_PARTIAL.format(id=msg.get("ask"), message=text)
     if kind == KIND_ANSWER:
         answer = f"{text}\n{NOTHING_MORE}" if after else text
-        return TEXT_ANSWER.format(id=msg.get("ask"), question=question, message=answer)
+        return TEXT_ANSWER.format(id=msg.get("ask"), message=answer)
     if kind == KIND_NOTHING:
-        return (TEXT_NOTHING_AFTER_PARTIAL if after else TEXT_NOTHING).format(id=msg.get("ask"), question=question)
+        return (TEXT_NOTHING_AFTER_PARTIAL if after else TEXT_NOTHING).format(id=msg.get("ask"))
     if kind == KIND_FAILED:
         return (TEXT_FAILED_AFTER_PARTIAL if after else TEXT_FAILED).format(
-            id=msg.get("ask"), question=question, reason=msg.get("reason") or "unknown")
+            id=msg.get("ask"), reason=msg.get("reason") or "unknown")
     if kind == KIND_ALERT:
         return TEXT_ALERT.format(message=msg.get("text") or "")
     return TEXT_MESSAGE.format(message=msg.get("text") or "")

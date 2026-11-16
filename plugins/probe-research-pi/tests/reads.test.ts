@@ -64,7 +64,7 @@ describe("pi delivery of the daemon's messages", () => {
     const first = box.deliver(token, "test");
     expect(first).toEqual([
       "[Probe] relevant info from daemon:\nprior sweep: C=10 best",
-      "[Probe] Answer to your ask aq1 (\"what did we find?\"):\nval_acc 0.989",
+      "[Probe] Answer to your ask aq1:\nval_acc 0.989",
     ]);
     expect(box.deliver(token, "test")).toEqual([]);
     expect(box.deliver(box.newTurn(), "test")).toEqual([
@@ -142,11 +142,18 @@ describe("run alerts", () => {
 });
 
 describe("rendering an answer", () => {
-  it("keeps dollar signs and braces in answers and questions as written", () => {
+  it("keeps dollar signs in answers as written", () => {
     status("ok");
     publish("a1", "answer", { ask: "aq1", question: "why {message}?", text: "cost $$5 and $' and $&" });
     const [text] = box.deliver(box.newTurn(), "test");
-    expect(text).toBe("[Probe] Answer to your ask aq1 (\"why {message}?\"):\ncost $$5 and $' and $&");
+    expect(text).toBe("[Probe] Answer to your ask aq1:\ncost $$5 and $' and $&");
+  });
+
+  it("keeps braces in a reason as written", () => {
+    status("ok");
+    publish("a1", "failed", { ask: "aq1", question: "q", text: "SECRET", reason: "why {message}?" });
+    const [text] = box.deliver(box.newTurn(), "test");
+    expect(text).toBe("[Probe] Your ask aq1 failed: why {message}?. No answer is coming for it.");
   });
 });
 
@@ -444,7 +451,7 @@ describe("partial answers (S1)", () => {
     publish("p1", "message", partial, 2);
     expect(box.deliver(box.newTurn(), "poller")).toEqual([
       "[Probe] relevant info from daemon:\nteam context",
-      "[Probe] Partial answer to your ask aq1 (\"what lr?\") - the daemon is still looking; the full answer follows:\nlr 3e-3 so far",
+      "[Probe] Partial answer to your ask aq1 - the daemon is still looking; the full answer follows:\nlr 3e-3 so far",
     ]);
   });
 
@@ -463,7 +470,7 @@ describe("partial answers (S1)", () => {
     publish("p1", "message", partial, 1);
     publish("a1", "nothing", { ask: "aq1", question: "what lr?", partial: true }, 2);
     expect(box.deliver(box.currentTurn(), "poller", false)).toEqual([
-      "[Probe] Answer to your ask aq1 (\"what lr?\"): nothing more in the team's records beyond the partial answer.",
+      "[Probe] Answer to your ask aq1: nothing more in the team's records beyond the partial answer.",
     ]);
   });
 });

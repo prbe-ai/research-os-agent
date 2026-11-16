@@ -51,7 +51,6 @@ import { Destination, type Claim, type MessageLedger } from "./serverLedger.js";
 
 // Mirrors of `probe.daemon.mailbox` (tests/test_reads_hook.py pins them).
 export const HOLD_FRESH_S = 15;
-export const LABEL_QUESTION_CHARS = 120;
 export const KIND_MESSAGE = "message";
 export const KIND_ANSWER = "answer";
 export const KIND_NOTHING = "nothing";
@@ -87,14 +86,14 @@ export const PERSON_AUDIENCES: string[] = [ServerAudience.Person, ServerAudience
 export const BANNER_SUFFIX = ".banner";
 const BANNER_ID = /^[A-Za-z0-9_]{1,64}$/;
 export const TEXT_MESSAGE = "[Probe] relevant info from daemon:\n{message}";
-export const TEXT_ANSWER = "[Probe] Answer to your ask {id} (\"{question}\"):\n{message}";
-export const TEXT_NOTHING = "[Probe] Answer to your ask {id} (\"{question}\"): nothing in the team's records.";
-export const TEXT_FAILED = "[Probe] Your ask {id} (\"{question}\") failed: {reason}. No answer is coming for it.";
+export const TEXT_ANSWER = "[Probe] Answer to your ask {id}:\n{message}";
+export const TEXT_NOTHING = "[Probe] Answer to your ask {id}: nothing in the team's records.";
+export const TEXT_FAILED = "[Probe] Your ask {id} failed: {reason}. No answer is coming for it.";
 /** A partial answer (`partial` on a message with `ask`) and the endings after one (S1). */
-export const TEXT_PARTIAL = "[Probe] Partial answer to your ask {id} (\"{question}\") - the daemon is still looking; the full answer follows:\n{message}";
+export const TEXT_PARTIAL = "[Probe] Partial answer to your ask {id} - the daemon is still looking; the full answer follows:\n{message}";
 export const NOTHING_MORE = "(the daemon found nothing more)";
-export const TEXT_NOTHING_AFTER_PARTIAL = "[Probe] Answer to your ask {id} (\"{question}\"): nothing more in the team's records beyond the partial answer.";
-export const TEXT_FAILED_AFTER_PARTIAL = "[Probe] Your ask {id} (\"{question}\") stopped: {reason}. No fuller answer is coming; the partial answer is what there is.";
+export const TEXT_NOTHING_AFTER_PARTIAL = "[Probe] Answer to your ask {id}: nothing more in the team's records beyond the partial answer.";
+export const TEXT_FAILED_AFTER_PARTIAL = "[Probe] Your ask {id} stopped: {reason}. No fuller answer is coming; the partial answer is what there is.";
 export const TEXT_ALERT = "[Probe] Run alert\n{message}";
 export const ORIGIN_WRITER = "writer";
 /** A hint the Probe service posted: a slot of its own beside the reader's one
@@ -319,15 +318,13 @@ export function rendered(msg: Message): string {
 }
 
 function framed(msg: Message): string {
-  let question = msg.question ?? "";
-  if (question.length > LABEL_QUESTION_CHARS) question = question.slice(0, LABEL_QUESTION_CHARS - 3).trimEnd() + "...";
   // One pass over the template, values as plain text: `String.replace` would
-  // expand `$&`, `$'` and `$$` in an answer, and a question holding `{message}`
+  // expand `$&`, `$'` and `$$` in an answer, and a reason holding `{message}`
   // must not have the answer spliced into it.
   const values: Record<string, string> = {
-    id: String(msg.ask), question, message: msg.text, reason: msg.reason || "unknown",
+    id: String(msg.ask), message: msg.text, reason: msg.reason || "unknown",
   };
-  const fill = (t: string) => t.replace(/\{(id|question|message|reason)\}/g, (_m, k: string) => values[k]);
+  const fill = (t: string) => t.replace(/\{(id|message|reason)\}/g, (_m, k: string) => values[k]);
   if (msg.kind === KIND_SERVER) return renderServerText(msg.text);
   // Rendered whole by Probe, its framing included; anything else of this origin
   // renders as its kind does (`origin` alone never takes the label off).
