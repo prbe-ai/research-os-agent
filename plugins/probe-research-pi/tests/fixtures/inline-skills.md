@@ -101,7 +101,7 @@ Close:
     - A dead end (its approach dropped, or shown not to pan out): also `probe experiment set EXP --dead-end "<why, in plain words>"`; `--clear-dead-end` when work on it resumes. It still ranks.
 - A better experiment to use than the pick? Set it (`probe project set P --best EXP --reason "..."`) and tell the researcher in one line.
 - No run this session: what's next and open goes in the project's notes.
-- End with the dashboard URL of everything you created or closed, verbatim as printed.
+- End with everything you created or closed as `[name](url)`, the URL as printed.
 
 ## Decisions
 

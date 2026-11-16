@@ -3945,6 +3945,14 @@ PROBE_MESSAGES_RULE_FLOWED = "\n\n".join(
     textwrap.fill(paragraph, 77, break_long_words=False, break_on_hyphens=False)
     for paragraph in PROBE_MESSAGES_RULE.rstrip("\n").split("\n\n")
 ) + "\n"
+#: How the main agent names a run, experiment or project to the researcher: the LINKS section here and a
+#: paragraph of `agent_rules.POINTER_BODY` and `agent_rules.RUNS_POINTER_BODY`, one text.
+LINKS_RULE = (
+    "To the researcher, write a run, experiment or project as `[name](url)` with the `url` Probe gave, never a "
+    "bare id. No `url`: its name.\n"
+)
+#: The same words wrapped at 77 columns, as `agent_rules.POINTER_BODY`'s prose is: the pointer bodies' copy.
+LINKS_RULE_FLOWED = textwrap.fill(LINKS_RULE.rstrip("\n"), 77, break_long_words=False, break_on_hyphens=False) + "\n"
 #: Probe's working rules in the daemon profile: the end of `agent_rules.DAEMON_POINTER_BODY`, byte for byte.
 DAEMON_RULES = (
     "### ASK THE DAEMON:\n\n"
@@ -3966,6 +3974,10 @@ DAEMON_RULES = (
     "### DAEMON MESSAGES:\n"
     "\n"
     + PROBE_MESSAGES_RULE
+    + "\n"
+    "### LINKS:\n"
+    "\n"
+    + LINKS_RULE
     + "\n"
     "### FEEDBACK:\n"
     "\n"
