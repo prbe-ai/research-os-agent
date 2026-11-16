@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.570.0
+
+- **A Harbor agent that is still working no longer reads hung.** `harbor run --plugin probe` now counts the agent's
+  output growing in its trial folder as progress (checked every 10 s), sends Harbor's own agent time limit so an alert
+  can say when Harbor stops the attempt, and marks attempts whose output Probe cannot see (remote sandboxes). On
+  Harbor 0.25 with local Docker it turns on `auto_mounting` unless you set it, and prints one line saying so (opt out
+  with `--ek auto_mounting=false`). `probe samples live` shows `ENDS` and `WAITING ON` columns.
+- **RL tasks carry the name the setup agent gives them.** Miles, ART, SkyRL, verl, TRL (GRPO, distillation, GKD, GOLD) and Harbor now send a dataset's `task_name` and `task_description` (beside `task_id`) with each task, so the RL page can lead a task row with a readable name instead of its key; Harbor tasks take Harbor's own task name. A loop of your own sets `name` and `description` on a generator sample. The SDK cleans every name and description before sending (one line, 256 characters for a name, 4,000 for a description), so a bad value never costs a task its prompt. A name alone never sends a task early: it rides the delivery that carries the prompt. `probe samples tasks` gains a NAME column and `probe samples task` prints the name and description. The instrument-code skill now names tasks at setup, where the agent picks `task_id`, and says a task listed with only its key means setup is not done. Needs a server with task names (sent to an older one, they are dropped).
+- **A server message that arrives while Probe is answering you wakes the agent again.** In a session the daemon does not serve, the idle agent had stopped waking for a server message during an open ask or write request; it now does.
+
 ## 0.569.0
 
 - **Clients in other languages record without waiting 10-20 s per write.** The protocol doc now tells every non-Python client to send `X-Probe-Async-Ack: 1` on metrics writes (Probe answers `202` once the batch is queued) and to retry a finish answered `503 data_pending`; `probe client check` fails a client that does neither.
