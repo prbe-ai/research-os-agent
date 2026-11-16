@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.572.0
+
+- **A Miles sample whose agent function named its own error now keeps it.** An agent function cannot set a Miles sample's status, so the reason it names in `metadata["error_reason"]` (with `metadata["error"]` as the message) was read only on a `failed` sample; a completed or truncated one now records it too (and a live try nothing graded ends with that reason instead of `reward_fn`), so an agent-server or sandbox outage shows its `error_reason` and message instead of reading as an ordinary failure. An aborted sample stays `engine_abort`, and a reward the sample was graded with still decides its result.
+- **W&B runs forked from another run keep their parent link again.** The W&B import asked for a forked run's parent
+  through a part of the `wandb` package that version 0.28 removed, and the reader installs 0.29, so every forked run
+  came in with no parent run and no fork step, with no warning. It now asks W&B the way each `wandb` version from 0.19
+  to 0.29 can. When W&B does not answer (a timeout, say), the import's report now says "Fork links could not be read
+  for N runs" instead of copying them as if they were never forked.
+- **A W&B import that resumes gives rows with no W&B time the right time.** A copy picked up mid-run used to stamp its
+  first rows without a W&B time with the run's start; they now take the last W&B time before where it left off, the
+  same times a copy made in one go writes.
+- Internal move: one W&B run's copy (where it lands, its history, its parity check) now lives in the shared W&B core;
+  nothing else changes.
+- **A huge W&B number no longer ends a W&B import.** A history row or hardware sample holding a whole number too big for a float (such as `10**400`) stopped the whole import with an error. Such a value is now left out and counted, like NaN. So is any whole number past 64 bits, which a run's summary already left out. The read-through server leaves them out the same way.
+- **The W&B row rule reads very deeply nested values.** It walks a nested value without recursion, so a map nested past Python's limit becomes dotted keys instead of an error (the read-through server shares this rule).
+
 ## 0.571.0
 
 - **The W&B reader moved into the shared W&B core.** Internal move: the CLI's W&B reading now lives in `probe.connectors.wandb.reading`, with its row rule in one file the reader child loads; the old `probe.cli.imports.wandb_runs.reader`, `graphql` and `record_printer` paths keep working for one release, and nothing you see changes.
