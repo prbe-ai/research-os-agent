@@ -1227,6 +1227,8 @@ WRITE_GROUPS = frozenset(
         "span",
         "group",
         "edge",
+        # Decisions (decisions PR2): `add` records, `list` reads, `remove` removes.
+        "decision",
         "trial",
         "views",
         "paper",

@@ -100,11 +100,20 @@ Every run needs an owner that keeps it alive:
 Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
-- When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer in one short, plain sentence. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
+- When the work answers an experiment's question (a winner or a dead end): `probe experiment set EXP --conclusion "..."`: the answer in one short, plain sentence. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
     - A dead end (its approach dropped, or shown not to pan out): also `probe experiment set EXP --dead-end "<why, in plain words>"`; `--clear-dead-end` when work on it resumes. It still ranks.
 - A better experiment to use than the pick? Set it (`probe project set P --best EXP --reason "..."`) and tell the researcher in one line.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.
+
+## Decisions
+
+A decision is a choice, by the researcher or you, that changes the ML work. Record each as it is made with `probe decision add` (reference §1):
+- Put it on the experiment if it changes only that experiment's runs, else on the project.
+- Title: the choice, under 8 words. Reason: why, and what it was chosen over.
+- Link what it changed, the result it was based on, and the decision it follows.
+- Say who chose: the researcher (if they chose or approved it) or you.
+- To reverse one, add a new decision; never edit the old one.
 
 ## Files and numbers
 
