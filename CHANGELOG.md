@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.582.0
+
+- **Harbor trials staged for `probe trial watch` / `drain` (the Miles agent path) now upload their task folder.**
+  Every Harbor trial capture (plugin, job folder, staged export, `probe trial capture`) uploads the task folder its
+  `config.json` or `lock.json` names (instruction, `task.toml`, tests, solution, environment) once per run per task
+  digest. Each trial's `harbor_trial` manifest says what happened in `meta.task_files.state` (`captured`,
+  `already_captured`, `no_folder`, `no_digest`, `failed`), a folder missing on the capturing host or a failed upload
+  warns once per run, and a failed upload is tried again by the task's next trial (3 tries per run).
+  `probe trial capture` and `reconcile` print the outcome as `task_files`.
+- **Harbor task folders retry a file the upload gate could not read.** A one-off read error or a file changed mid-upload no longer leaves that task file out for good: only a credential-shaped path, a non-regular file or one over the size limit is skipped; anything else fails the try and the task's next trial uploads it again.
+- **A Harbor task folder whose upload storage refused now reads `failed`, not `captured`.** A task file that did not
+  upload no longer marks the task as held by the run, so the task's next trial sends its bytes again (up to 3 tries per
+  run) instead of saying `already_captured`. A trial captured on a host without the task folder now reads
+  `already_captured`, without a warning, when the run already holds that task.
+- **Bolder, more colourful previews.** `write-preview` now asks for one `<svg viewBox="0 0 440 H">` (H 88-528) that fills the frame width with no padding of its own and nothing outside it, real outputs first (saved images, generated text, structures), example text 16-20 px at weight 600 and labels at least 12 px, fills and chip tints from the new chart hues `--ov-c1`...`--ov-c8`, and filled chips and panels (radius 8, no outline). `write-pane` names the same hues for fills and marks.
+- **A refused preview says how to fix it.** `pane push --preview` refused `preview_shape` or `text_small` prints its next step: redraw as one `<svg viewBox>` (height/width 0.2-1.2), or draw labels at 12 px or more.
+
 ## 0.581.0
 
 - Harbor samples count turns the way every other framework does: one turn per model reply, with the task and any
