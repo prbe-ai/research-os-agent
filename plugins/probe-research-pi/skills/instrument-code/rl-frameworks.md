@@ -110,10 +110,27 @@ python -m probe.connectors.miles.launch train_async.py <your Miles args> --save 
 - **Compute timeline** (upstream): `--use-miles-dashboard --dump-details /work/dump` also records phases per
   rank as spans, SGLang engine series (queue, running requests, KV cache) with an `engine` dimension, and
   the GPU map in the run's config.
-- **Harbor inside Miles.** In the agent function that runs the Harbor trial, return
-  `"external_key": str(result.id)` (the `TrialResult.id`) in the sample's metadata: Miles' sample and Harbor's
-  trial become one sample. Stage that trial's files with the same key (`stage_trial_export(...,
-  external_key=key)`, the file door in SKILL.md) and they link to it.
+- **Harbor inside Miles** (Miles' `examples/swe-agent-harbor-docker`). Miles' agent function returns no trial, so
+  each sample and its Harbor trial land as two unrelated records. Pass Probe's in its place:
+  `--custom-agent-function-path probe.connectors.miles.harbor_agent.run` (same request, client, timeout and
+  abort; keep the example folder on PYTHONPATH). Until Harbor ships it, patch the agent server so `RunResponse`
+  carries the trial:
+
+  ```diff
+  # agent_server/models.py, class RunResponse
+  +    trial_dir: str = ""
+  +    trial_id: str = ""
+  # agent_server/trial_runner.py, the dict _run_trial returns (it already has "trial_dir")
+  +            "trial_id": str(result.id),
+  ```
+
+  A joined sample's metadata holds `external_key` (the `TrialResult.id`), `task_id` (Harbor's task key, e.g.
+  `local:<task dir>`) and `trial_dir`; Probe shows one sample with Miles' tokens and reward and Harbor's
+  trajectory and files. Each trial is staged under `PROBE_CAPTURES_DIR` (default `probe-captures` beside the
+  trials folder, so Miles must see that path): run `probe trial watch <captures>` beside the job. Never fails a
+  rollout: an unpatched server warns once and returns Miles' plain fields; a failed staging goes to
+  `<captures>/restage.jsonl`, and after the job `python -m probe.connectors.miles.harbor_agent restage
+  <captures>/restage.jsonl`, then `probe trial drain <captures>`.
 - **Run identity and resume.** The run is `MILES_RUN_ID`, else one named from the `--save` folder. Relaunch
   with the same `--save` and `--load` its `iter_N`: the run reopens rewound to N+1.
 - **Worker credential**: `PROBE_MILES_WORKER_TOKEN`.
