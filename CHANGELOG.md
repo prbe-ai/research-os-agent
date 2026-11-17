@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.591.0
+
+- **W&B imports take project names with spaces.** `probe import review --wandb-project 'acme/GPU Cluster'` was refused as "not a W&B project name", although the CLI had just listed that project to choose from. A project name may now hold anything W&B allows except `/` and control characters, in the review and in the attached-project picker; artifact links to wandb.ai escape each part.
+
 ## 0.590.0
 
 - **With the Probe daemon on, your coding agent reads the team's runs table itself, not only one project's.**
