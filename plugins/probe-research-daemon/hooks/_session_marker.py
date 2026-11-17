@@ -1729,6 +1729,12 @@ DAEMON_PROFILE_PANE_READS = frozenset({"pane data", "pane get", "pane list", "pa
 #: the server answers the same way every time, not a search. A lookup like these
 #: through `probe ask` took 40 s at the median (Bucket, 2026-11-16); read directly it
 #: takes about a second. Searches stay the daemon's (`notes find`, `series latest`).
+#: And plain lookups by id, scoped to one project, experiment or run, or paged
+#: (round 3, 2026-11-17): `--query` on `dataset|source list` filters by text, not a
+#: search; `project contributors` reads unless `--add`/`--remove` (`READ_UNLESS_FLAGS`).
+#: Kept the daemon's for reading a whole inventory or graph, or hiding pages:
+#: `decision list`, `series latest`, `artifact list`, `version list`, `project
+#: branches`, `dataset show`, `paper list`, `shared list`, `views data`.
 DAEMON_PROFILE_TABLE_READS = frozenset(
     {
         "run list",
@@ -1739,12 +1745,23 @@ DAEMON_PROFILE_TABLE_READS = frozenset(
         "experiment get",
         "notes list",
         "notes show",
+        "dataset list",
+        "source show",
+        "source list",
+        "checkpoint list",
+        "group list",
+        "group get",
+        "views list",
+        "views show",
+        "project contributors",
+        "project code list",
     }
 )
 
 #: ...but never every page at once: `run list --all` walks every page and holds every
 #: run in memory; one page is at most 200 rows. (`project list --all` is one page
-#: across workspaces, so it stays admitted.)
+#: across workspaces, so it stays admitted.) The refusal names the flag
+#: (`DAEMON_PROFILE_EVERY_PAGE_DENY`).
 DAEMON_PROFILE_TABLE_UNBOUNDED = {"run list": frozenset({"--all"})}
 
 #: ...but not where a flag writes what it read: `run reproduce --materialize`
@@ -1839,11 +1856,24 @@ SWITCH_FLIP_DENY = (
 )
 
 _DAEMON_PROFILE_DENY_HEAD = (
-    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`) or the team\'s runs (`probe run list --fields name,status`). To ask about the team\'s prior work: `probe ask "<question>"`. '
+    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`) or the team\'s runs (`probe run list`). To ask about the team\'s prior work: `probe ask "<question>"`. '
 )
-DAEMON_PROFILE_DENY = _DAEMON_PROFILE_DENY_HEAD + "If you need to do it yourself, ask the researcher to type `/probe inline`."
-#: ...and in an auto chat (`is_auto_chat`), where the agent takes Probe inline itself (probe auto mode).
-DAEMON_PROFILE_DENY_AUTO = _DAEMON_PROFILE_DENY_HEAD + "If you need to do it yourself, run `probe session state inline`."
+#: How the agent takes Probe inline to do it itself: the researcher's `/probe inline`, or in an auto chat
+#: (`is_auto_chat`, probe auto mode) the agent's own `session state inline`.
+_INLINE_TAIL = "If you need to do it yourself, ask the researcher to type `/probe inline`."
+_INLINE_TAIL_AUTO = "If you need to do it yourself, run `probe session state inline`."
+DAEMON_PROFILE_DENY = _DAEMON_PROFILE_DENY_HEAD + _INLINE_TAIL
+DAEMON_PROFILE_DENY_AUTO = _DAEMON_PROFILE_DENY_HEAD + _INLINE_TAIL_AUTO
+
+#: A table read the agent runs, refused for a flag that reads every page
+#: (`DAEMON_PROFILE_TABLE_UNBOUNDED`): `{offender}` names it (Richard's approved
+#: text, 2026-11-17), then the inline tail.
+_DAEMON_PROFILE_EVERY_PAGE_HEAD = (
+    "`{matched}` reads one page at a time here, so `{offender}` (every page at once) was refused before it ran. "
+    'Drop it and page with `--cursor`, or ask the daemon: `probe ask "<question>"`. '
+)
+DAEMON_PROFILE_EVERY_PAGE_DENY = _DAEMON_PROFILE_EVERY_PAGE_HEAD + _INLINE_TAIL
+DAEMON_PROFILE_EVERY_PAGE_DENY_AUTO = _DAEMON_PROFILE_EVERY_PAGE_HEAD + _INLINE_TAIL_AUTO
 
 #: `DAEMON_PROFILE_DENY` for a WRITE: `--directed` admits one the researcher
 #: asked for, and the daemon's writer takes any other (`probe ask --writer`). A
@@ -1857,6 +1887,13 @@ def get_daemon_profile_deny(session_id: "str | None", is_write: bool = False) ->
     if session_id and is_auto_chat(session_id):
         return DAEMON_PROFILE_DENY_WRITE_AUTO if is_write else DAEMON_PROFILE_DENY_AUTO
     return DAEMON_PROFILE_DENY_WRITE if is_write else DAEMON_PROFILE_DENY
+
+
+def get_every_page_deny(session_id: "str | None") -> str:
+    """`DAEMON_PROFILE_EVERY_PAGE_DENY` (unformatted): the auto mode one in an auto chat."""
+    if session_id and is_auto_chat(session_id):
+        return DAEMON_PROFILE_EVERY_PAGE_DENY_AUTO
+    return DAEMON_PROFILE_EVERY_PAGE_DENY
 
 #: What the papers hook answers a paper-type web search it holds (`papers_hook.py`):
 #: at most once per `PAPER_FIND_WINDOW_S`, and never after `probe paper find` ran
@@ -1882,7 +1919,10 @@ def daemon_profile_allows(args: "list[str]", session_id: "str | None" = None) ->
     `daemon` state (`write_gate.refusal`). A read is not (reads go through
     `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`), one scope's
     panes (`DAEMON_PROFILE_PANE_READS`) and the team's tables, a page at a
-    time (`DAEMON_PROFILE_TABLE_READS`). The researcher's
+    time (`DAEMON_PROFILE_TABLE_READS`), each with no flag that writes or reads
+    every page (`_admitted_read_trips`): such a flag sends it on to the
+    classifier, so `project contributors p --add x --directed` runs as the
+    write it is. The researcher's
     switch runs only as `session state <target> --directed` (`switch_refusal`).
     Probe's own upkeep runs with its own flags (`upkeep_command`), and what
     records less only with `--directed` (`records_less`); the agent's own
@@ -1904,10 +1944,9 @@ def daemon_profile_allows(args: "list[str]", session_id: "str | None" = None) ->
     for key in (" ".join(words[:3]), two, head):
         if key in DAEMON_PROFILE_ALLOWED:
             return (True, "probe " + key)
-        if key in DAEMON_PROFILE_RUN_READS or key in DAEMON_PROFILE_PANE_READS:
-            return (not _flag_writes(args, DAEMON_PROFILE_READ_WRITES.get(key, frozenset())), "probe " + key)
-        if key in DAEMON_PROFILE_TABLE_READS:
-            return (not _reads_every_page(args, key), "probe " + key)
+    read = _admitted_read(words)
+    if read is not None and not _admitted_read_trips(args, read):
+        return (True, "probe " + read)
     kind, matched = classify_probe_args(args)
     if kind == "write" and carries_directed(args):
         return (True, matched)
@@ -1944,14 +1983,37 @@ def _runs_plainly(args: "list[str]", head: str) -> bool:
     return actions > 0
 
 
-def _reads_every_page(args: "list[str]", key: str) -> bool:
-    """Does this table read ask for every page at once (`DAEMON_PROFILE_TABLE_UNBOUNDED`)?
+#: Every read the daemon profile admits to the agent itself.
+_ADMITTED_READS = DAEMON_PROFILE_RUN_READS | DAEMON_PROFILE_PANE_READS | DAEMON_PROFILE_TABLE_READS
+
+
+def _admitted_read(words: "list[str]") -> "str | None":
+    """The admitted read (`_ADMITTED_READS`) these command words name, longest first; None for one
+    `DAEMON_PROFILE_ALLOWED` names first, or none."""
+    for key in (" ".join(words[:3]), " ".join(words[:2]), words[0] if words else ""):
+        if key in DAEMON_PROFILE_ALLOWED:
+            return None
+        if key in _ADMITTED_READS:
+            return key
+    return None
+
+
+def _admitted_read_trips(args: "list[str]", key: str) -> bool:
+    """Does this admitted read carry a flag that writes (`DAEMON_PROFILE_READ_WRITES`, `READ_UNLESS_FLAGS`:
+    both read here, never copied) or one that reads every page (`_every_page_flag`)?"""
+    writes = DAEMON_PROFILE_READ_WRITES.get(key, frozenset()) | READ_UNLESS_FLAGS.get(key, frozenset())
+    return _flag_writes(args, writes) or _every_page_flag(args, key) is not None
+
+
+def _every_page_flag(args: "list[str]", key: str) -> "str | None":
+    """The flag that asks this table read for every page at once (`DAEMON_PROFILE_TABLE_UNBOUNDED`), or None.
     Any word, `--` or not: click still reads `--all` after a `--` that comes before the
     command words (`probe -- run list --all`), and refusing a stray `-- --all` costs
     nothing. An `--all` the shell has yet to produce (`$EXTRA`) reaches the CLI gate,
     which runs this same check on the argv the shell made."""
     unbounded = DAEMON_PROFILE_TABLE_UNBOUNDED.get(key, frozenset())
-    return any(arg.partition("=")[0] in unbounded for arg in args)
+    names = (arg.partition("=")[0] for arg in args)
+    return next((name for name in names if name in unbounded), None)
 
 
 def _flag_writes(args: "list[str]", flags: "frozenset[str]") -> bool:
@@ -1970,8 +2032,9 @@ def daemon_profile_deny(args: "list[str]", matched: str, session_id: "str | None
     """The refusal for args `daemon_profile_allows` refused: the switch is told
     how the agent sets it (`switch_refusal`), upkeep that records less to ask
     first (`DIRECTED_REQUIRED_DENY`), upkeep with a flag it may not pass which
-    one (`UPKEEP_FLAG_DENY`, never `/probe inline`), a write that `--directed`
-    runs it (`DAEMON_PROFILE_DENY_WRITE`)."""
+    one (`UPKEEP_FLAG_DENY`, never `/probe inline`), a table read for every page
+    at once which flag did it (`DAEMON_PROFILE_EVERY_PAGE_DENY`), a write that
+    `--directed` runs it (`DAEMON_PROFILE_DENY_WRITE`)."""
     switch = switch_refusal(args, RESEARCHER_SWITCH_DENY, session_id)
     if switch is not None:
         return switch
@@ -1980,6 +2043,10 @@ def daemon_profile_deny(args: "list[str]", matched: str, session_id: "str | None
         return needs_directed(args)
     if key is not None and offender is not None:
         return UPKEEP_FLAG_DENY.format(matched="probe " + key, offender=offender)
+    read = _admitted_read(command_words(args))
+    every_page = _every_page_flag(args, read) if read is not None else None
+    if every_page is not None:
+        return get_every_page_deny(session_id).format(matched="probe " + read, offender=every_page)
     kind, _matched = classify_probe_args(args)
     return get_daemon_profile_deny(session_id, is_write=kind == "write").format(matched=matched)
 
