@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.589.0
+
+- **A running Miles + Harbor sample names its real task.** With Probe's Harbor agent, a sample's live row named
+  `prompt:<hash>` while it ran (every task shares one preamble), so `probe samples live`, the live panel and hung
+  notices could not say which task. The start now names the agent's task, `local:<instance_id>`, the same key
+  the finished sample gets; a dataset's own `task_id` still wins.
+
 ## 0.588.0
 
 - **With the Probe daemon on, your coding agent reads one project's runs table itself, in about a second.**
