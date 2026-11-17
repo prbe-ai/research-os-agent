@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.594.0
+
+- **The daemon reports how long an ask waited for it.** An ask's ending ping carries `waited`, the time from the ask to a worker taking it, so the Slack line can show the daemon's own time apart from a wait (for example, a chat opened before Probe was added).
+- **No "Codex will not run Probe's hooks" report when Codex only did not answer.** The background check that re-approves Probe's hooks in Codex after an update now reports only when Codex answers and refuses them; a busy Codex that does not answer is asked again later, as before, without a false report.
+- **`run list`, `experiment list` and `project list` print a short row by default.** Without `--fields`, a run row is `id,name,status,alive,project_id,experiment_id,tags,updated_at` (plus `latest_metrics` with `--latest-metrics`), an experiment row `id,slug,name,project_id,outcome,run_count,updated_at` and a project row `id,slug,name,description,updated_at`: a 50-run page drops from about 1.1 MB to about 14 KB, and the server sends light run rows. `--fields a,b` picks columns as before; `--fields all` prints the full rows these lists printed until now (for a script that reads `.config` from `run list`). `experiment list` takes `--fields` too.
+- **In the daemon profile, the agent reads 10 more lookups itself.** `dataset list`, `source show`, `source list`, `checkpoint list`, `group list`, `group get`, `views list`, `views show`, `project contributors` (not with `--add`/`--remove`) and `project code list` run without `probe ask`. `project contributors --add ... --directed` still runs as the write the researcher asked for.
+- **A refused `run list --all` says why.** The agent hears that it reads one page at a time and pages with `--cursor`, instead of the generic refusal. The managed block's `run list` example no longer names `--project` (block version 65).
+
 ## 0.593.0
 
 - **The dark-thread check reads each Codex session in its own Codex home.** A Codex started with its own `CODEX_HOME` keeps its plugins, threads and the time Probe was added there; the service's hook check now reads them there instead of in the service's own Codex home, so such a session is checked (and a Codex opened there before Probe was added reads `predates_hooks`) rather than skipped.
