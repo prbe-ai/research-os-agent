@@ -4055,7 +4055,7 @@ PROBE_MESSAGES_RULE_FLOWED = "\n\n".join(
 #: paragraph of `agent_rules.POINTER_BODY` and `agent_rules.RUNS_POINTER_BODY`, one text.
 LINKS_RULE = (
     "To the researcher, write a run, experiment or project as `[name](url)` with the `url` Probe gave, never a "
-    "bare id. No `url`: its name.\n"
+    "bare id. Only an id: `probe run|experiment|project get id:<uuid>` prints its `url`. No `url`: its name.\n"
 )
 #: The same words wrapped at 77 columns, as `agent_rules.POINTER_BODY`'s prose is: the pointer bodies' copy.
 LINKS_RULE_FLOWED = textwrap.fill(LINKS_RULE.rstrip("\n"), 77, break_long_words=False, break_on_hyphens=False) + "\n"
