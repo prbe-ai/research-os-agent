@@ -33,7 +33,9 @@ on a two-step run before the long one.
 - **Task and scenario.** The scenario is the outside values a task is posed under (`{"set": "P2", "as_of":
   "2024-06-30"}`). It is part of the task's identity: the same prompt under two scenarios is two tasks, and
   every read filters on it (`--where scenario.set=P2`). With no `task_id`, the task key is a hash of the
-  prompt.
+  prompt. Miles: put `task_id` in the prompt file's metadata. A sample is running before your agent function
+  returns, so a `task_id` that only the agent function sets leaves its running row on that hash (Probe's Harbor
+  agent, `probe.connectors.miles.harbor_agent.run`, is handled: it names `local:<instance_id>`).
 
   | framework | task key | task name and description | scenario |
   |---|---|---|---|
