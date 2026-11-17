@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.595.0
+
+- **The daemon answers the main agent with ids again, not links (POINTER_VERSION 66).** The reader's answers and the writer's replies name each run, experiment or project as `name (id:<uuid>)`, never a `[name](url)` link: `id:<uuid>` is the ref every `probe` command takes (a bare uuid reads as a slug for a project or experiment). Links stay for what the main agent tells you: when it has only an id, Probe's rules now say `probe run|experiment|project get id:<uuid>` prints its `url`. The writer's prefetched runs drop the `url` they carried only for its reply. A v65 block is rewritten on the next refresh.
+
 ## 0.594.0
 
 - **The daemon reports how long an ask waited for it.** An ask's ending ping carries `waited`, the time from the ask to a worker taking it, so the Slack line can show the daemon's own time apart from a wait (for example, a chat opened before Probe was added).
