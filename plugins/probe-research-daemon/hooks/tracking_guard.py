@@ -2525,7 +2525,7 @@ def daemon_profile() -> bool:
 def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
     `probe` command but `ask`, `exec`, the runs' own data and the agent's panes, reads of one run,
-    of one scope's panes or of one project's tables (`session_marker.DAEMON_PROFILE_RUN_READS`,
+    of one scope's panes or of the team's tables (`session_marker.DAEMON_PROFILE_RUN_READS`,
     `DAEMON_PROFILE_PANE_READS`, `DAEMON_PROFILE_TABLE_READS`),
     `session status`, a
     write the researcher asked for (`--directed`), the agent's own commands

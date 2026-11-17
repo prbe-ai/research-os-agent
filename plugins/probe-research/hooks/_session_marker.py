@@ -1623,7 +1623,7 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `probe-research-daemon` plugin, so the daemon records AND reads, and the main
 #: agent's `probe` is `ask`, `exec`, its runs' own data and its panes
 #: (`DAEMON_AGENT_WRITES`), reads of one run (`DAEMON_PROFILE_RUN_READS`), of
-#: one scope's panes (`DAEMON_PROFILE_PANE_READS`) or of one project's tables
+#: one scope's panes (`DAEMON_PROFILE_PANE_READS`) or of the team's tables
 #: (`DAEMON_PROFILE_TABLE_READS`), `session status` and Probe's
 #: own upkeep (`DAEMON_PROFILE_ALLOWED`). The guard in that
 #: plugin refuses every other `probe` command, reads included, with
@@ -1698,9 +1698,9 @@ DAEMON_PROFILE_ALLOWED = frozenset(
 #: (Richard 2026-10-21: the agent should see its own runs). Any run id passes --
 #: the hook cannot tell this session's runs from a teammate's, and the ids an
 #: agent holds are the ones `probe exec` printed or the daemon handed it.
-#: One project's table is `DAEMON_PROFILE_TABLE_READS`; listings and searches across
-#: the team's work (`series latest`, `artifact list`, `provenance`, `commits`, a
-#: `run list` naming no project) stay the daemon's, through `probe ask`.
+#: The team's tables are `DAEMON_PROFILE_TABLE_READS`; searches across the team's
+#: work (`series latest`, `artifact list`, `provenance`, `commits`) stay the daemon's,
+#: through `probe ask`.
 #: An RL run's samples and best checkpoint are its own (`instrument-code` checks the
 #: capture of a run before its long launch); `samples export` writes, so it stays out.
 DAEMON_PROFILE_RUN_READS = frozenset(
@@ -1723,32 +1723,29 @@ DAEMON_PROFILE_RUN_READS = frozenset(
 #: daemon's writer writes it.
 DAEMON_PROFILE_PANE_READS = frozenset({"pane data", "pane get", "pane list", "pane preview show"})
 
-#: One project's tables: its runs with their latest metrics (`run list --project <slug>
-#: --latest-metrics loss`), how many, its experiments, a project or experiment, and one
-#: entity's notes. A lookup like these through `probe ask` took 40 s at the median
-#: (Bucket, 2026-11-16); read directly it takes about a second. Each key maps to the
-#: scope flags it needs (`_reads_one_scope`): without one, `run list` and `run count`
-#: list the whole team and `experiment list` reads every project's list (one request
-#: each), so they stay the daemon's. An empty set is admitted by name: one record, one
-#: request or one entity. Searches stay the daemon's (`notes find`, `series latest`).
-DAEMON_PROFILE_TABLE_READS = {
-    "run list": frozenset({"--project", "--experiment"}),
-    "run count": frozenset({"--project", "--experiment"}),
-    "experiment list": frozenset({"--project"}),
-    "project list": frozenset(),
-    "project get": frozenset(),
-    "experiment get": frozenset(),
-    "notes list": frozenset(),
-    "notes show": frozenset(),
-}
+#: The team's tables, one page at a time: runs with their latest metrics (`run list
+#: --latest-metrics loss`, `--project <slug>` for one project), how many, experiments,
+#: projects, a project or experiment, and one entity's notes. Each is a plain listing
+#: the server answers the same way every time, not a search. A lookup like these
+#: through `probe ask` took 40 s at the median (Bucket, 2026-11-16); read directly it
+#: takes about a second. Searches stay the daemon's (`notes find`, `series latest`).
+DAEMON_PROFILE_TABLE_READS = frozenset(
+    {
+        "run list",
+        "run count",
+        "experiment list",
+        "project list",
+        "project get",
+        "experiment get",
+        "notes list",
+        "notes show",
+    }
+)
 
-#: ...but never every page at once: `run list --all` pages through the whole scope.
-#: (`project list --all` is one page across workspaces, so it stays admitted.)
+#: ...but never every page at once: `run list --all` walks every page and holds every
+#: run in memory; one page is at most 200 rows. (`project list --all` is one page
+#: across workspaces, so it stays admitted.)
 DAEMON_PROFILE_TABLE_UNBOUNDED = {"run list": frozenset({"--all"})}
-
-#: The options of the scoped table reads that take no value; every other option
-#: takes the next word as its value (click), so a scope flag there is not a scope.
-DAEMON_PROFILE_TABLE_PLAIN_FLAGS = frozenset({"--direct", "--all", "--help"})
 
 #: ...but not where a flag writes what it read: `run reproduce --materialize`
 #: restores the run's captured tree, as the kept `snapshot-restore` does, and
@@ -1842,7 +1839,7 @@ SWITCH_FLIP_DENY = (
 )
 
 _DAEMON_PROFILE_DENY_HEAD = (
-    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`) or one project\'s runs (`probe run list --project <slug>`). To ask about the team\'s prior work: `probe ask "<question>"`. '
+    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`) or the team\'s runs (`probe run list --fields name,status`). To ask about the team\'s prior work: `probe ask "<question>"`. '
 )
 DAEMON_PROFILE_DENY = _DAEMON_PROFILE_DENY_HEAD + "If you need to do it yourself, ask the researcher to type `/probe inline`."
 #: ...and in an auto chat (`is_auto_chat`), where the agent takes Probe inline itself (probe auto mode).
@@ -1884,8 +1881,8 @@ def daemon_profile_allows(args: "list[str]", session_id: "str | None" = None) ->
     A write carrying `--directed` is allowed, as the CLI's gate allows it in the
     `daemon` state (`write_gate.refusal`). A read is not (reads go through
     `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`), one scope's
-    panes (`DAEMON_PROFILE_PANE_READS`) and one project's tables
-    (`DAEMON_PROFILE_TABLE_READS`). The researcher's
+    panes (`DAEMON_PROFILE_PANE_READS`) and the team's tables, a page at a
+    time (`DAEMON_PROFILE_TABLE_READS`). The researcher's
     switch runs only as `session state <target> --directed` (`switch_refusal`).
     Probe's own upkeep runs with its own flags (`upkeep_command`), and what
     records less only with `--directed` (`records_less`); the agent's own
@@ -1910,7 +1907,7 @@ def daemon_profile_allows(args: "list[str]", session_id: "str | None" = None) ->
         if key in DAEMON_PROFILE_RUN_READS or key in DAEMON_PROFILE_PANE_READS:
             return (not _flag_writes(args, DAEMON_PROFILE_READ_WRITES.get(key, frozenset())), "probe " + key)
         if key in DAEMON_PROFILE_TABLE_READS:
-            return (_reads_one_scope(args, key), "probe " + key)
+            return (not _reads_every_page(args, key), "probe " + key)
     kind, matched = classify_probe_args(args)
     if kind == "write" and carries_directed(args):
         return (True, matched)
@@ -1947,61 +1944,14 @@ def _runs_plainly(args: "list[str]", head: str) -> bool:
     return actions > 0
 
 
-def _reads_one_scope(args: "list[str]", key: str) -> bool:
-    """Do these args read one scope, as click will parse them? For a key with scope
-    flags (`DAEMON_PROFILE_TABLE_READS`): at least one, each with a value typed out,
-    and no `DAEMON_PROFILE_TABLE_UNBOUNDED` flag. A scope flag that another option
-    takes as its value (`--tag --project=p`) or that follows `--` is not a scope, and
-    `--project=`, `--project ""` or an unset `"$P"` reaches the CLI as none at all:
-    each lists the whole team (`runs._run_filters`). A word the shell still splits
-    (`_may_split`) may add any flag, so it is refused; a JSON value keeps its `$lt`; a slug never holds `$`, a backtick or `{` (`--project={,}`). Not
-    `_flag_writes`: its shell rule refuses any `{` in any word, and
-    `--filter '{"status": "running"}'` is the table's own question."""
-    scope_flags = DAEMON_PROFILE_TABLE_READS[key]
+def _reads_every_page(args: "list[str]", key: str) -> bool:
+    """Does this table read ask for every page at once (`DAEMON_PROFILE_TABLE_UNBOUNDED`)?
+    Any word, `--` or not: click still reads `--all` after a `--` that comes before the
+    command words (`probe -- run list --all`), and refusing a stray `-- --all` costs
+    nothing. An `--all` the shell has yet to produce (`$EXTRA`) reaches the CLI gate,
+    which runs this same check on the argv the shell made."""
     unbounded = DAEMON_PROFILE_TABLE_UNBOUNDED.get(key, frozenset())
-    if not scope_flags and not unbounded:
-        return True
-    own = args[: args.index("--")] if "--" in args else args
-    words = [arg for arg in own if arg != DIRECTED_FLAG]  # gone before click parses (`split_directed`)
-    if any(_may_split(arg) for arg in words):
-        return False
-    values = []
-    i = 0
-    while i < len(words):
-        name, eq, value = words[i].partition("=")
-        i += 1
-        if not name.startswith("-"):
-            continue
-        if name in unbounded:
-            return False
-        if not eq and name not in DAEMON_PROFILE_TABLE_PLAIN_FLAGS:
-            value = words[i] if i < len(words) else ""
-            i += 1
-        if name in scope_flags:
-            values.append(value)
-    if not scope_flags:
-        return True
-    return bool(values) and all(
-        value.strip() and not value.startswith("-") and _SHELL_EXPANSION_CHARS.isdisjoint(value) for value in values
-    )
-
-
-def _may_split(arg: str) -> bool:
-    """Might the shell still turn this word into other words? shlex took the quotes
-    off, so a `$`, backtick, brace or glob counts (`$EXTRA`, `{a,--all}`, `*`), except
-    in a value that parses as JSON (`{"config.lr": {"$lt": 0.05}}`, the `--filter`
-    grammar). A quote trick that still splits one reaches the CLI gate, which runs
-    this same check on the argv the shell produced (`write_gate._refuse_records`)."""
-    body = arg.partition("=")[2] if arg.startswith("-") and "=" in arg else arg
-    if _SHELL_EXPANSION_CHARS.isdisjoint(body) and _GLOB_CHARS.isdisjoint(body):
-        return False
-    import json
-
-    try:
-        json.loads(body)
-    except ValueError:
-        return True
-    return False
+    return any(arg.partition("=")[0] in unbounded for arg in args)
 
 
 def _flag_writes(args: "list[str]", flags: "frozenset[str]") -> bool:
