@@ -1995,7 +1995,7 @@ def _shell_operand(tokens: "list[str]", start: int) -> "tuple[str, str | None]":
         if word in _SHELL_VALUE_OPTS:
             index += 2
             continue
-        if not word[:1] in ("-", "+") or word in ("-", "+"):
+        if word[:1] not in ("-", "+") or word in ("-", "+"):
             break
         flags = word[1:] if not word.startswith("--") else ""
         if "n" in flags and word.startswith("-"):
@@ -2524,8 +2524,9 @@ def daemon_profile() -> bool:
 
 def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
-    `probe` command but `ask`, `exec`, the runs' own data and the agent's panes, reads of one run
-    or of one scope's panes (`session_marker.DAEMON_PROFILE_RUN_READS`, `DAEMON_PROFILE_PANE_READS`),
+    `probe` command but `ask`, `exec`, the runs' own data and the agent's panes, reads of one run,
+    of one scope's panes or of one project's tables (`session_marker.DAEMON_PROFILE_RUN_READS`,
+    `DAEMON_PROFILE_PANE_READS`, `DAEMON_PROFILE_TABLE_READS`),
     `session status`, a
     write the researcher asked for (`--directed`), the agent's own commands
     (`session_marker.DAEMON_PROFILE_ALLOWED`) and Probe's own upkeep with its
