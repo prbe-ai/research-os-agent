@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.592.0
+
+- **No false "dark thread" report for a Codex opened before Probe was added.** When a coding agent installs Probe from inside a Codex that is already open, that Codex never loads Probe's hooks (Codex reads its plugins once, at start), so the service's hook check reported its thread as dark although the chat was recorded. The first time Probe is added to a Codex home, the install now records the time; a thread whose Codex started before then reads `predates_hooks` in `probe status` and `probe doctor` ("not loaded: this Codex started before Probe was added; they run once Codex restarts"), is not reported, and is still skipped by the idle-session waker. A Codex started after the install, a repair or an update is checked as before.
+- **A daemon host that only looks silent is no longer killed.** The service killed the host running every session's daemon once its last beat was a minute old. When the service itself had been frozen (a dark wake, a stalled machine), that beat was old only because nobody had read the newer ones, and the kill ended every daemon run. A silent host is now asked for its status first and killed only if it does not answer within 10 s. A host killed this way is reported once (hung), no longer also as stopped.
+
 ## 0.591.0
 
 - **W&B imports take project names with spaces.** `probe import review --wandb-project 'acme/GPU Cluster'` was refused as "not a W&B project name", although the CLI had just listed that project to choose from. A project name may now hold anything W&B allows except `/` and control characters, in the review and in the attached-project picker; artifact links to wandb.ai escape each part.
