@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.590.0
+
+- **With the Probe daemon on, your coding agent reads the team's runs table itself, not only one project's.**
+  `probe run list` and `probe run count` with no `--project`, and `probe experiment list` across projects, now run
+  in the agent's shell a page at a time (at most 200 rows) instead of being refused and sent through `probe ask`.
+  `run list --all` (every page at once) and searches still go to the daemon. The Probe section in CLAUDE.md /
+  AGENTS.md now says "the team's runs".
+
 ## 0.589.0
 
 - **A running Miles + Harbor sample names its real task.** With Probe's Harbor agent, a sample's live row named
