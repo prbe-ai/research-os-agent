@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.593.0
+
+- **The dark-thread check reads each Codex session in its own Codex home.** A Codex started with its own `CODEX_HOME` keeps its plugins, threads and the time Probe was added there; the service's hook check now reads them there instead of in the service's own Codex home, so such a session is checked (and a Codex opened there before Probe was added reads `predates_hooks`) rather than skipped.
+
 ## 0.592.0
 
 - **No false "dark thread" report for a Codex opened before Probe was added.** When a coding agent installs Probe from inside a Codex that is already open, that Codex never loads Probe's hooks (Codex reads its plugins once, at start), so the service's hook check reported its thread as dark although the chat was recorded. The first time Probe is added to a Codex home, the install now records the time; a thread whose Codex started before then reads `predates_hooks` in `probe status` and `probe doctor` ("not loaded: this Codex started before Probe was added; they run once Codex restarts"), is not reported, and is still skipped by the idle-session waker. A Codex started after the install, a repair or an update is checked as before.
