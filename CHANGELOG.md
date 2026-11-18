@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.598.0
+
+- **The update nudge reaches stuck CLIs only.** The manifest's `cli.recommended` moves from 0.303.0 to 0.557.0 (four days old, so a CLI that updates itself is already past it), and its message is shorter and no longer claims a missing security fix. A stuck CLI is still pointed at the newest release, which carries the short Summary-page skills.
+- **Codex chats keep Probe's hooks across Probe releases, even if Codex never closes.** Probe now moves Codex to its frozen hooks at the next update while Codex is open, so chats started after that keep recording through every later release; chats already open keep the old hooks until they end.
+- **Past chats whose file is gone stop filling the tap log.** When a chat's file disappears (an imported chat's temporary copy, an archived or deleted chat), the tap now stops retrying it every minute: it says once whether Probe already holds the whole chat, then stays quiet. A resumed chat, or a file put back where it was, uploads again as before. Tap 0.10.78.
+
 ## 0.597.0
 
 - **Summary pages are a lede line, up to 4 short bullets, then the visuals.** The `write-summary`,
