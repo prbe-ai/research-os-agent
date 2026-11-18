@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.599.0
+
+- **A run launch no longer turns an auto chat on.** A run started from an auto chat that is off or read (the SDK,
+  `probe exec`, `probe run start`) is still logged, with all its options, and the chat stays as the agent set it;
+  the first such run in a chat prints "Probe is off for this chat; your run is still logged. If this is ML work,
+  run `probe session state on`." A platform test (Prime, W&B, MLflow and Probe side by side) logs its runs to Probe
+  without the chat being filed as research. A researcher's own `/probe off`, and a manual machine, keep launches
+  unrecorded as before.
+- **Install in one go: the check, the background scan and one question per source.** `probe status --json --check`
+  judges each part (the account, the service, each agent the install set up, this chat) against the install this
+  computer chose and gives the lines an agent shows (`Probe is installed ✓`, or one `✗` line per failed part) and
+  the tutorial's address. `probe import review --background` hands a review of past chats to Probe's service and
+  answers at once; `--renews <id>` says whether a renewed review holds more than the one that expired, and a
+  refused start says why it expired. Consent lines are one short section per source (Chats, Folders, W&B), the
+  wizard's screen too; `workspace_choice_needed` now carries them. New `manage-probe` skill: ask your agent to fix,
+  update, change settings, bring in past work, switch account or uninstall.
+
 ## 0.598.0
 
 - **The update nudge reaches stuck CLIs only.** The manifest's `cli.recommended` moves from 0.303.0 to 0.557.0 (four days old, so a CLI that updates itself is already past it), and its message is shorter and no longer claims a missing security fix. A stuck CLI is still pointed at the newest release, which carries the short Summary-page skills.
