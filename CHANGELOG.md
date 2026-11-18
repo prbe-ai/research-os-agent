@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.606.0
+
+- **Decisions: the alternative goes in the reason.** The skill reference and `probe decision add --help` no longer show `--instead-of`; agents say what a choice was picked over in `--reason`, which is all the dashboard shows. The flag still works (hidden) for older skill copies.
+
 ## 0.605.0
 
 - **The install pages' renewed review is checked as the agent really types it.** wandb.md writes a renewing review as `import review --json … --renews <id>`, where `…` stands for the first review's own flags. The page-command gate test passed that `…` to the CLI as a word, which made `import review` stop counting as Probe's own upkeep, so the gate refused it in daemon, read and off chats and blocked every `agent/` PR in the merge queue. The test now fills `…` with each review the pages run (`--sessions all`, `--background`, `--folder`, the W&B flags), and each one, with `--renews`, passes the gate in every chat. The gate itself already let `--renews` through; nothing shipped in the CLI changes.
