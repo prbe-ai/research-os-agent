@@ -27,7 +27,7 @@ probe trial list RUN | get TRIAL | set TRIAL --name
 probe workspace create SLUG [--name] [--use] | list | get | rename | use | delete ID --yes
 probe shared list | download | delete
 probe edge add --source TYPE:REF --relation R --target TYPE:REF --reason "..." [--evidence EVENT_ID] | remove EDGE_ID
-probe decision add (--project P | --experiment E) --title "..." --reason "..." --by researcher|agent --affects TYPE:REF=started|stopped|changed|based_on ... [--instead-of "..."] [--follows ID] [--also-follows ID ...] [--evidence EVENT_ID] | list [--project P | --experiment E] [--json] | remove ID
+probe decision add (--project P | --experiment E) --title "..." --reason "..." --by researcher|agent --affects TYPE:REF=started|stopped|changed|based_on ... [--follows ID] [--also-follows ID ...] [--evidence EVENT_ID] | list [--project P | --experiment E] [--json] | remove ID
 probe run inputs RUN | upstream RUN [--depth N]
 probe project reference add --to PROJECT [--part-of] --reason "..." | remove
 probe project code attach OWNER/REPO | detach | list
