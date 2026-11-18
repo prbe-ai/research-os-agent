@@ -246,7 +246,7 @@ Query:
 
 | field | type | required | limits |
 |---|---|---|---|
-| `slug` | string | no | exact slug; returns 0 or 1 row (slug is unique per tenant) |
+| `slug` | string | no | exact slug; returns 0 or 1 row (slug is unique per team) |
 
 Answer `200`, of which you need:
 
