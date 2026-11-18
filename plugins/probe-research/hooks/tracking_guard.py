@@ -1352,6 +1352,12 @@ _EXEC = "probe exec"
 _RUN_START = "probe run start"
 
 
+def _is_auto_launch(matched: "str | None", session_id: str) -> bool:
+    """`probe run start` from an auto chat: the CLI logs it as if on and the switch stays
+    (`write_gate.is_logged_launch`), so no state refuses it here."""
+    return matched == _RUN_START and _session_marker.is_auto_chat(session_id)
+
+
 def _offending_write(payload: dict, session_id: str) -> "str | None":
     """The probe write this untracked session should not be making, or None.
 
@@ -2495,8 +2501,7 @@ def _deny(payload: dict, session_id: str, *, is_agent_checked: bool = False) -> 
         # (`write_gate.exec_child`): refusing here would stop the job, not the
         # recording.
         matched = None
-    if matched == _RUN_START and _session_marker.is_auto_chat(session_id):
-        # Auto mode: a run started through Probe turns the chat on (the CLI's `set_on_for_launch`).
+    if _is_auto_launch(matched, session_id):
         matched = None
     if matched:
         _refuse(deny.format(matched=matched))
@@ -2592,7 +2597,7 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
         # `read only (daemon)`: the runs' own data is a write like any other.
         # `probe exec` still runs, unrecorded (`write_gate.exec_child`).
         matched = probe_write(command)
-        if matched and matched != _EXEC:
+        if matched and matched != _EXEC and not _is_auto_launch(matched, session_id):
             _refuse(_session_marker.get_deny_reason(state, session_id).format(matched=matched))
 
 
