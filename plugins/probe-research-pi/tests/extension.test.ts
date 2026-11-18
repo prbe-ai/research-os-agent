@@ -1377,7 +1377,7 @@ describe("registerExtension — the daemon profile", () => {
     expect(activeTools()).toEqual(["read", "bash"]);
   });
 
-  it("adds the daemon's own skills, plan-research-review and write-pane through resources_discover, and only in the daemon profile", async () => {
+  it("adds the daemon's own skills, plan-research-review, write-pane and manage-probe through resources_discover, and only in the daemon profile", async () => {
     installProbeCli();
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers } = fakeExtensionAPI();
@@ -1393,6 +1393,7 @@ describe("registerExtension — the daemon profile", () => {
       join(PACKAGE_ROOT, "daemon-skills", "visualize-progress"),
       join(PACKAGE_ROOT, "skills", "plan-research-review"),
       join(PACKAGE_ROOT, "skills", "write-pane"),
+      join(PACKAGE_ROOT, "skills", "manage-probe"),
     ]);
     for (const path of discovered.skillPaths) expect(existsSync(join(path, "SKILL.md"))).toBe(true);
 

@@ -138,6 +138,8 @@ RESEARCH_SKILLS = {
     "write-pane",
     # a project's canvas preview, a pane that says what the project is about (project-preview T8)
     "write-preview",
+    # fix, update, settings, past work, account or uninstall, by asking (install-one-go D21)
+    "manage-probe",
     "probe-setup",
     "probe-research-setup",  # the setup command's name before the rename to Probe
     # retired names (kept for resumed transcripts and cached installs);

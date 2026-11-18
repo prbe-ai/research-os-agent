@@ -36,6 +36,8 @@ export const DAEMON_PROFILE_SKILLS: ReadonlySet<string> = new Set([
   "visualize-progress",
   // A pane is the coding agent's own visual, never the daemon's (run compare + panes R10).
   "write-pane",
+  // Fix, update, settings, past work, account or uninstall, by asking (install-one-go D21).
+  "manage-probe",
 ]);
 
 /**
@@ -67,6 +69,8 @@ export const PACKAGE_SKILLS: ReadonlySet<string> = new Set([
   "write-pane",
   // A project's canvas preview (project-preview T8).
   "write-preview",
+  // Fix, update, settings, past work, account or uninstall, by asking (install-one-go D21).
+  "manage-probe",
 ]);
 
 /** Where the daemon's own skills live inside this package. Never named in package.json. */
@@ -94,7 +98,7 @@ export function daemonSkillDir(extensionDir: string, name: string): string {
  * of a name, so where a filter or a project entry already loaded one, this
  * path is a no-op.
  */
-export const DAEMON_ADDED_SKILLS: readonly string[] = ["plan-research-review", "write-pane"];
+export const DAEMON_ADDED_SKILLS: readonly string[] = ["plan-research-review", "write-pane", "manage-probe"];
 
 /** Every skill path `resources_discover` adds in the daemon profile. */
 export function daemonSkillPaths(extensionDir: string): string[] {

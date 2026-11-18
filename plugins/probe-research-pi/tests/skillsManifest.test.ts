@@ -77,6 +77,8 @@ const EXPECTED_SKILLS = [
   "write-pane",
   // project-preview T8: a project's canvas preview.
   "write-preview",
+  // install-one-go D21: manage Probe by asking.
+  "manage-probe",
 ].sort();
 
 let scratchHome: string;
