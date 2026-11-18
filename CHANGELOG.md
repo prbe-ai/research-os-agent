@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.605.0
+
+- **The install pages' renewed review is checked as the agent really types it.** wandb.md writes a renewing review as `import review --json … --renews <id>`, where `…` stands for the first review's own flags. The page-command gate test passed that `…` to the CLI as a word, which made `import review` stop counting as Probe's own upkeep, so the gate refused it in daemon, read and off chats and blocked every `agent/` PR in the merge queue. The test now fills `…` with each review the pages run (`--sessions all`, `--background`, `--folder`, the W&B flags), and each one, with `--renews`, passes the gate in every chat. The gate itself already let `--renews` through; nothing shipped in the CLI changes.
+- **`probe status --check` reads every agent from its files, on Full computers too.** It no longer runs
+  `claude plugin list`, `codex plugin list`, `codex mcp list` or any agent's `--version`, so a busy Codex can't
+  slow it or put a plugin-list timeout in its answer (in the install-one-go eval, all 15 Full Codex runs carried
+  `"timed out after 10s"`, and agents repeated it). Codex's plugins count when Codex has a copy it can load from
+  Probe's marketplace, as the install judges them; a plugin Codex or Claude Code has disabled still reads as
+  missing. The account, service and token checks still ask. Plain `probe status` and `--refresh` are unchanged.
+- **The pi plugin's dev toolchain takes minimatch 11.** `@earendil-works/pi-coding-agent` (devDependency, tests and types only) moves from ^1.0.1 to ^1.5.2, whose minimatch 11.0.3 replaces the vulnerable nested 10.2.6 (GHSA minimatch ReDoS, Dependabot #307; mirrored as research-os-agent #102 and probe #25). Nothing shipped in the plugin changes.
+
 ## 0.604.0
 
 - **`probe status --check` on a Runs-only computer asks no coding agent anything.** Its verdict needs
