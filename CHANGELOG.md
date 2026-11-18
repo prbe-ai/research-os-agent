@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.604.0
+
+- **`probe status --check` on a Runs-only computer asks no coding agent anything.** Its verdict needs
+  only each agent's rules and skills, read from files, so it no longer runs every agent's
+  `plugin list` or Codex's `mcp list`. A busy Codex made the check take 11 s and report a plugin and
+  MCP timeout that did not matter. Full computers, plain `probe status` and `--refresh` are unchanged.
+- **An agent's call waits for the setup lock only when it is sure the holder is Probe's update.** The
+  check now matches the holder's process start time as well as its process id, so an old leftover
+  record can never make an agent's call wait up to 80 s for some other process.
+
 ## 0.603.0
 
 - **Agent calls right after the install no longer refuse "another Probe setup is running".** The Probe
