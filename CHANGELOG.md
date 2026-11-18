@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.600.0
+
+- **The launcher needs CLI 0.599.0 for agent installs and runs `status --json --check` as an agent's call (install one-go PR3).** `AGENT_MIN_CLI` goes to 0.599.0, the release with `status --check`, `import review --background`/`--renews` and per-source consent, so an older CLI is updated first. Launcher 0.44.0.
+
 ## 0.599.0
 
 - **A run launch no longer turns an auto chat on.** A run started from an auto chat that is off or read (the SDK,
