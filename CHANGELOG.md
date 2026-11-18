@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.596.0
+
+- **`probe.Client()` reads everything a team API key can.** `Client(service_token=...)` or
+  `PROBE_SERVICE_TOKEN` outranks a login saved on the machine, and having both `PROBE_TOKEN` and
+  `PROBE_SERVICE_TOKEN` set stops with an error naming both. New reads cover project READMEs, workspaces,
+  subtrees, Google Docs and visuals, note and Overview page history, directions and the workspace digest, the
+  team's agent-chat list, sandbox diffs and files, and `client.events.iter(after=)`, a forward sync of the
+  team's event log you can resume.
+- **A team API key gets plain answers.** A route closed to keys names itself and why, going past the read
+  budget raises `RateLimitedError` with how long to wait, and a key whose creator left the team warns once.
+- **`probe.Reader` is deprecated.** Each of its methods calls the matching `probe.Client` method and the first
+  call warns.
+- **`probe team-key create --name X` asks for a team API key; `probe team-key list` lists them.**
+  An owner or admin approves the request in the browser, then the read-only `probe_svc_` key is
+  printed once (`--json` prints one object). The SDK has `client.create_team_key(name)` and
+  `client.list_team_keys()`. Every browser sign-in now keeps polling through a dropped connection
+  or a server error until the request expires, so a key minted just before the answer was lost
+  still reaches the terminal.
+
 ## 0.595.0
 
 - **The daemon answers the main agent with ids again, not links (POINTER_VERSION 66).** The reader's answers and the writer's replies name each run, experiment or project as `name (id:<uuid>)`, never a `[name](url)` link: `id:<uuid>` is the ref every `probe` command takes (a bare uuid reads as a slug for a project or experiment). Links stay for what the main agent tells you: when it has only an id, Probe's rules now say `probe run|experiment|project get id:<uuid>` prints its `url`. The writer's prefetched runs drop the `url` they carried only for its reply. A v65 block is rewritten on the next refresh.
