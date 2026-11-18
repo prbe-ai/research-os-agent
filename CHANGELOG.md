@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.602.0
+
+- **A slow agent plugin list no longer reads as "plugin missing".** When `codex plugin list --json` (or
+  `claude plugin list`) times out or errors, `probe status --refresh`, `status --check` and `probe doctor` now read
+  what the agent's own files say it installed instead of taking the silence as "not installed": for Codex, a
+  plugin copy it can load from Probe's marketplace (the check the install already falls back to); for Claude Code,
+  its install ledger. The list stays marked unverified, `probe doctor` says the answer came from the agent's files,
+  and Codex's MCP login is then read from its config.toml rather than waiting on `codex mcp list` too. In the
+  install-one-go eval, Codex's list took over 40 s right after an install while Probe's own update ran it as well,
+  and 9 of 10 Full runs said "✗ Codex: plugin missing. Ask me to fix it." with the plugin installed.
+
 ## 0.601.0
 
 - **Auto mode keeps platform tests off.** The auto-mode guide's `on` line now ends its examples with "when the
