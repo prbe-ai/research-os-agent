@@ -8,7 +8,7 @@ description: The page's HTML, CSS and script rules; push refuses a page that bre
 # Shape
 
 - Any font `<link rel="stylesheet">` and `<style>`, then `<article class="ov-page">...</article>`. No doctype, html, head, body, meta, base, iframe, form, input, button, audio or video. No HTML comments (`<!-- -->`, except the kept markers) and no `@layer`; comment CSS with `/* */`.
-- No title or masthead: no `<h1>`, `<header>` or `<hgroup>`, and no heading first. Open with the TL;DR; `<h2>` / `<h3>` head later sections.
+- No title or masthead: no `<h1>`, `<header>` or `<hgroup>`, and no heading first. Open with the one-line `<p>`; `<h2>` / `<h3>` head later sections.
 - No generated-at line or model name.
 
 # A person's text: `<!-- kept: hN -->` ... `<!-- /kept -->`
