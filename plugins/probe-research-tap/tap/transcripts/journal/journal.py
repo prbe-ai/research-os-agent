@@ -64,6 +64,7 @@ from ...compose.compose import compose
 from .delivery import DeliveryMixin
 from .ensure import EnsureMixin
 from .media.media import MediaUploadMixin
+from .missing_source import MissingSourceMixin
 from .reconcile import ReconcileMixin
 from .stage import StageMixin
 from .stream_protocols.fragments import FragmentBuilderMixin, _FRAGMENT_SESSIONS
@@ -82,6 +83,7 @@ class Journal(
     StageMixin,
     DeliveryMixin,
     ReconcileMixin,
+    MissingSourceMixin,
 ):
     def __init__(
         self,

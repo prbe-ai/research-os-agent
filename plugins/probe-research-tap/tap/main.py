@@ -85,6 +85,7 @@ from tap.transcripts.journal import (
     RebaseCooling,
     ReconciliationRequired,
     SessionDeleted,
+    SourceMissing,
     SourceRewritten,
     Wire,
     recoverable,
@@ -735,11 +736,12 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                     )
                     journal.update(c.session_id, finalize_requested=True)
                 # Recover only sessions with durable consent/capture ownership.
-                # A session the server deleted is done: it never takes a slot.
+                # Deleted by the server, or its file gone: done, it never takes a slot.
                 states = [
                     state
                     for state in journal.sessions()
                     if not state.get("deleted") and state["session_id"] not in rewritten
+                    and not journal.is_source_gone(state)
                 ]
                 current = [state for state in states if state["session_id"] == c.session_id]
                 # Stopping drains this session only: SessionEnd waits for this
@@ -773,6 +775,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                             # asked of the server (a batch staged before the
                             # switch moved still goes, below).
                             continue
+                        journal.settle_missing_source(state, wire, cfg.cwd_disabled)  # file gone?
                         if state["session_id"] != c.session_id:
                             # Recovered: its source proves it is that session's
                             # (the recorder's own did, above) before anything of
@@ -872,6 +875,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                         _settle_deleted(journal, exc, deleted)
                     except SourceRewritten:
                         _note_rewritten(journal, state["session_id"], rewritten)
+                    except SourceMissing:
+                        pass  # said once (journal/missing_source.py)
                     except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
                         journal.update(state["session_id"], error=str(exc))
                         if isinstance(exc, ReconciliationRequired) and exc.status_code == 409:

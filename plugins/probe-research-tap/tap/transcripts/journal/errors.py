@@ -39,6 +39,13 @@ class SourceRewritten(ReconciliationRequired):
     """
 
 
+class SourceMissing(ReconciliationRequired):
+    """The session's own transcript file is gone (an import's deleted staging
+    copy, an archived or deleted rollout). Nothing more can be read from it, so
+    retrying never helps. Raised by `Journal.settle_missing_source` once the row
+    is marked and its one line said; the caller only moves on."""
+
+
 class UnsafePending(ReconciliationRequired):
     """A pending batch that today's redaction would change.
 

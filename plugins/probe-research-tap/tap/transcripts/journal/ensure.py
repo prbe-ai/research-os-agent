@@ -299,6 +299,9 @@ class EnsureMixin:
                         }
                     )
                 state["path"] = str(path)
+                # Re-pointed (a resumed chat, a re-staged import copy): its file is here again.
+                state.pop(SOURCE_GONE_AT, None)
+                state.pop(SOURCE_GONE_NOTE, None)
                 if not historical:
                     # Signed in to this team again (A, B, A): what went to the other one meanwhile stays there.
                     self._update_carried_gaps(state, path)
@@ -473,3 +476,4 @@ from .stream_protocol import (  # noqa: E402 -- pieces need each other; the fron
     negotiate,
 )
 from .stream_protocols.fragments import _FRAGMENT_SESSIONS  # noqa: E402 -- pieces need each other; the front door loads this one first
+from .missing_source import SOURCE_GONE_AT, SOURCE_GONE_NOTE  # noqa: E402 -- pieces need each other; the front door loads this one first

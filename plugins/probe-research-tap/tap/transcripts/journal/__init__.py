@@ -17,6 +17,7 @@ from .errors import (
     ReconciliationRequired as ReconciliationRequired,
     RebaseCooling as RebaseCooling,
     SourceRewritten as SourceRewritten,
+    SourceMissing as SourceMissing,
     UnsafePending as UnsafePending,
     recoverable as recoverable,
     DeliveryPending as DeliveryPending,
@@ -87,6 +88,11 @@ from .media.target import (
     _why as _why,
     _storage_url as _storage_url,
     _media_refusal as _media_refusal,
+)
+from .missing_source import (
+    SOURCE_GONE_AT as SOURCE_GONE_AT,
+    SOURCE_GONE_NOTE as SOURCE_GONE_NOTE,
+    MissingSourceMixin as MissingSourceMixin,
 )
 from .reconcile import (
     _RECEIPT_RANGE as _RECEIPT_RANGE,
