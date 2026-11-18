@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.601.0
+
+- **Auto mode keeps platform tests off.** The auto-mode guide's `on` line now ends its examples with "when the
+  model is what you study, not the platform it runs on", and its `off` line covers testing the tools around
+  experiments and comparing platforms and trackers, even when that runs training (POINTER_VERSION 67). A platform
+  audit that re-runs training on another service turned Probe on in 10 of 10 eval runs on Claude Code and Codex;
+  it now stays off in 10 of 10 on Claude Code and 8 of 10 on Codex. The auto-mode eval gains four cases (the
+  audit, a tracker comparison, a tracker sweep, real ML on the same platform) and runs Claude Code in a `bwrap`
+  jail: it writes only its own folder, cannot see your logins, other sessions' config or their sockets, and gets
+  your access token alone, never the login it could rotate.
+
 ## 0.600.0
 
 - **The launcher needs CLI 0.599.0 for agent installs and runs `status --json --check` as an agent's call (install one-go PR3).** `AGENT_MIN_CLI` goes to 0.599.0, the release with `status --check`, `import review --background`/`--renews` and per-source consent, so an older CLI is updated first. Launcher 0.44.0.
