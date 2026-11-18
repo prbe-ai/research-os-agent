@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.603.0
+
+- **Agent calls right after the install no longer refuse "another Probe setup is running".** The Probe
+  service's first automatic update holds the setup lock for 5-50 s just after an install. The launcher's
+  agent calls (`npx -y probe-research … --json`: `install`, `sign-in --wait`, `import start` and
+  `import resume`) now wait for that update within their 110 s (up to 80 s, keeping 30 s for an install
+  step) instead of answering `setup_busy` at once. They wait only while the service's own update holds
+  the lock: any other setup, a person's command and an update still turn away after 0.25 s, as before.
+
 ## 0.602.0
 
 - **A slow agent plugin list no longer reads as "plugin missing".** When `codex plugin list --json` (or
