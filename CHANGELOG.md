@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.597.0
+
+- **Summary pages are a lede line, up to 4 short bullets, then the visuals.** The `write-summary`,
+  `overview-page`, `overview-charts` and `overview-contract` skills now ask for one line of at most 12
+  words, at most 4 bullets of 8 plain words (where it stands, next step, open question, what you need
+  from the researcher), then each visual with an 8-word heading and caption. Decisions stay off the
+  page (the Decisions tab holds them). The companion bench's S2 now scores this shape with the
+  server's own check and reports words inside visuals.
+
 ## 0.596.0
 
 - **`probe.Client()` reads everything a team API key can.** `Client(service_token=...)` or
