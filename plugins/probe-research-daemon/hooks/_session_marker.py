@@ -1364,14 +1364,14 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: the person's browser: they write no record of the work either.
 #: `example keep` ends the live example's hold on this chat (its pins) and marks it
 #: kept: cleanup, like its delete, so it stays possible in every state.
-#: `import folders|review|status` read this computer's chats, folders and import jobs and save a
+#: `import folders|review|status|question` read this computer's chats, folders and import jobs and save a
 #: local review; nothing reaches the team's records until `import start|resume`, writes the
 #: person asks for (`--directed` in a daemon chat; refused in a `read` or `off` one, D51).
 #: `import cancel` stops a local import the person asked to stop (fixes-1107b T6b): what came in stays.
 UNGATED_COMMANDS = frozenset(
     {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status", "wandb login",
      "wandb key request", "wandb key receive", "example keep", "import folders", "import review", "import status",
-     "import cancel"}
+     "import question", "import cancel"}
 )
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
@@ -2091,6 +2091,7 @@ UPKEEP_FLAG_RULES = {
                       ""),
     "import folders": ("--json", ""),
     "import status": ("--review --wait --json", ""),
+    "import question": ("--review --after-install --tutorial --wandb-only --json", ""),
     "import cancel": ("<job_id> --json", ""),
     "example status": ("--json", ""),
     "example keep": ("--json", ""),
@@ -2137,6 +2138,7 @@ PROBE_UPKEEP = {
     "example status": {"--json": 0},
     "import cancel": {"--json": 0, "<arguments>": 1},
     "import folders": {"--json": 0},
+    "import question": {"--after-install": 0, "--json": 0, "--review": 1, "--tutorial": 1, "--wandb-only": 0},
     "import review": {"--agent": 1, "--background": 0, "--chats-agent": 1, "--chats-all": 0, "--chats-folder": 1, "--chats-limit": 1, "--chats-since": 1, "--folder": 1, "--json": 0, "--renews": 1, "--sessions": 1, "--skip-files-over": 1, "--wandb-folder": 1, "--wandb-key": 1, "--wandb-project": 1, "--workspace": 1},
     "import status": {"--json": 0, "--review": 1, "--wait": 0},
     "install": {"--agent": 1, "--agent-rules": 0, "--auto-update": 0, "--capture": 0, "--json": 0, "--profile": 1, "--tracking": 0, "--yes": 0, "-y": 0},
