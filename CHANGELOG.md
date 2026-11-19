@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.610.0
+
+- **`probe exec` says on stderr when nothing inside the job reported.** When the wrapped command exits and nothing in it called `probe.init()` (the server has no `attached_at`) and the run has no metrics, it prints `probe: nothing inside this job called probe.init(), so run <slug> has its start, end and exit code but no metrics.` and how to fix it. The dashboard has shown "No in-process capture" for this since 0205, but the agent that launched the run reads the command's output: twice a trainer logging only to W&B ran under `probe exec` and nobody knew until the researcher asked. Advisory only: the exit code is unchanged, a hand-off (`sbatch`, `--detached-launcher`) says nothing, and a failed read or a pre-0205 server says nothing.
+- **The install names the files its rules went to (agent-prompt install, fixes 1107 item 8).** An agent's `install --yes --json` now ends with `done.instruction_files`, and each agent's result row with `instruction_file`: the file that agent reads Probe's rules from, as a real path (`~/…` under the home folder) that follows `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR` and `KIMI_CODE_HOME`, and Cursor's rule in Probe's plugin. A file is named when the install asked for the rules and the file holds them afterwards; with the rules off (`--no-agent-rules`), a failed write, or Runs only's Cursor (no rules file), none is. The install chat's ending can then say "Probe added its rules to: …" from the install's own answer instead of a fixed list that was wrong wherever a home variable is set.
+
 ## 0.609.0
 
 - **The launcher needs CLI 0.608.0 for agent installs (T10).** `AGENT_MIN_CLI` goes to 0.608.0, the release with `import question`, so an older CLI is updated before the install pages ask for the backfill question's text; `question` joins the agent-only `import` verbs. Launcher 0.45.0.
