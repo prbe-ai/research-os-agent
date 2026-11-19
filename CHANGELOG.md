@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.608.0
+
+- **`probe import question` gives the install's backfill question whole.** It checks the install again and returns the question's full text (the check's lines, the installed block and tutorial line after an install, and each review's consent) with its options (also as `option_lines`, one ready string each, for a question tool that takes each option as one string), so a coding agent copies one field instead of piecing four sources together. `import review` and `import status --review` keep each answer for it, and `workspace_choice_needed`, `wandb_key_not_found` and `wandb_project_choice_needed` now carry an `id`. A chats review that found no past chats is left out of the question; `review_expired` names the expired review ids; `--wandb-only` gives the W&B-only start its own short question.
+
 ## 0.607.0
 
 - **"Fix Probe" goes straight to the repair.** The manage-probe skill now sends a fix, repair or reinstall request straight to the re-paste menu's "Reinstall or repair" steps, instead of two pages past the install page, where Codex sometimes ran `probe doctor --fix` instead.
