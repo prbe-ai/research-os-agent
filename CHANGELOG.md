@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.607.0
+
+- **"Fix Probe" goes straight to the repair.** The manage-probe skill now sends a fix, repair or reinstall request straight to the re-paste menu's "Reinstall or repair" steps, instead of two pages past the install page, where Codex sometimes ran `probe doctor --fix` instead.
+
 ## 0.606.0
 
 - **Decisions: the alternative goes in the reason.** The skill reference and `probe decision add --help` no longer show `--instead-of`; agents say what a choice was picked over in `--reason`, which is all the dashboard shows. The flag still works (hidden) for older skill copies.
